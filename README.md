@@ -29,6 +29,8 @@ Restarting the server issues a new token.
 
 State lives in `openspec/changes/<name>/review.yaml` (committed with each decision). Run logs live in
 `<worktree>/.spec-review/` (added to `.git/info/exclude` automatically).
+A patch commit's sha is written back into `review.yaml` after the commit that includes it, so
+`review.yaml` shows as modified in `git status` until the next decision commits it.
 
 ## Security
 
