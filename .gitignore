@@ -3,3 +3,4 @@ ui/dist/
 coverage/
 test-results/
 playwright-report/
+.fake-claude-sessions/

@@ -8,6 +8,10 @@ const flag = (name) => {
   const i = args.indexOf(name)
   return i === -1 ? null : args[i + 1]
 }
+if (args.includes('--version')) {
+  process.stdout.write('fake-claude 0.0.0\n')
+  process.exit(0)
+}
 const prompt = readFileSync(0, 'utf8')
 const sessions = process.env.FAKE_CLAUDE_SESSIONS ?? path.join(process.cwd(), '.fake-claude-sessions')
 mkdirSync(sessions, { recursive: true })
