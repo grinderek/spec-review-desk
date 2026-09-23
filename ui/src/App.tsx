@@ -4,6 +4,7 @@ import { api, ApiError, type ChangeId } from './api.ts'
 import { ChangeScreen } from './ChangeScreen.tsx'
 import { useInvalidation } from './events.ts'
 import { Sidebar } from './Sidebar.tsx'
+import { ThreadPanel } from './ThreadPanel.tsx'
 
 export type PanelTarget =
   | { kind: 'new'; anchor: 'scenario' | 'phrase' | 'change'; ref: string; title: string }
@@ -38,7 +39,11 @@ export function App({ sessionError }: { sessionError: string | null }) {
           {selected ? <ChangeScreen key={`${selected.wt}/${selected.name}`} id={selected} capabilities={status.data?.capabilities} setPanel={setPanel} /> : <p className="empty">Pick a change on the left.</p>}
         </main>
         <aside className="pane thread" aria-label="Thread">
-          <p className="empty">{panel ? 'Thread' : 'Select a scenario and ask a question, or open a thread.'}</p>
+          {selected && panel ? (
+            <ThreadPanel id={selected} target={panel} onTarget={setPanel} />
+          ) : (
+            <p className="empty">Select a scenario and ask a question, or open a thread.</p>
+          )}
         </aside>
       </div>
     </>
