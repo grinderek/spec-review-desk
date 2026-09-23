@@ -48,6 +48,10 @@ export async function commitFiles(cwd: string, files: readonly string[], message
   return headSha(cwd)
 }
 
+export async function resetStaged(cwd: string, files: readonly string[]): Promise<void> {
+  await git(cwd, ['reset', '-q', '--', ...files])
+}
+
 export async function showFile(cwd: string, rev: string, relPath: string): Promise<string | null> {
   const result = await run('git', ['show', `${rev}:${relPath}`], { cwd, allowFailure: true })
   return result.code === 0 ? result.stdout : null

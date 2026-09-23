@@ -4,8 +4,8 @@ import type { AppContext } from '../app.ts'
 import { findPhrase, findScenario, loadChangeView } from '../change-view.ts'
 import type { ChangeRef, WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
-import { commitFiles } from '../git.ts'
-import { applyPatch, commitMessage, patchPaths, revertPatch } from '../patch.ts'
+import { commitFiles, resetStaged } from '../git.ts'
+import { applyPatch, commitMessage, revertPatch } from '../patch.ts'
 import { ownerMessage, type QuestionService, vetPatch } from '../questions.ts'
 import {
   addThread, appendMessage, newId, readReview, REVIEW_FILE, type ReviewDoc, setThreadStatus, type Thread, updatePatch, updateReview,
@@ -103,13 +103,19 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
       throw new HttpError(409, 'patch_stale', vetted.error ?? 'The patch no longer applies')
     }
     await applyPatch(wt.path, patch.diff)
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'applied' }))
+    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'applied', files: vetted.files }))
+    const staged = [...vetted.files, `${relDir}/${REVIEW_FILE}`]
     let sha: string
     try {
-      sha = await commitFiles(wt.path, [...patchPaths(patch.diff), `${relDir}/${REVIEW_FILE}`], commitMessage(ref.name, summary, ctx.config.commitTrailer))
+      sha = await commitFiles(wt.path, staged, commitMessage(ref.name, summary, ctx.config.commitTrailer))
     } catch (error) {
-      await revertPatch(wt.path, patch.diff)
-      await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'proposed' }))
+      try {
+        await resetStaged(wt.path, staged)
+        await revertPatch(wt.path, patch.diff)
+        await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'proposed' }))
+      } catch (revertError) {
+        await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'stale', error: (revertError as Error).message }))
+      }
       throw error
     }
     await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { commit: sha }))

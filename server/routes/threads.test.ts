@@ -67,7 +67,10 @@ describe('question threads', () => {
     expect(thread.messages[1]!.patch).toMatchObject({ state: 'proposed', error: null })
     expect(review.agent_session).toMatch(/^[0-9a-f-]{36}$/)
     const [first] = await calls()
-    expect(first!.args).toEqual(expect.arrayContaining(['--session-id', review.agent_session, '--allowedTools=Read,Grep,Glob', '--model', 'opus']))
+    expect(first!.args).toEqual(expect.arrayContaining([
+      '--session-id', review.agent_session, '--allowedTools=Read,Grep,Glob', '--model', 'opus', '--strict-mcp-config',
+      '--disallowedTools=Edit,Write,Bash,NotebookEdit,WebFetch,WebSearch',
+    ]))
     expect(first!.prompt).toContain('Scenario Outline: A waiting thread is weighted by its age')
     expect(first!.prompt).toContain('Why business hours?')
   })
@@ -135,6 +138,7 @@ describe('question threads', () => {
     expect(res.json.error.code).toBe('command_failed')
     expect(await readFile(path.join(repo, FEATURE), 'utf8')).not.toContain('rows weigh by business-hour age')
     expect((await readReview(dir)).threads[0]!.messages[1]!.patch!.state).toBe('proposed')
+    expect((await git(repo, ['diff', '--cached', '--name-only'])).trim()).toBe('')
   })
 
   it('refuses to apply while an Apply run is active', async () => {
