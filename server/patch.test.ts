@@ -2,7 +2,10 @@ import { readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { git } from './git.ts'
-import { applyPatch, checkPatch, commitMessage, defaultSummary, extractPatch, patchPaths, revertPatch, validatePatchPaths } from './patch.ts'
+import {
+  applyPatch, checkPatch, commitMessage, defaultSummary, disallowedPatchContent, extractPatch, gitApplyPaths, patchPaths, revertPatch,
+  touchedPaths, validatePatchPaths,
+} from './patch.ts'
 import { makeRepo } from './testing/repo.ts'
 
 const REL = 'openspec/changes/add-thread-state'
@@ -41,6 +44,49 @@ describe('patchPaths and validatePatchPaths', () => {
     expect(validatePatchPaths([`${REL}/../../../app/models/user.rb`], REL)[0]).toMatch(/leaves|outside/)
     expect(validatePatchPaths(['app/models/user.rb'], REL)[0]).toMatch(/outside/)
     expect(validatePatchPaths([], REL)).toEqual(['the patch names no files'])
+  })
+
+  it('reads both sides of a pure rename or copy from the diff --git and rename/copy headers', () => {
+    const rename = [
+      `diff --git a/${REL}/a.feature b/app/models/stolen.rb`,
+      'similarity index 100%',
+      `rename from ${REL}/a.feature`,
+      'rename to app/models/stolen.rb',
+      '',
+    ].join('\n')
+    expect(patchPaths(rename).sort()).toEqual(['app/models/stolen.rb', `${REL}/a.feature`])
+    const copy = [
+      `diff --git a/${REL}/a.feature b/other/copied.feature`,
+      'similarity index 100%',
+      `copy from ${REL}/a.feature`,
+      'copy to other/copied.feature',
+      '',
+    ].join('\n')
+    expect(patchPaths(copy).sort()).toEqual([`${REL}/a.feature`, 'other/copied.feature'])
+  })
+})
+
+describe('disallowedPatchContent', () => {
+  it('rejects a binary patch and a non-100644 mode, but allows a plain 100644 new file', () => {
+    expect(disallowedPatchContent('diff --git a/x b/x\nGIT binary patch\nliteral 0\n')).toMatch(/binary/)
+    expect(disallowedPatchContent('diff --git a/x b/x\nBinary files a/x and b/x differ\n')).toMatch(/binary/)
+    expect(disallowedPatchContent('diff --git a/x b/x\nold mode 100644\nnew mode 100755\n')).toMatch(/mode/)
+    expect(disallowedPatchContent(`diff --git a/${REL}/a b/${REL}/a\nnew file mode 100644\nindex 0000000..1\n--- /dev/null\n+++ b/${REL}/a\n@@ -0,0 +1 @@\n+x\n`)).toBeNull()
+  })
+})
+
+describe('gitApplyPaths and touchedPaths', () => {
+  it("only reports a pure rename's destination — numstat cannot see the source", async () => {
+    const { repo } = await makeRepo()
+    const diff = [
+      `diff --git a/${REL}/features/thread_state.feature b/app/models/stolen.rb`,
+      'similarity index 100%',
+      `rename from ${REL}/features/thread_state.feature`,
+      'rename to app/models/stolen.rb',
+      '',
+    ].join('\n')
+    expect(await gitApplyPaths(repo, diff)).toEqual(['app/models/stolen.rb'])
+    expect((await touchedPaths(repo, diff)).sort()).toEqual(['app/models/stolen.rb', `${REL}/features/thread_state.feature`])
   })
 })
 
