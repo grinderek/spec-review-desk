@@ -40,10 +40,11 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
   const [reason, setReason] = useState<string | null>(null)
   const status = s.effective.status
   const dom = cssId(s.key)
-  const showDiff = async () => {
-    const d = await api.scenarioDiff(id, s.key)
-    setDiff(lineDiff(d.before ?? '', d.after))
-  }
+  const showDiff = () =>
+    act(async () => {
+      const d = await api.scenarioDiff(id, s.key)
+      setDiff(lineDiff(d.before ?? '', d.after))
+    })
   return (
     <article className={`scn ${status}${selected ? ' sel' : ''}`} id={`scn-${dom}`}>
       <div className="shead">

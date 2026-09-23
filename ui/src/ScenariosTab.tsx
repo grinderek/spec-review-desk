@@ -69,7 +69,7 @@ export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey }: S
       if (current && !view.archived) void act(() => api.approveScenario(id, current.key), 'Scenario approved')
     },
     q: () => {
-      if (current) ask(current)
+      if (current && !view.archived) ask(current)
     },
   })
 

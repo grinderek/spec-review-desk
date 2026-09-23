@@ -20,7 +20,7 @@ function RunnerStat({ id, runner, docker }: { id: ChangeId; runner: RunnerState 
     <>
       <span className={`dot ${runner.result.totals.failed ? 'bad' : 'ok'}`} />
       {runner.result.totals.passed} green · {runner.result.totals.failed} red{runner.result.totals.other ? ` · ${runner.result.totals.other} other` : ''}
-      <button className="btn" onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
+      <button className="btn" disabled={!docker} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
     </>
   )
   else value = <button className="btn" disabled={!docker} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
@@ -39,12 +39,17 @@ function OrphanRow({ id, view, section, entryKey }: { id: ChangeId; view: Change
   const [to, setTo] = useState(targets[0] ?? '')
   return (
     <div>
-      Orphaned review entry <code>{entryKey}</code>{' '}
-      <select aria-label="Re-attach to" value={to} onChange={(e) => setTo(e.target.value)}>
-        {targets.map((t) => <option key={t} value={t}>{t}</option>)}
-      </select>{' '}
-      <button className="btn" disabled={!to} onClick={() => void act(() => api.reattachOrphan(id, section, entryKey, to), 'Re-attached')}>Re-attach</button>{' '}
-      <button className="btn bad" onClick={() => void act(() => api.dropOrphan(id, section, entryKey), 'Dropped')}>Drop</button>
+      Orphaned review entry <code>{entryKey}</code>
+      {view.archived ? null : (
+        <>
+          {' '}
+          <select aria-label="Re-attach to" value={to} onChange={(e) => setTo(e.target.value)}>
+            {targets.map((t) => <option key={t} value={t}>{t}</option>)}
+          </select>{' '}
+          <button className="btn" disabled={!to} onClick={() => void act(() => api.reattachOrphan(id, section, entryKey, to), 'Re-attached')}>Re-attach</button>{' '}
+          <button className="btn bad" onClick={() => void act(() => api.dropOrphan(id, section, entryKey), 'Dropped')}>Drop</button>
+        </>
+      )}
     </div>
   )
 }
@@ -86,7 +91,7 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
         {recorded && !view.archived ? (
           <button className="btn pri" disabled={!view.readiness.ready || running || !capabilities?.claude} onClick={() => void act(() => api.startApply(id), 'Apply started')}>Apply</button>
         ) : null}
-        {running ? <button className="btn bad" onClick={() => void act(() => api.stopApply(id), 'Stopping the Apply run…')}>Stop</button> : null}
+        {running && !view.archived ? <button className="btn bad" onClick={() => void act(() => api.stopApply(id), 'Stopping the Apply run…')}>Stop</button> : null}
         {drift.length && !view.archived ? (
           <button className="btn" disabled={running || !capabilities?.claude} onClick={() => void act(() => api.reapply(id), 'Re-apply started')}>Re-apply {drift.length} changed scenario{drift.length > 1 ? 's' : ''}</button>
         ) : null}
