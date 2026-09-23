@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { RunnerProfile } from './config.ts'
 import { EventBus } from './events.ts'
 import type { RunOptions, RunResult } from './git.ts'
-import { RESULT_FILE, RunnerService } from './runner.ts'
+import { isIgnoredWatchPath, RESULT_FILE, RunnerService } from './runner.ts'
 import { makeRepo } from './testing/repo.ts'
 
 const RESULT = [
@@ -41,6 +41,17 @@ async function setup(opts: { up?: boolean; writeResult?: boolean; gate?: Promise
   const runner = new RunnerService({ profiles: [profile], bus, exec, debounceMs: 2000 })
   return { repo, runner, calls, bus }
 }
+
+describe('isIgnoredWatchPath', () => {
+  it('checks segments relative to the worktree, not any ancestor of it (worktrees live under /tmp in every test)', () => {
+    const worktree = path.join('/tmp', 'sr-hub-abc123', 'api')
+    expect(isIgnoredWatchPath(worktree, path.join(worktree, 'features', 'x.feature'))).toBe(false)
+    expect(isIgnoredWatchPath(worktree, path.join(worktree, 'tmp', 'x.feature'))).toBe(true)
+    expect(isIgnoredWatchPath(worktree, path.join(worktree, 'features', 'x.tmp'))).toBe(true)
+    expect(isIgnoredWatchPath(worktree, path.join(worktree, 'log', 'x.log'))).toBe(true)
+    expect(isIgnoredWatchPath(worktree, path.join(worktree, '.git', 'HEAD'))).toBe(true)
+  })
+})
 
 describe('RunnerService', () => {
   it('runs cucumber inside the warm container and parses the result', async () => {

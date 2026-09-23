@@ -31,6 +31,15 @@ export interface RunnerDeps {
 
 const IGNORED = ['.spec-review', 'tmp', 'log', 'node_modules', '.git']
 
+// Path segments are checked RELATIVE to the worktree, never on the full absolute path: a
+// worktree that itself lives under, say, /tmp/sr-hub-xyz/api (as every temp-repo test does, and
+// as a real deployment might under a "tmp" staging area) would otherwise have every file within
+// it ignored, because the ancestor path already contains a "tmp" segment.
+export function isIgnoredWatchPath(worktreePath: string, file: string): boolean {
+  const rel = path.relative(worktreePath, file)
+  return rel.endsWith('.tmp') || rel.split(path.sep).some((part) => IGNORED.includes(part))
+}
+
 export class RunnerService {
   #states = new Map<string, RunnerState>()
   #runs = new Map<string, Promise<void>>()
@@ -116,7 +125,7 @@ export class RunnerService {
     const watchers = this.deps.profiles.map((p) => {
       const watcher = watch(p.watch.map((dir) => path.join(p.worktreePath, dir)), {
         ignoreInitial: true,
-        ignored: (file: string) => file.endsWith('.tmp') || file.split(path.sep).some((part) => IGNORED.includes(part)),
+        ignored: (file: string) => isIgnoredWatchPath(p.worktreePath, file),
       })
       watcher.on('all', () => this.schedule(p.worktreePath))
       return watcher
