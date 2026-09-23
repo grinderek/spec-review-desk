@@ -3,13 +3,18 @@ import type { AppContext } from '../app.ts'
 import { type ChangeRef, discover, listChanges, type WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 
-export async function resolveChange(ctx: AppContext, wtId: string, name: string): Promise<{ wt: WorktreeInfo; ref: ChangeRef }> {
-  let wt = ctx.registry.get(wtId)
+export async function resolveWorktree(ctx: AppContext, id: string): Promise<WorktreeInfo> {
+  let wt = ctx.registry.get(id)
   if (!wt) {
     await discover(ctx.config.repos, ctx.registry)
-    wt = ctx.registry.get(wtId)
+    wt = ctx.registry.get(id)
   }
-  if (!wt) throw new HttpError(404, 'unknown_worktree', `Unknown worktree ${wtId}`)
+  if (!wt) throw new HttpError(404, 'unknown_worktree', `Unknown worktree ${id}`)
+  return wt
+}
+
+export async function resolveChange(ctx: AppContext, wtId: string, name: string): Promise<{ wt: WorktreeInfo; ref: ChangeRef }> {
+  const wt = await resolveWorktree(ctx, wtId)
   const ref = (await listChanges(wt)).find((c) => c.name === name)
   if (!ref) throw new HttpError(404, 'unknown_change', `No behavior-driven change "${name}" in ${wt.path}`)
   return { wt, ref }
