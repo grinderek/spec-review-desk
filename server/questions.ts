@@ -5,23 +5,26 @@ import { type ClaudeEvent, type ClaudeOutcome, type ClaudeRunSpec, isMissingSess
 import type { Config } from './config.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import type { EventBus } from './events.ts'
-import { checkPatch, extractPatch, patchPaths, validatePatchPaths } from './patch.ts'
+import { checkPatch, disallowedPatchContent, extractPatch, touchedPaths, validatePatchPaths } from './patch.ts'
 import { buildQuestionPrompt } from './prompt.ts'
 import {
   appendMessage, findThread, type Message, nowIso, type Patch, setAgentSession, setThreadStatus, type Thread, updateReview,
 } from './review-store.ts'
 
-export const QUESTION_TOOLS = { allowed: ['Read', 'Grep', 'Glob'], disallowed: ['Edit', 'Write', 'Bash', 'NotebookEdit'] }
+export const QUESTION_TOOLS = { allowed: ['Read', 'Grep', 'Glob'], disallowed: ['Edit', 'Write', 'Bash', 'NotebookEdit', 'WebFetch', 'WebSearch'] }
 const REVIEWER_RULES = new URL('./prompts/reviewer.md', import.meta.url)
 const NEW_SESSION_NOTE = 'new agent session — earlier context rebuilt from files'
 
 export const ownerMessage = (text: string, at: Date = new Date()): Message => ({ role: 'owner', at: nowIso(at), text, note: null, patch: null })
 
 export async function vetPatch(cwd: string, relDir: string, diff: string): Promise<Patch> {
-  const pathErrors = validatePatchPaths(patchPaths(diff), relDir)
-  if (pathErrors.length) return { diff, state: 'stale', commit: null, error: pathErrors.join('; ') }
+  const files = await touchedPaths(cwd, diff)
+  const contentError = disallowedPatchContent(diff)
+  if (contentError) return { diff, state: 'stale', commit: null, error: contentError, files }
+  const pathErrors = validatePatchPaths(files, relDir)
+  if (pathErrors.length) return { diff, state: 'stale', commit: null, error: pathErrors.join('; '), files }
   const checkError = await checkPatch(cwd, diff)
-  return { diff, state: checkError ? 'stale' : 'proposed', commit: null, error: checkError }
+  return { diff, state: checkError ? 'stale' : 'proposed', commit: null, error: checkError, files }
 }
 
 export function anchorText(view: ChangeView, anchor: Thread['anchor'], ref: string): string {
