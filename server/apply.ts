@@ -99,12 +99,13 @@ export interface ApplyDeps {
 
 export class ApplyService {
   #active = new Map<string, Active>()
+  #reserved = new Set<string>()
   #follows = new Map<string, Promise<void>>()
 
   constructor(private readonly deps: ApplyDeps) {}
 
   active(worktreePath: string): boolean {
-    return this.#active.has(worktreePath)
+    return this.#active.has(worktreePath) || this.#reserved.has(worktreePath)
   }
 
   settled(runId: string): Promise<void> {
@@ -112,30 +113,47 @@ export class ApplyService {
   }
 
   async start(wt: WorktreeInfo, ref: ChangeRef, opts: { onlyKeys?: readonly string[] } = {}): Promise<ApplyRun> {
+    // Reserve synchronously (before the first await) so two near-simultaneous calls for the same
+    // worktree cannot both pass this check and spawn two write agents in one working tree.
     if (this.active(wt.path)) throw new HttpError(409, 'apply_running', 'An Apply run is already active in this worktree')
-    const view = await loadChangeView(wt, ref, { withCommits: false })
-    if (!view.review.approved_at) throw new HttpError(409, 'approval_not_recorded', 'Record the approval before running Apply.')
-    if (!view.readiness.ready) throw new HttpError(409, 'not_ready', `Not ready: ${view.readiness.reasons.join('; ')}`)
-    const started = nowIso(this.#now())
-    const id = `r_${started.replace(/[-:.TZ]/g, '').slice(0, 14)}`
-    const run: ApplyRun = { id, session: randomUUID(), pid: null, log: `.spec-review/runs/${id}.ndjson`, started_at: started, ended_at: null, outcome: 'running' }
-    return this.#launch(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? []), false)
+    this.#reserved.add(wt.path)
+    try {
+      const view = await loadChangeView(wt, ref, { withCommits: false })
+      if (!view.review.approved_at) throw new HttpError(409, 'approval_not_recorded', 'Record the approval before running Apply.')
+      if (!view.readiness.ready) throw new HttpError(409, 'not_ready', `Not ready: ${view.readiness.reasons.join('; ')}`)
+      const started = nowIso(this.#now())
+      const id = `r_${started.replace(/[-:.TZ]/g, '').slice(0, 14)}`
+      const run: ApplyRun = { id, session: randomUUID(), pid: null, log: `.spec-review/runs/${id}.ndjson`, started_at: started, ended_at: null, outcome: 'running' }
+      return await this.#launch(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? []), false)
+    } finally {
+      // #launch sets #active for this path before its first await beyond the spawn call, so by
+      // the time we get here on the success path #active already holds the run; on any failure
+      // path (approval_not_recorded, not_ready, or a thrown error before the process is spawned)
+      // #active was never set, and clearing the reservation is what releases the worktree.
+      this.#reserved.delete(wt.path)
+    }
   }
 
   async resume(wt: WorktreeInfo, ref: ChangeRef, threadId: string): Promise<void> {
     if (this.active(wt.path)) throw new HttpError(409, 'apply_running', 'An Apply run is already active in this worktree')
-    const doc = await readReview(ref.dir)
-    const thread = findThread(doc, threadId)
-    const run = doc.apply_runs.find((r) => r.id === thread.ref)
-    if (!run) throw new HttpError(404, 'unknown_run', `No apply run ${thread.ref}`)
-    const lastOwner = [...thread.messages].reverse().find((m) => m.role === 'owner')
-    await this.#launch(wt, ref, { ...run, outcome: 'running', ended_at: null }, lastOwner?.text ?? 'Continue.', true)
+    this.#reserved.add(wt.path)
+    try {
+      const doc = await readReview(ref.dir)
+      const thread = findThread(doc, threadId)
+      const run = doc.apply_runs.find((r) => r.id === thread.ref)
+      if (!run) throw new HttpError(404, 'unknown_run', `No apply run ${thread.ref}`)
+      const lastOwner = [...thread.messages].reverse().find((m) => m.role === 'owner')
+      await this.#launch(wt, ref, { ...run, outcome: 'running', ended_at: null }, lastOwner?.text ?? 'Continue.', true)
+    } finally {
+      this.#reserved.delete(wt.path)
+    }
   }
 
   async stop(wt: WorktreeInfo, ref: ChangeRef): Promise<void> {
     const current = this.#active.get(wt.path)
     if (!current || current.changeDir !== ref.dir) throw new HttpError(409, 'not_running', 'No Apply run is active for this change')
     this.#active.set(wt.path, { ...current, stopping: true })
+    if (current.pid <= 0) return
     const kill = this.deps.kill ?? ((pid: number, signal: NodeJS.Signals) => process.kill(pid, signal))
     try {
       kill(-current.pid, 'SIGINT')

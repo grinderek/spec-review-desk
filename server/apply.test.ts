@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { ApplyService, applyPrompt, outcomeOf, readEvents } from './apply.ts'
 import { listChanges, Registry, discover } from './discovery.ts'
 import { EventBus } from './events.ts'
@@ -59,6 +59,49 @@ describe('ApplyService', () => {
     await expect(unrecorded.apply.start(unrecorded.wt, unrecorded.ref)).rejects.toMatchObject({ code: 'approval_not_recorded' })
     const unapproved = await setup({ approve: false })
     await expect(unapproved.apply.start(unapproved.wt, unapproved.ref)).rejects.toMatchObject({ code: 'not_ready' })
+  })
+
+  it('reserves the worktree synchronously so concurrent starts cannot race', async () => {
+    const { wt, ref, apply } = await setup()
+    const results = await Promise.allSettled([apply.start(wt, ref), apply.start(wt, ref)])
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect(rejected[0]!.reason).toMatchObject({ code: 'apply_running' })
+    await apply.settled(fulfilled[0]!.value.id)
+  })
+
+  it('releases the reservation when a start is refused, so a later attempt can start', async () => {
+    const { wt, ref, apply } = await setup({ record: false })
+    await expect(apply.start(wt, ref)).rejects.toMatchObject({ code: 'approval_not_recorded' })
+    expect(apply.active(wt.path)).toBe(false)
+    await updateReview(ref.dir, (d) => recordApproval(d, '2026-09-23T10:00:00.000Z', 'abc1234'))
+    const run = await apply.start(wt, ref)
+    expect(apply.active(wt.path)).toBe(true)
+    await apply.settled(run.id)
+  })
+
+  it('does not signal a non-positive pid when stopping', async () => {
+    const { repo, wt, ref } = await setup()
+    const kill = vi.fn()
+    let resolveExited: (code: number | null) => void = () => undefined
+    const exited = new Promise<number | null>((resolve) => {
+      resolveExited = resolve
+    })
+    const isolated = new ApplyService({
+      config: testConfig(repo, { claudeBin: FAKE_CLAUDE }),
+      bus: new EventBus(),
+      pollMs: 50,
+      spawn: () => ({ pid: -1, exited }),
+      kill,
+    })
+    const run = await isolated.start(wt, ref)
+    await isolated.stop(wt, ref)
+    expect(kill).not.toHaveBeenCalled()
+    resolveExited(0)
+    await isolated.settled(run.id)
+    expect((await readReview(ref.dir)).apply_runs[0]!.outcome).toBe('stopped')
   })
 
   it('runs /opsx:apply detached with the write allowlist and records the outcome', async () => {
