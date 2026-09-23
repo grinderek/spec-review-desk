@@ -10,6 +10,7 @@ import { EventBus } from './events.ts'
 import { run } from './git.ts'
 import { QuestionService } from './questions.ts'
 import { registerReadRoutes } from './routes/read.ts'
+import { registerReviewRoutes } from './routes/review.ts'
 import { registerThreadRoutes } from './routes/threads.ts'
 import { watchChanges } from './watch.ts'
 
@@ -41,6 +42,7 @@ export async function startServer(opts: StartOptions) {
   const questions = new QuestionService({ config, bus })
   const threadDeps = { questions, applyActive: (_worktreePath: string) => false, resumeApply: null }
   registerThreadRoutes(app, ctx, threadDeps)
+  registerReviewRoutes(app, ctx, { questions })
   // SERVICES: later tasks create their services and register their routes here.
 
   if (!opts.dev) {
