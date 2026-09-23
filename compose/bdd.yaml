@@ -1,0 +1,24 @@
+# Isolated overlay for the bdd-pilot worktree: no host ports, no .env, test env only.
+# The api service idles so the Spec Review Desk can `docker compose exec` cucumber into it.
+services:
+  db:
+    env_file: !reset []
+    ports: !reset []
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+  api:
+    command: ["sleep", "infinity"]
+    env_file: !reset []
+    ports: !reset []
+    stdin_open: false
+    tty: false
+    environment:
+      RAILS_ENV: test
+      DATABASE_URL: postgres://postgres:postgres@db:5432
+      BUNDLE_PATH: /usr/local/bundle
+      DATABASE_CLEANER_ALLOW_REMOTE_DATABASE_URL: "true"
+volumes:
+  bundle:
+    name: nucleus_bundle
+    external: true

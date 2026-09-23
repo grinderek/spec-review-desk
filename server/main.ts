@@ -11,7 +11,9 @@ import { run } from './git.ts'
 import { QuestionService } from './questions.ts'
 import { registerReadRoutes } from './routes/read.ts'
 import { registerReviewRoutes } from './routes/review.ts'
+import { registerRunnerRoutes } from './routes/runner.ts'
 import { registerThreadRoutes } from './routes/threads.ts'
+import { RunnerService } from './runner.ts'
 import { watchChanges } from './watch.ts'
 
 export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number }
@@ -43,6 +45,11 @@ export async function startServer(opts: StartOptions) {
   const threadDeps = { questions, applyActive: (_worktreePath: string) => false, resumeApply: null }
   registerThreadRoutes(app, ctx, threadDeps)
   registerReviewRoutes(app, ctx, { questions })
+  const runner = new RunnerService({ profiles: config.runners, bus })
+  await Promise.all(config.runners.map((p) => runner.loadLast(p.worktreePath)))
+  if (capabilities.docker) await Promise.all(config.runners.map((p) => runner.refreshUp(p.worktreePath).catch(() => false)))
+  const stopRunner = capabilities.docker ? runner.watch() : async () => undefined
+  registerRunnerRoutes(app, ctx, runner)
   // SERVICES: later tasks create their services and register their routes here.
 
   if (!opts.dev) {
@@ -61,6 +68,7 @@ export async function startServer(opts: StartOptions) {
     config,
     close: async () => {
       await stopWatching()
+      await stopRunner()
       server.close()
     },
   }
