@@ -3,12 +3,14 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
+import { ApplyService } from './apply.ts'
 import { createBaseApp } from './app.ts'
 import { loadConfig } from './config.ts'
-import { discover, Registry } from './discovery.ts'
+import { type ChangeRef, discover, listChanges, Registry, type WorktreeInfo } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { run } from './git.ts'
 import { QuestionService } from './questions.ts'
+import { registerApplyRoutes } from './routes/apply.ts'
 import { registerCorpusRoutes } from './routes/corpus.ts'
 import { registerReadRoutes } from './routes/read.ts'
 import { registerReviewRoutes } from './routes/review.ts'
@@ -43,7 +45,13 @@ export async function startServer(opts: StartOptions) {
   const app = createBaseApp(ctx)
   registerReadRoutes(app, ctx, capabilities)
   const questions = new QuestionService({ config, bus })
-  const threadDeps = { questions, applyActive: (_worktreePath: string) => false, resumeApply: null }
+  const apply = new ApplyService({ config, bus })
+  const resumeApply = (wt: WorktreeInfo, ref: ChangeRef, id: string) =>
+    apply.resume(wt, ref, id).catch((error: unknown) => {
+      console.error(error)
+      bus.publish(`thread:${id}`, { type: 'done', ok: false })
+    })
+  const threadDeps = { questions, applyActive: (p: string) => apply.active(p), resumeApply }
   registerThreadRoutes(app, ctx, threadDeps)
   registerReviewRoutes(app, ctx, { questions })
   const runner = new RunnerService({ profiles: config.runners, bus })
@@ -52,6 +60,10 @@ export async function startServer(opts: StartOptions) {
   const stopRunner = capabilities.docker ? runner.watch() : async () => undefined
   registerRunnerRoutes(app, ctx, runner)
   registerCorpusRoutes(app, ctx)
+  registerApplyRoutes(app, ctx, { apply })
+  for (const wt of registry.all()) {
+    for (const ref of await listChanges(wt)) await apply.reattach(wt, ref).catch((error: unknown) => console.error(error))
+  }
   // SERVICES: later tasks create their services and register their routes here.
 
   if (!opts.dev) {
