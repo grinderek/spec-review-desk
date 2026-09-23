@@ -3,19 +3,6 @@ import { useEffect, useRef } from 'react'
 export const corpusKey = (file: string, title: string): string => `${file.split('/').pop() ?? file}::${title}`
 export const cssId = (key: string): string => key.replace(/[^a-zA-Z0-9_-]/g, '_')
 
-export function patchFiles(diff: string): string[] {
-  const lines = diff.split('\n')
-  const files = new Set<string>()
-  lines.forEach((line, i) => {
-    if (!line.startsWith('--- ') || !lines[i + 1]?.startsWith('+++ ')) return
-    for (const raw of [line.slice(4), lines[i + 1]!.slice(4)]) {
-      const value = raw.split('\t')[0]!.trim()
-      if (value !== '/dev/null') files.add(value.replace(/^[ab]\//, ''))
-    }
-  })
-  return [...files]
-}
-
 export const stripDiff = (text: string): string => text.replace(/```diff[\s\S]*?```/g, '').trim()
 
 export function defaultSummary(text: string): string {

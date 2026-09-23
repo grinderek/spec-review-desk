@@ -2,7 +2,7 @@ import { useState } from 'react'
 import type { Message } from '../../server/review-store.ts'
 import { api, type ChangeId } from './api.ts'
 import { useAction } from './feedback.tsx'
-import { defaultSummary, patchFiles } from './keys.ts'
+import { defaultSummary } from './keys.ts'
 
 const lineClass = (line: string): string =>
   line.startsWith('+') && !line.startsWith('+++') ? 'a' : line.startsWith('-') && !line.startsWith('---') ? 'd' : line.startsWith('@@') ? 'h' : ''
@@ -24,7 +24,7 @@ export function PatchCard({ id, threadId, index, message, disabled, archived }: 
   return (
     <div className="patch">
       <div className="ph2">
-        <span className="files">{patchFiles(patch.diff).join(' · ')}</span>
+        <span className="files">{patch.files.join(' · ')}</span>
         <span className={`pill p-${patch.state}`}>{patch.state}</span>
       </div>
       <pre className="diff">
