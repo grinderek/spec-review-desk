@@ -8,7 +8,9 @@ import { loadConfig } from './config.ts'
 import { discover, Registry } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { run } from './git.ts'
+import { QuestionService } from './questions.ts'
 import { registerReadRoutes } from './routes/read.ts'
+import { registerThreadRoutes } from './routes/threads.ts'
 import { watchChanges } from './watch.ts'
 
 export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number }
@@ -36,6 +38,9 @@ export async function startServer(opts: StartOptions) {
   const ctx = { config, token, bus, registry }
   const app = createBaseApp(ctx)
   registerReadRoutes(app, ctx, capabilities)
+  const questions = new QuestionService({ config, bus })
+  const threadDeps = { questions, applyActive: (_worktreePath: string) => false, resumeApply: null }
+  registerThreadRoutes(app, ctx, threadDeps)
   // SERVICES: later tasks create their services and register their routes here.
 
   if (!opts.dev) {
