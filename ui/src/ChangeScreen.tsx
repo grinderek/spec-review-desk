@@ -3,8 +3,11 @@ import { useState } from 'react'
 import { api, type Capabilities, type ChangeId } from './api.ts'
 import type { PanelTarget } from './App.tsx'
 import { ChangeHeader } from './ChangeHeader.tsx'
+import { DecisionsTab } from './DecisionsTab.tsx'
 import { DocTab } from './DocTab.tsx'
+import { PhrasesTab } from './PhrasesTab.tsx'
 import { ScenariosTab } from './ScenariosTab.tsx'
+import { KitchenTab, VerificationTab } from './VerificationTab.tsx'
 
 export type TabId = 'scenarios' | 'phrases' | 'decisions' | 'proposal' | 'verification' | 'kitchen'
 
@@ -18,9 +21,14 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
   if (change.error || !change.data) return <div className="banner bad">{change.error instanceof Error ? change.error.message : 'Change not found'}</div>
   const view = change.data
   const runnerState = runner.data?.state ?? null
+  const decisionCount = view.features.reduce((n, f) => n + f.scenarios.reduce((m, s) => m + s.decisions.length, 0), 0)
   const tabs: [TabId, string, number | null][] = [
     ['scenarios', 'Scenarios', view.features.reduce((n, f) => n + f.scenarios.length, 0)],
+    ['phrases', 'New phrases', view.phrases.length],
+    ['decisions', 'Decisions', decisionCount],
     ['proposal', 'Proposal', null],
+    ['verification', 'Verification', view.review.apply_runs.length || null],
+    ['kitchen', 'Kitchen', null],
   ]
   return (
     <>
@@ -34,7 +42,11 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
       </div>
       <div className="tabpanel">
         {tab === 'scenarios' ? <ScenariosTab id={id} view={view} corpus={corpus.data} runner={runnerState} setPanel={setPanel} focusKey={focusKey} /> : null}
+        {tab === 'phrases' ? <PhrasesTab id={id} view={view} setPanel={setPanel} /> : null}
+        {tab === 'decisions' ? <DecisionsTab view={view} onGoto={(key) => { setTab('scenarios'); setFocusKey(key) }} /> : null}
         {tab === 'proposal' ? <DocTab title="proposal.md" text={view.docs.proposal} /> : null}
+        {tab === 'verification' ? <VerificationTab id={id} view={view} runner={runnerState} setPanel={setPanel} /> : null}
+        {tab === 'kitchen' ? <KitchenTab view={view} /> : null}
       </div>
     </>
   )
