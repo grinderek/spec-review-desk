@@ -9,6 +9,7 @@ const PatchSchema = z.object({
   state: z.enum(['proposed', 'applied', 'rejected', 'stale']),
   commit: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
+  files: z.array(z.string()).default([]),
 })
 const MessageSchema = z.object({
   role: z.enum(['owner', 'agent']),

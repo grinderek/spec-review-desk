@@ -66,7 +66,7 @@ describe('pure updates', () => {
   it('never mutates the input document', () => {
     const doc = addThread(emptyReview(), thread)
     const frozen = JSON.stringify(doc)
-    appendMessage(doc, 't_1', { role: 'agent', at: 'now', text: 'because', note: null, patch: { diff: 'd', state: 'proposed', commit: null, error: null } })
+    appendMessage(doc, 't_1', { role: 'agent', at: 'now', text: 'because', note: null, patch: { diff: 'd', state: 'proposed', commit: null, error: null, files: [] } })
     setThreadStatus(doc, 't_1', 'resolved')
     setEntry(doc, 'scenarios', 'x', approved)
     recordApproval(doc, 'now', 'abc')
@@ -74,7 +74,7 @@ describe('pure updates', () => {
   })
 
   it('updates a patch in place of the message', () => {
-    const withPatch = appendMessage(addThread(emptyReview(), thread), 't_1', { role: 'agent', at: 'now', text: 'x', note: null, patch: { diff: 'd', state: 'proposed', commit: null, error: null } })
+    const withPatch = appendMessage(addThread(emptyReview(), thread), 't_1', { role: 'agent', at: 'now', text: 'x', note: null, patch: { diff: 'd', state: 'proposed', commit: null, error: null, files: [] } })
     expect(updatePatch(withPatch, 't_1', 1, { state: 'applied', commit: 'def5678' }).threads[0]!.messages[1]!.patch).toMatchObject({ state: 'applied', commit: 'def5678' })
     expect(() => updatePatch(withPatch, 't_1', 0, { state: 'applied' })).toThrow(/no patch/)
   })
