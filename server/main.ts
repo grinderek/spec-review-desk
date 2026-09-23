@@ -9,6 +9,7 @@ import { discover, Registry } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { run } from './git.ts'
 import { QuestionService } from './questions.ts'
+import { registerCorpusRoutes } from './routes/corpus.ts'
 import { registerReadRoutes } from './routes/read.ts'
 import { registerReviewRoutes } from './routes/review.ts'
 import { registerRunnerRoutes } from './routes/runner.ts'
@@ -50,6 +51,7 @@ export async function startServer(opts: StartOptions) {
   if (capabilities.docker) await Promise.all(config.runners.map((p) => runner.refreshUp(p.worktreePath).catch(() => false)))
   const stopRunner = capabilities.docker ? runner.watch() : async () => undefined
   registerRunnerRoutes(app, ctx, runner)
+  registerCorpusRoutes(app, ctx)
   // SERVICES: later tasks create their services and register their routes here.
 
   if (!opts.dev) {
