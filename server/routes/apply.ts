@@ -1,8 +1,7 @@
 import { readFile } from 'node:fs/promises'
-import path from 'node:path'
 import type { Hono } from 'hono'
 import type { AppContext } from '../app.ts'
-import { type ApplyService, readEvents } from '../apply.ts'
+import { type ApplyService, readEvents, resolveRunLog } from '../apply.ts'
 import { loadChangeView } from '../change-view.ts'
 import { corpusReport } from '../corpus.ts'
 import { HttpError } from '../errors.ts'
@@ -39,7 +38,7 @@ export function registerApplyRoutes(app: Hono, ctx: AppContext, deps: { apply: A
     const { wt, ref } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))
     const run = (await readReview(ref.dir)).apply_runs.find((r) => r.id === c.req.param('id'))
     if (!run) throw new HttpError(404, 'unknown_run', `No apply run ${c.req.param('id')}`)
-    const events = readEvents(await readFile(path.join(wt.path, run.log), 'utf8').catch(() => ''))
+    const events = readEvents(await readFile(resolveRunLog(wt.path, run.log), 'utf8').catch(() => ''))
     const text = events.flatMap((e) => (e.type === 'delta' ? [e.text] : [])).join('')
     return c.json({ run, text })
   })

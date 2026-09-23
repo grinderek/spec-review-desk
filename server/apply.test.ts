@@ -2,7 +2,7 @@ import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { ApplyService, applyPrompt, outcomeOf, readEvents } from './apply.ts'
+import { ApplyService, applyPrompt, DEFAULT_APPLY_DENY, outcomeOf, readEvents, resolveRunLog } from './apply.ts'
 import { listChanges, Registry, discover } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { appendMessage, readReview, recordApproval, updateReview, upsertApplyRun } from './review-store.ts'
@@ -39,7 +39,25 @@ beforeEach(async () => {
   process.env.FAKE_CLAUDE_TEXT = 'All scenarios green.'
 })
 
+describe('resolveRunLog', () => {
+  it('accepts a log path under .spec-review/runs/ and rejects anything that escapes it', () => {
+    const wt = '/home/x/hub-wt/api'
+    expect(resolveRunLog(wt, '.spec-review/runs/r_1.ndjson')).toBe(path.join(wt, '.spec-review/runs/r_1.ndjson'))
+    expect(() => resolveRunLog(wt, '../secret.txt')).toThrow(/outside/)
+    expect(() => resolveRunLog(wt, '.spec-review/runs/../../secret.txt')).toThrow(/outside/)
+    expect(() => resolveRunLog(wt, '/etc/passwd')).toThrow(/outside/)
+    expect(() => resolveRunLog(wt, '.spec-review/runs-evil/r.ndjson')).toThrow(/outside/)
+  })
+})
+
 describe('apply helpers', () => {
+  it('denies push, reset, rebase, rm and network tools regardless of the allowlist', () => {
+    expect(DEFAULT_APPLY_DENY).toEqual(expect.arrayContaining([
+      'Bash(git push:*)', 'Bash(git reset:*)', 'Bash(git rebase:*)', 'Bash(rm:*)',
+      'Bash(curl:*)', 'Bash(wget:*)', 'Bash(ssh:*)', 'Bash(scp:*)', 'WebFetch', 'WebSearch',
+    ]))
+  })
+
   it('builds the prompt and reads outcomes', () => {
     expect(applyPrompt('c', [])).toBe('/opsx:apply c')
     expect(applyPrompt('c', ['features/x.feature::A'])).toContain('- features/x.feature::A')
@@ -114,7 +132,11 @@ describe('ApplyService', () => {
     expect((await readReview(ref.dir)).apply_runs[0]).toMatchObject({ id: run.id, outcome: 'done', ended_at: expect.any(String) })
     const [call] = await calls()
     expect(call!.prompt).toBe('/opsx:apply add-thread-state')
-    expect(call!.args).toEqual(expect.arrayContaining(['--permission-mode', 'acceptEdits', '--session-id', run.session, expect.stringMatching(/^--allowedTools=Read,Grep,Glob,Edit,Write,Bash\(git add:\*\)/)]))
+    expect(call!.args).toEqual(expect.arrayContaining([
+      '--permission-mode', 'acceptEdits', '--session-id', run.session, '--strict-mcp-config',
+      expect.stringMatching(/^--allowedTools=Read,Grep,Glob,Edit,Write,Bash\(git add:\*\)/),
+      expect.stringMatching(/^--disallowedTools=.*Bash\(git push:\*\).*Bash\(rm:\*\).*WebFetch.*WebSearch/),
+    ]))
     expect(events.some((e) => e.topic === `run:${run.id}` && (e.data as { type: string }).type === 'event')).toBe(true)
     expect(await readFile(path.join(wt.path, run.log), 'utf8')).toContain('"type":"result"')
   })
@@ -143,6 +165,26 @@ describe('ApplyService', () => {
     expect(last.prompt).toBe('Weight zero.')
   })
 
+  it("does not resurface the previous attempt's result when a resumed run is stopped before producing its own", async () => {
+    const { wt, ref, apply } = await setup()
+    process.env.FAKE_CLAUDE_TEXT = 'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?'
+    const run = await apply.start(wt, ref)
+    await apply.settled(run.id)
+    let review = await readReview(ref.dir)
+    const thread = review.threads.find((t) => t.anchor === 'apply')!
+    await updateReview(ref.dir, (d) => appendMessage(d, thread.id, { role: 'owner', at: 'now', text: 'Weight zero.', note: null, patch: null }))
+    process.env.FAKE_CLAUDE_MODE = 'hang'
+    await apply.resume(wt, ref, thread.id)
+    await new Promise((r) => setTimeout(r, 300))
+    await apply.stop(wt, ref)
+    await apply.settled(run.id)
+    review = await readReview(ref.dir)
+    expect(review.apply_runs[0]!.outcome).toBe('stopped')
+    const lastMessage = review.threads.find((t) => t.id === thread.id)!.messages.at(-1)!
+    expect(lastMessage.text).toBe('Stopped by the owner.')
+    expect(lastMessage.text).not.toContain('NEEDS_OWNER')
+  })
+
   it('stops a running apply', async () => {
     const { wt, ref, apply } = await setup()
     process.env.FAKE_CLAUDE_MODE = 'hang'
@@ -151,6 +193,17 @@ describe('ApplyService', () => {
     await apply.stop(wt, ref)
     await apply.settled(run.id)
     expect((await readReview(ref.dir)).apply_runs[0]!.outcome).toBe('stopped')
+  })
+
+  it('gives every apply run a unique id even when two runs start in the same second', async () => {
+    const { repo, wt, ref } = await setup()
+    const fixedNow = () => new Date('2026-09-23T10:00:00.000Z')
+    const apply = new ApplyService({ config: testConfig(repo, { claudeBin: FAKE_CLAUDE }), bus: new EventBus(), pollMs: 50, now: fixedNow })
+    const run1 = await apply.start(wt, ref)
+    await apply.settled(run1.id)
+    const run2 = await apply.start(wt, ref)
+    await apply.settled(run2.id)
+    expect(run1.id).not.toBe(run2.id)
   })
 
   it('finalizes a run whose process died while the server was down', async () => {
