@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { api, ApiError, type ChangeId } from './api.ts'
+import { ChangeScreen } from './ChangeScreen.tsx'
 import { useInvalidation } from './events.ts'
 import { Sidebar } from './Sidebar.tsx'
 
@@ -34,7 +35,7 @@ export function App({ sessionError }: { sessionError: string | null }) {
       <div className="layout">
         <Sidebar data={changes.data} selected={selected} onSelect={(id) => { window.location.hash = `#/${id.wt}/${encodeURIComponent(id.name)}` }} />
         <main className="pane main">
-          {selected ? <p className="empty">Loading {selected.name}…</p> : <p className="empty">Pick a change on the left.</p>}
+          {selected ? <ChangeScreen key={`${selected.wt}/${selected.name}`} id={selected} capabilities={status.data?.capabilities} setPanel={setPanel} /> : <p className="empty">Pick a change on the left.</p>}
         </main>
         <aside className="pane thread" aria-label="Thread">
           <p className="empty">{panel ? 'Thread' : 'Select a scenario and ask a question, or open a thread.'}</p>
