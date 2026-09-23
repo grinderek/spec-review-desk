@@ -1,0 +1,35 @@
+port: 4600
+hubRoot: ../..
+repos:
+  - { name: api, path: api }
+  - { name: mobile, path: mobile }
+  - { name: web, path: web }
+model: opus
+claudeBin: claude
+commitTrailer: "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+questionTimeoutMinutes: 10
+devUiOrigin: http://127.0.0.1:5173
+runners:
+  bdd-pilot:
+    worktree: api/.claude/worktrees/bdd-pilot-health-score
+    compose:
+      project: nucleus-bdd
+      files:
+        - ../../api/.claude/worktrees/bdd-pilot-health-score/compose.yaml
+        - compose/bdd.yaml
+      service: api
+    command: [bin/cucumber, --format, "message:.spec-review/last-run.ndjson", --format, progress]
+    watch: [features, app, lib, config]
+    applyAllowedTools:
+      - Read
+      - Grep
+      - Glob
+      - Edit
+      - Write
+      - "Bash(git add:*)"
+      - "Bash(git commit:*)"
+      - "Bash(git status:*)"
+      - "Bash(git diff:*)"
+      - "Bash(git log:*)"
+      - "Bash(docker compose -p nucleus-bdd:*)"
+      - "Bash(openspec:*)"
