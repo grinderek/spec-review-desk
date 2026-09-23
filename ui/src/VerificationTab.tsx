@@ -5,6 +5,7 @@ import { api, type ChangeId } from './api.ts'
 import type { PanelTarget } from './App.tsx'
 import { DocTab } from './DocTab.tsx'
 import { useEventStream } from './events.ts'
+import { useAction } from './feedback.tsx'
 
 function LiveLog({ id, runId }: { id: ChangeId; runId: string }) {
   const [text, setText] = useState('')
@@ -16,6 +17,7 @@ function LiveLog({ id, runId }: { id: ChangeId; runId: string }) {
 }
 
 export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; view: ChangeView; runner: RunnerState | null; setPanel: (t: PanelTarget) => void }) {
+  const act = useAction()
   const [logs, setLogs] = useState<Record<string, string>>({})
   const failing = Object.entries(runner?.result?.scenarios ?? {}).filter(([, r]) => r.status !== 'passed')
   return (
@@ -32,7 +34,17 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
               <span className="hash">{run.started_at}{run.ended_at ? ` → ${run.ended_at}` : ''}</span>
               {thread ? <button className="btn pri" onClick={() => setPanel({ kind: 'thread', id: thread.id })}>Open thread</button> : null}
               {run.outcome !== 'running' ? (
-                <button className="btn" onClick={() => void api.runLog(id, run.id).then((r) => setLogs((c) => ({ ...c, [run.id]: r.text })))}>Show log</button>
+                <button
+                  className="btn"
+                  onClick={() =>
+                    void act(async () => {
+                      const r = await api.runLog(id, run.id)
+                      setLogs((c) => ({ ...c, [run.id]: r.text }))
+                    })
+                  }
+                >
+                  Show log
+                </button>
               ) : null}
             </div>
             <div className="sbody">
