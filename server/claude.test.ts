@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { claudeArgs, type ClaudeEvent, type ClaudeRunSpec, isMissingSession, parseStreamLine, runClaude } from './claude.ts'
+import { run } from './git.ts'
 import { FAKE_CLAUDE } from './testing/fake-claude-path.ts'
 
 let log = ''
@@ -26,6 +27,19 @@ describe('claudeArgs', () => {
     expect(args).toEqual(expect.arrayContaining(['-p', '--output-format', 'stream-json', '--verbose', '--include-partial-messages', '--model', 'opus', '--session-id', '--permission-mode', 'default', '--allowedTools=Read,Grep', '--disallowedTools=Bash', '--append-system-prompt', 'Rules.']))
     expect(args).not.toContain('Question?')
     expect(claudeArgs(spec({ resume: true }))).toContain('--resume')
+  })
+
+  it('always spawns with no MCP servers, regardless of permission mode', () => {
+    expect(claudeArgs(spec())).toContain('--strict-mcp-config')
+    expect(claudeArgs(spec({ permissionMode: 'acceptEdits' }))).toContain('--strict-mcp-config')
+  })
+})
+
+describe('fake-claude --version', () => {
+  it('answers a bare --version without reading stdin, like the capability probe expects', async () => {
+    const result = await run(FAKE_CLAUDE, ['--version'], { cwd: os.tmpdir(), timeoutMs: 5000 })
+    expect(result.code).toBe(0)
+    expect(result.stdout.trim()).toBe('fake-claude 0.0.0')
   })
 })
 
@@ -68,8 +82,9 @@ describe('runClaude', () => {
     expect(hung).toMatchObject({ ok: false, timedOut: true, error: expect.stringMatching(/timed out/) })
   })
 
-  it('reports a missing binary', async () => {
+  it('reports a missing binary as a hard failure, not a missing session to retry fresh', async () => {
     const outcome = await runClaude(spec({ bin: '/nonexistent/claude' }), { timeoutMs: 1000 })
     expect(outcome).toMatchObject({ ok: false, error: expect.stringMatching(/ENOENT/) })
+    expect(isMissingSession(outcome)).toBe(false)
   })
 })

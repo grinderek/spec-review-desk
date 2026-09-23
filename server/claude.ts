@@ -31,6 +31,8 @@ export function claudeArgs(spec: ClaudeRunSpec): string[] {
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
+    // No MCP servers, ever: the owner's user/project MCP config never reaches a spawned agent.
+    '--strict-mcp-config',
     '--model', spec.model,
     ...(spec.resume ? ['--resume', spec.sessionId] : ['--session-id', spec.sessionId]),
     '--permission-mode', spec.permissionMode,
@@ -124,4 +126,5 @@ export function runClaude(spec: ClaudeRunSpec, opts: { timeoutMs: number; onEven
   })
 }
 
-export const isMissingSession = (outcome: ClaudeOutcome): boolean => !outcome.ok && !outcome.timedOut && outcome.numTurns === 0
+export const isMissingSession = (outcome: ClaudeOutcome): boolean =>
+  !outcome.ok && !outcome.timedOut && outcome.numTurns === 0 && (outcome.error?.includes('No conversation found') ?? false)
