@@ -40,7 +40,7 @@ export function App({ sessionError }: { sessionError: string | null }) {
         </main>
         <aside className="pane thread" aria-label="Thread">
           {selected && panel ? (
-            <ThreadPanel id={selected} target={panel} onTarget={setPanel} />
+            <ThreadPanel key={panel.kind === 'thread' ? panel.id : `new:${panel.anchor}:${panel.ref}`} id={selected} target={panel} onTarget={setPanel} />
           ) : (
             <p className="empty">Select a scenario and ask a question, or open a thread.</p>
           )}

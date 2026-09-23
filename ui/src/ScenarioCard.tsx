@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ScenarioWithStatus } from '../../server/change-view.ts'
 import type { CorpusState } from '../../server/corpus.ts'
 import type { Effective, Thread } from '../../server/review-store.ts'
@@ -38,6 +38,7 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
   const act = useAction()
   const [diff, setDiff] = useState<DiffLine[] | null>(null)
   const [reason, setReason] = useState<string | null>(null)
+  useEffect(() => setDiff(null), [s.hash])
   const status = s.effective.status
   const dom = cssId(s.key)
   const showDiff = () =>

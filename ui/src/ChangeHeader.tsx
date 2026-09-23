@@ -85,7 +85,7 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
       <div className="gatebar">
         <span className={`ready${view.readiness.ready ? ' on' : ''}`}>{recorded ? `approved ${view.review.approved_at!.slice(0, 10)}` : 'ready for /opsx:apply'}</span>
         {view.readiness.ready ? null : <small>Blocked: {view.readiness.reasons.join(' · ')}</small>}
-        {view.readiness.ready && !recorded && !view.archived ? (
+        {view.readiness.ready && !view.archived && (!recorded || view.uncommittedReview) ? (
           <button className="btn ok" onClick={() => void act(() => api.recordApproval(id), 'Approval recorded and committed')}>Record approval</button>
         ) : null}
         {recorded && !view.archived ? (
