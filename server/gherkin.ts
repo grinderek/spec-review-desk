@@ -148,6 +148,7 @@ export function parseFeature(source: string, file: string, classify: Classify): 
     const title = node.name.trim()
     const keyword = node.keyword.trim()
     const kind = keyword === 'Scenario Outline' || keyword === 'Scenario Template' ? 'Scenario Outline' : 'Scenario'
+    const tags = node.tags.map((t) => t.name)
     const blockStart = attached.length ? attached[0]!.line : start
     return [{
       key: scenarioKey(file, title),
@@ -155,7 +156,7 @@ export function parseFeature(source: string, file: string, classify: Classify): 
       title,
       kind,
       line: node.location.line,
-      tags: node.tags.map((t) => t.name),
+      tags,
       decisions,
       notes,
       steps,
@@ -166,6 +167,7 @@ export function parseFeature(source: string, file: string, classify: Classify): 
         comments: attached.map((c) => c.text.trim()),
         kind,
         title,
+        tags,
         steps: steps.map(canonStep),
         examples,
       }),

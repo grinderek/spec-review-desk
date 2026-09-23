@@ -64,6 +64,13 @@ describe('parseFeature', () => {
     it('changes when an examples row changes', () => {
       expect(hashes(FEATURE.replace('| 2026-09-18 16:00 | 2     |', '| 2026-09-18 16:00 | 3     |'))[1]).not.toBe(base[1])
     })
+
+    it('changes when a scenario tag changes', () => {
+      const untagged = 'Feature: F\n  Scenario: S\n    Given x\n'
+      const tagged = 'Feature: F\n  @flaky\n  Scenario: S\n    Given x\n'
+      const hashOf = (source: string) => parse(source).scenarios[0]!.hash
+      expect(hashOf(tagged)).not.toBe(hashOf(untagged))
+    })
   })
 
   it('reports a syntax error with the file name', () => {
