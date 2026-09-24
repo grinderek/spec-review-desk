@@ -73,6 +73,31 @@ describe('disallowedPatchContent', () => {
     expect(disallowedPatchContent('diff --git a/x b/x\nold mode 100644\nnew mode 100755\n')).toMatch(/mode/)
     expect(disallowedPatchContent(`diff --git a/${REL}/a b/${REL}/a\nnew file mode 100644\nindex 0000000..1\n--- /dev/null\n+++ b/${REL}/a\n@@ -0,0 +1 @@\n+x\n`)).toBeNull()
   })
+
+  it('rejects any carriage return anywhere in the diff, not just in headers', () => {
+    expect(disallowedPatchContent('diff --git a/x b/x\r\n--- a/x\r\n+++ b/x\r\n@@ -1 +1 @@\r\n-a\r\n+b\r\n')).toMatch(/carriage return|CRLF/)
+    // A single stray \r in an otherwise ordinary LF body line still counts.
+    expect(disallowedPatchContent('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\r\n')).toMatch(/carriage return|CRLF/)
+    expect(disallowedPatchContent('diff --git a/x b/x\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n')).toBeNull()
+  })
+
+  it('rejects mode lines with trailing whitespace for any non-100644 value, including symlink and submodule modes', () => {
+    expect(disallowedPatchContent('diff --git a/x b/x\nold mode 100644 \nnew mode 100755\t\n')).toMatch(/100755/)
+    expect(disallowedPatchContent('diff --git a/x b/x\nnew file mode 120000 \n')).toMatch(/120000/)
+    expect(disallowedPatchContent('diff --git a/x b/x\nnew file mode 160000\t\n')).toMatch(/160000/)
+    // Trailing whitespace on an otherwise-fine 100644 line is still accepted.
+    expect(disallowedPatchContent(`diff --git a/${REL}/a b/${REL}/a\nnew file mode 100644 \nindex 0000000..1\n--- /dev/null\n+++ b/${REL}/a\n@@ -0,0 +1 @@\n+x\n`)).toBeNull()
+  })
+
+  it('rejects a non-100644 mode carried on the index line, even with no new/old mode line at all', () => {
+    expect(disallowedPatchContent('diff --git a/x b/x\nindex abc..def 120000\n--- a/x\n+++ b/x\n')).toMatch(/120000/)
+    expect(disallowedPatchContent('diff --git a/x b/x\nindex abc..def 100644\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n-a\n+b\n')).toBeNull()
+  })
+
+  it('fails closed on an unparseable mode-ish line instead of silently ignoring it', () => {
+    expect(disallowedPatchContent('diff --git a/x b/x\nold mode garbage\n')).toMatch(/unparseable/)
+    expect(disallowedPatchContent('diff --git a/x b/x\nnew mode \n')).toMatch(/unparseable/)
+  })
 })
 
 describe('gitApplyPaths and touchedPaths', () => {

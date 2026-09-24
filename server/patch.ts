@@ -27,7 +27,11 @@ const COPY_TO = /^copy to (.+)$/
 // (fails closed): an extra spurious candidate just gets validated like any other path and can
 // only turn a borderline patch `stale`, never let one slip through.
 export function patchPaths(diff: string): string[] {
-  const lines = diff.split('\n')
+  // Defensive: vetPatch rejects any diff containing '\r' outright (disallowedPatchContent), so
+  // this parser should never actually see one — but a caller that skips that check (or reuses
+  // this function directly) must not have a bare '\r' silently defeat every regex below, since
+  // none of them match a trailing '\r' (JS '.' and '$' do not span it).
+  const lines = diff.split('\n').map((line) => (line.endsWith('\r') ? line.slice(0, -1) : line))
   const paths = new Set<string>()
   const add = (p: string | null | undefined) => {
     const value = p?.trim()
@@ -54,15 +58,46 @@ export function patchPaths(diff: string): string[] {
 }
 
 const BINARY_MARKER = /^(GIT binary patch|Binary files )/m
-const MODE_LINE = /^(new file mode|old mode|new mode|deleted file mode) (\d+)$/gm
+// Any line that starts one of git's extended-header keywords — the block between `diff --git`
+// and the `--- `/`+++ ` hunk headers. Scanned as a coarse net for symlink/submodule modes in a
+// header shape none of the strict parsers below happen to cover.
+const EXTENDED_HEADER_LINE = /^(diff --git|index |new file mode|deleted file mode|old mode|new mode|similarity index|dissimilarity index|rename (from|to|similarity|dissimilarity)|copy (from|to))/
+const DISALLOWED_MODE_VALUES = ['120000', '160000']
+// Every line that NAMES a mode change. Whitespace-tolerant on purpose (git itself never emits
+// trailing whitespace here, but a hand-built or mutated patch can) — the value is validated
+// separately, after trimming.
+const MODE_PREFIX_LINE = /^(old|new|deleted file|new file) mode\b.*$/gm
+const STRICT_MODE_LINE = /^(?:old|new|deleted file|new file) mode[ \t]+(\d+)[ \t]*$/
+// `index <old>..<new> <mode>` carries the mode as an OPTIONAL third field — present whenever a
+// mode is known for the blob (e.g. an ordinary content-only edit still names the unchanged
+// 100644), absent when a `new file mode`/`deleted file mode` line already declared it.
+const INDEX_LINE = /^index [0-9a-f]+\.\.[0-9a-f]+(?:[ \t]+(\d+)[ \t]*)?$/gm
 
-// Fails closed: a patch with a binary blob or a non-regular-file mode never reaches
-// `git apply`, whether or not its paths would otherwise be in bounds.
+// Fails closed: a patch with a binary blob, a carriage return, or a non-regular-file mode never
+// reaches `git apply`, whether or not its paths would otherwise be in bounds.
 export function disallowedPatchContent(diff: string): string | null {
+  // CRLF defeats every regex in patchPaths (JS '.' and unanchored '$' do not span '\r'), which
+  // is exactly how a rename/copy FROM outside the change directory could pass containment
+  // undetected. Rather than special-case every parser for it, no diff may contain '\r' at all.
+  if (diff.includes('\r')) return 'the patch contains a carriage return (\\r) — CRLF line endings are not allowed'
   if (BINARY_MARKER.test(diff)) return 'binary patches are not allowed'
-  for (const match of diff.matchAll(MODE_LINE)) {
-    if (match[2] !== '100644') return `${match[1]} ${match[2]}: only mode 100644 is allowed`
+
+  for (const line of diff.split('\n')) {
+    if (!EXTENDED_HEADER_LINE.test(line)) continue
+    const badMode = DISALLOWED_MODE_VALUES.find((mode) => line.includes(mode))
+    if (badMode) return `${line.trim()}: mode ${badMode} (symlink/submodule) is not allowed`
   }
+
+  for (const match of diff.matchAll(MODE_PREFIX_LINE)) {
+    const strict = STRICT_MODE_LINE.exec(match[0])
+    if (!strict) return `${match[0].trim()}: unparseable mode line`
+    if (strict[1] !== '100644') return `${match[0].trim()}: only mode 100644 is allowed`
+  }
+
+  for (const match of diff.matchAll(INDEX_LINE)) {
+    if (match[1] && match[1] !== '100644') return `${match[0].trim()}: only mode 100644 is allowed`
+  }
+
   return null
 }
 
