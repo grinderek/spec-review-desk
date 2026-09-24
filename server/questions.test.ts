@@ -78,4 +78,57 @@ describe('vetPatch', () => {
     expect(patch.state).toBe('stale')
     expect(patch.error).toMatch(/mode/)
   })
+
+  it('marks a CRLF rename OUTSIDE the change stale — the plain-LF parsers never see a \\r-terminated line at all', async () => {
+    const { repo } = await makeRepo()
+    const diff = [
+      `diff --git a/${FEATURE} b/app/models/stolen.rb`,
+      'similarity index 100%',
+      `rename from ${FEATURE}`,
+      'rename to app/models/stolen.rb',
+      '',
+    ].join('\r\n')
+    const patch = await vetPatch(repo, REL, diff)
+    expect(patch.state).toBe('stale')
+    expect(patch.error).toMatch(/carriage return|CRLF/)
+  })
+
+  it('marks a CRLF copy OUTSIDE the change stale', async () => {
+    const { repo } = await makeRepo()
+    const diff = [
+      `diff --git a/${FEATURE} b/openspec/changes/old-spec-driven/copied.feature`,
+      'similarity index 100%',
+      `copy from ${FEATURE}`,
+      'copy to openspec/changes/old-spec-driven/copied.feature',
+      '',
+    ].join('\r\n')
+    const patch = await vetPatch(repo, REL, diff)
+    expect(patch.state).toBe('stale')
+    expect(patch.error).toMatch(/carriage return|CRLF/)
+  })
+
+  it('rejects any patch containing a bare \\r even inside an otherwise ordinary in-change hunk', async () => {
+    const { repo } = await makeRepo()
+    const diff = (await decisionDiff(repo)).replace('Scenario Outline:', 'Scenario Outline:\r')
+    const patch = await vetPatch(repo, REL, diff)
+    expect(patch.state).toBe('stale')
+    expect(patch.error).toMatch(/carriage return|CRLF/)
+  })
+
+  it("rejects a patch that touches the change's own review.yaml", async () => {
+    const { repo } = await makeRepo()
+    const diff = [
+      `diff --git a/${REL}/review.yaml b/${REL}/review.yaml`,
+      'new file mode 100644',
+      'index 0000000..1234567',
+      '--- /dev/null',
+      `+++ b/${REL}/review.yaml`,
+      '@@ -0,0 +1 @@',
+      '+version: 1',
+      '',
+    ].join('\n')
+    const patch = await vetPatch(repo, REL, diff)
+    expect(patch.state).toBe('stale')
+    expect(patch.error).toMatch(/review\.yaml/)
+  })
 })
