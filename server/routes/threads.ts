@@ -87,6 +87,19 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     return c.json({ ok: true })
   })
 
+  app.post(`${base}/:id/patches/:msg/recheck`, async (c) => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    const id = c.req.param('id')
+    const index = Number(c.req.param('msg'))
+    const patch = threadOf(await readReview(ref.dir), id).messages[index]?.patch
+    if (!patch) throw new HttpError(404, 'unknown_patch', `Message ${index} has no patch`)
+    if (patch.state !== 'stale') throw new HttpError(409, 'patch_not_stale', 'Only a stale patch can be re-checked')
+    const vetted = await vetPatch(wt.path, relDirOf(wt, ref), patch.diff)
+    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: vetted.state, error: vetted.error, files: vetted.files }))
+    changed(wt, ref)
+    return c.json({ state: vetted.state, error: vetted.error })
+  })
+
   app.post(`${base}/:id/patches/:msg/apply`, async (c) => {
     const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
     const id = c.req.param('id')

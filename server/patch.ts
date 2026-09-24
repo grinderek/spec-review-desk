@@ -110,7 +110,7 @@ export function disallowedPatchContent(diff: string): string | null {
 // reads the `diff --git a/X b/Y` header (and the unambiguous `rename from|to`/`copy from|to`
 // lines) to recover that source path, so the two are always combined into one union.
 export async function gitApplyPaths(cwd: string, diff: string): Promise<string[]> {
-  const result = await run('git', ['apply', '--numstat', '-z', '--whitespace=nowarn', '-'], { cwd, input: diff, allowFailure: true })
+  const result = await run('git', ['apply', '--recount', '--numstat', '-z', '--whitespace=nowarn', '-'], { cwd, input: diff, allowFailure: true })
   if (result.code !== 0) return []
   return result.stdout
     .split('\0')
@@ -136,16 +136,16 @@ export function validatePatchPaths(paths: readonly string[], relDir: string): st
 }
 
 export async function checkPatch(cwd: string, diff: string): Promise<string | null> {
-  const result = await run('git', ['apply', '--check', '--whitespace=nowarn', '-'], { cwd, input: diff, allowFailure: true })
+  const result = await run('git', ['apply', '--recount', '--check', '--whitespace=nowarn', '-'], { cwd, input: diff, allowFailure: true })
   return result.code === 0 ? null : result.stderr.trim() || 'git apply --check failed'
 }
 
 export async function applyPatch(cwd: string, diff: string): Promise<void> {
-  await run('git', ['apply', '--whitespace=nowarn', '-'], { cwd, input: diff })
+  await run('git', ['apply', '--recount', '--whitespace=nowarn', '-'], { cwd, input: diff })
 }
 
 export async function revertPatch(cwd: string, diff: string): Promise<void> {
-  await run('git', ['apply', '-R', '--whitespace=nowarn', '-'], { cwd, input: diff })
+  await run('git', ['apply', '--recount', '-R', '--whitespace=nowarn', '-'], { cwd, input: diff })
 }
 
 export function commitMessage(changeName: string, summary: string, trailer: string): string {

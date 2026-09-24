@@ -18,7 +18,8 @@ runners:
         - ../../api/.claude/worktrees/bdd-pilot-health-score/compose.yaml
         - compose/bdd.yaml
       service: api
-    command: [bin/cucumber, --format, "message:.spec-review/last-run.ndjson", --format, progress]
+    # cucumber.yml's default profile already prints `pretty` to stdout; only one formatter may use it.
+    command: [bin/cucumber, --format, message, --out, .spec-review/last-run.ndjson]
     watch: [features, app, lib, config]
     applyAllowedTools:
       - Read

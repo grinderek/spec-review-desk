@@ -126,6 +126,16 @@ describe('git apply', () => {
     await revertPatch(repo, diff)
     expect(await readFile(path.join(repo, FEATURE), 'utf8')).not.toContain('rows weigh by age')
   })
+
+  it('accepts a hand-written diff whose hunk header line counts are wrong', async () => {
+    const { repo } = await makeRepo()
+    const diff = await diffOf(repo, (s) => s.replace('  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by age.\n  Scenario Outline:'))
+    const miscounted = diff.replace(/^@@ -(\d+),(\d+) \+(\d+),(\d+) @@/m, (_m, a, b, c, d) => `@@ -${a},${Number(b) + 1} +${c},${Number(d) + 3} @@`)
+    expect(miscounted).not.toBe(diff)
+    expect(await checkPatch(repo, miscounted)).toBeNull()
+    await applyPatch(repo, miscounted)
+    expect(await readFile(path.join(repo, FEATURE), 'utf8')).toContain('rows weigh by age')
+  })
 })
 
 describe('commit messages', () => {

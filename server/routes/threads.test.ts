@@ -7,7 +7,7 @@ import { loadChangeView } from '../change-view.ts'
 import { listChanges, Registry, worktreeId } from '../discovery.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
-import { readReview, setAgentSession, setEntry, updateReview } from '../review-store.ts'
+import { readReview, setAgentSession, setEntry, updatePatch, updateReview } from '../review-store.ts'
 import { FAKE_CLAUDE } from '../testing/fake-claude-path.ts'
 import { call, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
@@ -169,5 +169,16 @@ describe('question threads', () => {
     await call(app, 'POST', `${base}/${json.id}/resolve`)
     expect((await readReview(dir)).threads[0]!.status).toBe('resolved')
     expect((await call(app, 'POST', `${base}/t_nope/resolve`)).json.error.code).toBe('unknown_thread')
+  })
+  it('re-checks a stale patch and returns it to proposed once it applies', async () => {
+    const { repo, app, questions, dir, base } = await setup()
+    process.env.FAKE_CLAUDE_TEXT = `Yes.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
+    const { json } = await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: 'Record it?' })
+    await questions.idle(dir)
+    expect((await call(app, 'POST', `${base}/${json.id}/patches/1/recheck`)).json.error.code).toBe('patch_not_stale')
+    await updateReview(dir, (d) => updatePatch(d, json.id, 1, { state: 'stale', error: 'error: corrupt patch at <stdin>:28' }))
+    const res = await call(app, 'POST', `${base}/${json.id}/patches/1/recheck`)
+    expect(res.json).toEqual({ state: 'proposed', error: null })
+    expect((await readReview(dir)).threads[0]!.messages[1]!.patch).toMatchObject({ state: 'proposed', error: null })
   })
 })

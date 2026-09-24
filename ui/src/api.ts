@@ -54,6 +54,8 @@ export const api = {
   resolveThread: (id: ChangeId, threadId: string) => request<Ok>('POST', `${base(id)}/threads/${threadId}/resolve`),
   applyPatch: (id: ChangeId, threadId: string, index: number, summary: string) =>
     request<{ commit: string }>('POST', `${base(id)}/threads/${threadId}/patches/${index}/apply`, { summary }),
+  recheckPatch: (id: ChangeId, threadId: string, index: number) =>
+    request<{ state: string; error: string | null }>('POST', `${base(id)}/threads/${threadId}/patches/${index}/recheck`),
   rejectPatch: (id: ChangeId, threadId: string, index: number) => request<Ok>('POST', `${base(id)}/threads/${threadId}/patches/${index}/reject`),
   threadEventsUrl: (id: ChangeId, threadId: string) => `${base(id)}/threads/${threadId}/events`,
   runner: (wt: string) => request<{ state: RunnerState | null }>('GET', `/api/runner/${wt}`),

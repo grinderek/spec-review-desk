@@ -40,6 +40,12 @@ export function PatchCard({ id, threadId, index, message, disabled, archived }: 
           {disabled ? <span className="hash">An Apply run is active — wait for it to finish.</span> : null}
         </div>
       ) : null}
+      {patch.state === 'stale' && !archived ? (
+        <div className="pa">
+          <button className="btn" disabled={disabled} onClick={() => void act(() => api.recheckPatch(id, threadId, index), 'Patch re-checked')}>Re-check</button>
+          <span className="hash">Checks the patch again against the current files.</span>
+        </div>
+      ) : null}
       {patch.state === 'applied' ? <div className="pa"><span className="state ok">Applied{patch.commit ? ` · ${patch.commit}` : ''}</span></div> : null}
     </div>
   )

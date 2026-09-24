@@ -6,6 +6,7 @@ import type { PanelTarget } from './App.tsx'
 import { useEventStream } from './events.ts'
 import { useAction } from './feedback.tsx'
 import { stripDiff } from './keys.ts'
+import { Markdown } from './Markdown.tsx'
 import { PatchCard } from './PatchCard.tsx'
 
 function titleOf(thread: Thread): string {
@@ -83,11 +84,11 @@ export function ThreadPanel({ id, target, onTarget }: { id: ChangeId; target: Pa
           <div key={index} className={`msg ${m.role}`}>
             <div className="who"><b>{m.role === 'owner' ? 'you' : 'agent'}</b>{new Date(m.at).toLocaleTimeString()}</div>
             {m.note ? <div className="mnote">{m.note}</div> : null}
-            <div className="body">{stripDiff(m.text) || '(patch only)'}</div>
+            <div className="body">{m.role === 'agent' ? <Markdown text={stripDiff(m.text) || '(patch only)'} /> : m.text}</div>
             {m.patch ? <PatchCard id={id} threadId={thread.id} index={index} message={m} disabled={applyRunning} archived={archived} /> : null}
           </div>
         ))}
-        {live ? <div className="msg"><div className="who"><b>agent</b>streaming</div><div className="body">{live}</div></div> : null}
+        {live ? <div className="msg"><div className="who"><b>agent</b>streaming</div><div className="body"><Markdown text={stripDiff(live)} /></div></div> : null}
         {!live && phase ? <div className="typing">{phase === 'queued' ? 'Queued — waiting for the agent…' : 'The agent is reading the change…'}</div> : null}
       </div>
       {archived ? null : (
