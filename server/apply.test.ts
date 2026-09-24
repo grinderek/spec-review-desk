@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -211,8 +211,46 @@ describe('ApplyService', () => {
     const log = '.spec-review/runs/r_dead.ndjson'
     await mkdir(path.join(wt.path, '.spec-review/runs'), { recursive: true })
     await writeFile(path.join(wt.path, log), '{"type":"result","subtype":"success","is_error":false,"num_turns":4,"result":"Finished.","session_id":"s"}\n')
-    await updateReview(ref.dir, (d) => upsertApplyRun(d, { id: 'r_dead', session: 's', pid: 999_999_999, log, started_at: 'then', ended_at: null, outcome: 'running' }))
+    await updateReview(ref.dir, (d) =>
+      upsertApplyRun(d, { id: 'r_dead', session: 's', pid: 999_999_999, log, started_at: 'then', ended_at: null, outcome: 'running', resume_offset: 0 }))
     await apply.reattach(wt, ref)
     expect((await readReview(ref.dir)).apply_runs[0]).toMatchObject({ id: 'r_dead', outcome: 'done' })
+  })
+
+  it('reattaches a dead RESUMED run from its own resume_offset, not the whole log', async () => {
+    const { wt, ref, apply } = await setup()
+    const log = '.spec-review/runs/r_resumed.ndjson'
+    await mkdir(path.join(wt.path, '.spec-review/runs'), { recursive: true })
+    const firstAttempt = '{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"Stopped.\\nNEEDS_OWNER: which weight?","session_id":"s"}\n'
+    await writeFile(path.join(wt.path, log), firstAttempt)
+    const offset = Buffer.byteLength(firstAttempt)
+    // The resumed attempt wrote only a delta, then the server (and the child) died — no new
+    // result event of its own.
+    await appendFile(
+      path.join(wt.path, log),
+      '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"Weight zero, resuming"}}}\n',
+    )
+    await updateReview(ref.dir, (d) =>
+      upsertApplyRun(d, { id: 'r_resumed', session: 's', pid: 999_999_999, log, started_at: 'then', ended_at: null, outcome: 'running', resume_offset: offset }))
+    await apply.reattach(wt, ref)
+    const run = (await readReview(ref.dir)).apply_runs[0]!
+    expect(run.outcome).toBe('failed')
+  })
+
+  it("marks a run whose log escapes .spec-review/runs/ as failed without aborting a sibling run's reattach", async () => {
+    const { wt, ref, apply } = await setup()
+    const goodLog = '.spec-review/runs/r_good.ndjson'
+    await mkdir(path.join(wt.path, '.spec-review/runs'), { recursive: true })
+    await writeFile(path.join(wt.path, goodLog), '{"type":"result","subtype":"success","is_error":false,"num_turns":4,"result":"Finished.","session_id":"s"}\n')
+    await updateReview(ref.dir, (d) => {
+      const withBad = upsertApplyRun(d, {
+        id: 'r_bad', session: 's', pid: null, log: '../escape.ndjson', started_at: 'then', ended_at: null, outcome: 'running', resume_offset: 0,
+      })
+      return upsertApplyRun(withBad, { id: 'r_good', session: 's', pid: null, log: goodLog, started_at: 'then', ended_at: null, outcome: 'running', resume_offset: 0 })
+    })
+    await apply.reattach(wt, ref)
+    const runs = (await readReview(ref.dir)).apply_runs
+    expect(runs.find((r) => r.id === 'r_bad')).toMatchObject({ outcome: 'failed' })
+    expect(runs.find((r) => r.id === 'r_good')).toMatchObject({ outcome: 'done' })
   })
 })

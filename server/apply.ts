@@ -145,7 +145,10 @@ export class ApplyService {
       // (start immediately followed by settle+reapply, or a mocked clock in tests) would
       // otherwise collide and overwrite each other's log file and apply_runs entry.
       const id = `r_${started.replace(/[-:.TZ]/g, '').slice(0, 14)}_${randomBytes(4).toString('hex')}`
-      const run: ApplyRun = { id, session: randomUUID(), pid: null, log: `.spec-review/runs/${id}.ndjson`, started_at: started, ended_at: null, outcome: 'running' }
+      const run: ApplyRun = {
+        id, session: randomUUID(), pid: null, log: `.spec-review/runs/${id}.ndjson`, started_at: started, ended_at: null, outcome: 'running',
+        resume_offset: 0,
+      }
       return await this.#launch(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? []), false)
     } finally {
       // #launch sets #active for this path before its first await beyond the spawn call, so by
@@ -191,11 +194,21 @@ export class ApplyService {
   async reattach(wt: WorktreeInfo, ref: ChangeRef): Promise<void> {
     const alive = this.deps.alive ?? isAlive
     for (const run of (await readReview(ref.dir)).apply_runs.filter((r) => r.outcome === 'running')) {
-      if (run.pid !== null && alive(run.pid)) {
-        this.#active.set(wt.path, { runId: run.id, changeDir: ref.dir, pid: run.pid, stopping: false })
-        this.#follow(wt, ref, run, this.#untilDead(run.pid), await sizeOf(resolveRunLog(wt.path, run.log)))
-      } else {
-        await this.#finalize(wt, ref, run)
+      try {
+        if (run.pid !== null && alive(run.pid)) {
+          this.#active.set(wt.path, { runId: run.id, changeDir: ref.dir, pid: run.pid, stopping: false })
+          this.#follow(wt, ref, run, this.#untilDead(run.pid), await sizeOf(resolveRunLog(wt.path, run.log)))
+        } else {
+          // The process died while the server was down. Finalize from THIS run's own
+          // persisted resume_offset (not 0) — for a run that was a resume, the log still
+          // holds the previous attempt's events before that offset, and reading from 0 would
+          // resurface its stale result instead of correctly seeing "no result" for this attempt.
+          await this.#finalize(wt, ref, run, run.resume_offset)
+        }
+      } catch (error) {
+        // A single run's log field failing containment (§13: review.yaml is patchable) must
+        // not abort reattaching every OTHER run in this worktree.
+        await this.#failReattach(wt, ref, run, error)
       }
     }
   }
@@ -223,7 +236,7 @@ export class ApplyService {
       prompt,
     }
     const proc = (this.deps.spawn ?? spawnDetached)(spec, logFile)
-    const started: ApplyRun = { ...run, pid: proc.pid }
+    const started: ApplyRun = { ...run, pid: proc.pid, resume_offset: offset }
     this.#active.set(wt.path, { runId: run.id, changeDir: ref.dir, pid: proc.pid, stopping: false })
     await updateReview(ref.dir, (doc) => upsertApplyRun(doc, started))
     bus.publish(`run:${run.id}`, { type: 'started' })
@@ -285,6 +298,14 @@ export class ApplyService {
     await updateReview(ref.dir, (doc) => this.#record(doc, final, summary))
     if (current?.runId === run.id) this.#active.delete(wt.path)
     this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome })
+    this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })
+  }
+
+  async #failReattach(wt: WorktreeInfo, ref: ChangeRef, run: ApplyRun, error: unknown): Promise<void> {
+    const message = error instanceof Error ? error.message : String(error)
+    const final: ApplyRun = { ...run, outcome: 'failed', ended_at: nowIso(this.#now()) }
+    await updateReview(ref.dir, (doc) => this.#record(doc, final, `The apply run could not be reattached: ${message}`))
+    this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome: 'failed' })
     this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }
 

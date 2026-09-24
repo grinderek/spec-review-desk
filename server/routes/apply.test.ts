@@ -33,7 +33,9 @@ describe('apply routes', () => {
     const secret = path.join(hub, 'secret.txt')
     await writeFile(secret, 'TOP SECRET CONTENT')
     await updateReview(dir, (d) =>
-      upsertApplyRun(d, { id: 'r_escape', session: 's', pid: null, log: '../secret.txt', started_at: 'then', ended_at: null, outcome: 'done' }))
+      upsertApplyRun(d, {
+        id: 'r_escape', session: 's', pid: null, log: '../secret.txt', started_at: 'then', ended_at: null, outcome: 'done', resume_offset: 0,
+      }))
     const res = await call(app, 'GET', `/api/changes/${wt}/add-thread-state/runs/r_escape/log`)
     expect(res.status).toBe(400)
     expect(res.json.error.code).toBe('invalid_run_log')
@@ -45,7 +47,7 @@ describe('apply routes', () => {
     const log = '.spec-review/runs/r_ok.ndjson'
     await mkdir(path.join(repo, '.spec-review/runs'), { recursive: true })
     await writeFile(path.join(repo, log), '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}}\n')
-    await updateReview(dir, (d) => upsertApplyRun(d, { id: 'r_ok', session: 's', pid: null, log, started_at: 'then', ended_at: null, outcome: 'done' }))
+    await updateReview(dir, (d) => upsertApplyRun(d, { id: 'r_ok', session: 's', pid: null, log, started_at: 'then', ended_at: null, outcome: 'done', resume_offset: 0 }))
     const res = await call(app, 'GET', `/api/changes/${wt}/add-thread-state/runs/r_ok/log`)
     expect(res.status).toBe(200)
     expect(res.json.text).toBe('hi')

@@ -39,6 +39,10 @@ const ApplyRunSchema = z.object({
   started_at: z.string(),
   ended_at: z.string().nullable().default(null),
   outcome: z.enum(['running', 'done', 'stopped', 'failed', 'needs_owner']),
+  // Byte offset in `log` at which the CURRENT attempt (this start, or this resume) began
+  // writing. Persisted (not just kept in #follow's closure) so a server restart can still
+  // finalize a dead resumed process's outcome from its own attempt only, never a previous one's.
+  resume_offset: z.number().int().default(0),
 })
 export const ReviewSchema = z.object({
   version: z.literal(1),
