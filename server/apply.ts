@@ -8,12 +8,12 @@ import { outcomeOf, readEvents } from './apply-outcome.ts'
 import { loadChangeView } from './change-view.ts'
 import { claudeArgs, type ClaudeRunSpec, parseStreamLine } from './claude.ts'
 import type { Config } from './config.ts'
-import { addDecisions, decisionsFromReply, isActive } from './decision-model.ts'
+import { addDecisions, decisionsFromReply, isActive, pendingBlocking, runDecisions } from './decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import type { EventBus } from './events.ts'
 import { ensureExcluded } from './git.ts'
-import { decisionsSection } from './prompt.ts'
+import { buildResumePrompt, decisionsSection } from './prompt.ts'
 import { AGENT_REPLY_SCHEMA_ARG, retryPrompt, validateReply } from './protocol.ts'
 import { replyContext } from './questions.ts'
 import {
@@ -169,6 +169,32 @@ export class ApplyService {
       if (!run) throw new HttpError(404, 'unknown_run', `No apply run ${thread.ref}`)
       const lastOwner = [...thread.messages].reverse().find((m) => m.role === 'owner')
       await this.#launch(wt, ref, { ...run, outcome: 'running', ended_at: null, validation_retry: false }, lastOwner?.text ?? 'Continue.', true)
+    } finally {
+      this.#reserved.delete(wt.path)
+    }
+  }
+
+  // Spec §8: enabled once every blocking decision of the run is recorded or dismissed.
+  async resumeWithDecisions(wt: WorktreeInfo, ref: ChangeRef, runId: string): Promise<void> {
+    if (this.active(wt.path)) throw new HttpError(409, 'apply_running', 'An Apply run is already active in this worktree')
+    this.#reserved.add(wt.path)
+    try {
+      const doc = await readReview(ref.dir)
+      const run = doc.apply_runs.find((r) => r.id === runId)
+      if (!run) throw new HttpError(404, 'unknown_run', `No apply run ${runId}`)
+      if (run.outcome !== 'needs_owner') throw new HttpError(409, 'run_not_waiting', `Apply run ${runId} is ${run.outcome}, not waiting for the owner`)
+      const decisions = runDecisions(doc, runId)
+      const pending = pendingBlocking(decisions)
+      if (pending.length) {
+        throw new HttpError(409, 'decisions_pending', `${pending.length} blocking decision(s) of this run are not recorded or dismissed yet`)
+      }
+      const prompt = buildResumePrompt(decisions)
+      const thread = doc.threads.find((t) => t.anchor === 'apply' && t.ref === runId)
+      if (thread) {
+        const message: Message = { role: 'owner', at: nowIso(this.#now()), text: prompt, note: null, patch: null }
+        await updateReview(ref.dir, (d) => setThreadStatus(appendMessage(d, thread.id, message), thread.id, 'open'))
+      }
+      await this.#launch(wt, ref, { ...run, outcome: 'running', ended_at: null, validation_retry: false }, prompt, true)
     } finally {
       this.#reserved.delete(wt.path)
     }

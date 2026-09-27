@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import type { Hono } from 'hono'
+import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { type ApplyService, readEvents, resolveRunLog } from '../apply.ts'
 import { logText } from '../apply-outcome.ts'
@@ -9,6 +10,8 @@ import { HttpError } from '../errors.ts'
 import { readReview } from '../review-store.ts'
 import { assertWritable, resolveChange } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
+
+const Resume = z.object({ runId: z.string().min(1) })
 
 export function registerApplyRoutes(app: Hono, ctx: AppContext, deps: { apply: ApplyService }): void {
   const base = '/api/changes/:wt/:name'
@@ -22,6 +25,14 @@ export function registerApplyRoutes(app: Hono, ctx: AppContext, deps: { apply: A
   app.post(`${base}/apply/stop`, async (c) => {
     const { wt, ref } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))
     await deps.apply.stop(wt, ref)
+    return c.json({ ok: true }, 202)
+  })
+
+  app.post(`${base}/apply/resume`, async (c) => {
+    const { wt, ref } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))
+    assertWritable(ref)
+    const { runId } = Resume.parse(await c.req.json())
+    await deps.apply.resumeWithDecisions(wt, ref, runId)
     return c.json({ ok: true }, 202)
   })
 

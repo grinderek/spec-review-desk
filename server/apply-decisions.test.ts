@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { ApplyService } from './apply.ts'
+import { dismissDecision } from './decision-model.ts'
 import { discover, listChanges, Registry } from './discovery.ts'
 import { type BusEvent, EventBus } from './events.ts'
 import { readReview, recordApproval, updateReview } from './review-store.ts'
@@ -112,5 +113,35 @@ describe('structured Apply outcomes', () => {
     expect(review.decisions).toEqual([])
     expect(review.threads.find((t) => t.anchor === 'apply')!.messages[0]!.invalid).toBeUndefined()
     expect(await calls()).toHaveLength(1)
+  })
+})
+
+describe('resume with decisions', () => {
+  it('resumes a needs_owner run once its blocking decisions are recorded or dismissed', async () => {
+    const { wt, ref, apply } = await setup()
+    const naming = { ...blocking, id: 'naming', question: 'Rename the pillar?', scope: { kind: 'change' }, blocking: false }
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: 'Stopped.', status: 'needs_owner', decisions: [blocking, naming] }))
+    const run = await apply.start(wt, ref)
+    await apply.settled(run.id)
+    const raised = (await readReview(ref.dir)).decisions
+    expect(raised.map((d) => d.agent_id)).toEqual(['cc_weight', 'naming'])
+    await expect(apply.resumeWithDecisions(wt, ref, run.id)).rejects.toMatchObject({ code: 'decisions_pending' })
+
+    await updateReview(ref.dir, (d) => dismissDecision(d, raised[0]!.id, 'Out of scope.', '2026-09-24T11:00:00.000Z'))
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: 'Done, all green.' }))
+    await apply.resumeWithDecisions(wt, ref, run.id)
+    await apply.settled(run.id)
+
+    const review = await readReview(ref.dir)
+    expect(review.apply_runs).toHaveLength(1)
+    expect(review.apply_runs[0]).toMatchObject({ outcome: 'done' })
+    const last = (await calls()).at(-1)!
+    expect(last.args).toEqual(expect.arrayContaining(['--resume', run.session]))
+    expect(last.prompt).toMatch(/^The owner answered the decisions you raised:/)
+    expect(last.prompt).toContain(`- ${raised[0]!.id} (Which weight for CC threads?): dismissed — Out of scope.`)
+    expect(last.prompt).toContain(`- ${raised[1]!.id} (Rename the pillar?): still open and not blocking`)
+    const thread = review.threads.find((t) => t.anchor === 'apply')!
+    expect(thread.messages.map((m) => m.role)).toEqual(['agent', 'owner', 'agent'])
+    await expect(apply.resumeWithDecisions(wt, ref, run.id)).rejects.toMatchObject({ code: 'run_not_waiting' })
   })
 })
