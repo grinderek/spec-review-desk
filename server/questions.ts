@@ -1,19 +1,26 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
-import { type ChangeView, findPhrase, findScenario, loadChangeView } from './change-view.ts'
+import { allScenarios, type ChangeView, findPhrase, findScenario, loadChangeView } from './change-view.ts'
 import { type ClaudeEvent, type ClaudeOutcome, type ClaudeRunSpec, isMissingSession, runClaude } from './claude.ts'
 import type { Config } from './config.ts'
+import { addDecisions, decisionsFromReply } from './decision-model.ts'
+import { DECISIONS_FILE } from './decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import type { EventBus } from './events.ts'
-import { checkPatch, disallowedPatchContent, extractPatch, patchPaths, touchedPaths, validatePatchPaths } from './patch.ts'
+import { checkPatch, disallowedPatchContent, patchPaths, touchedPaths, validatePatchPaths } from './patch.ts'
 import { buildQuestionPrompt } from './prompt.ts'
 import {
-  appendMessage, findThread, type Message, nowIso, type Patch, REVIEW_FILE, setAgentSession, setThreadStatus, type Thread, updateReview,
+  AGENT_REPLY_SCHEMA_ARG, type AgentKind, type AgentReply, parseReply, type ReplyContext, retryPrompt, validateReply,
+} from './protocol.ts'
+import {
+  appendMessage, type DecisionRecord, findThread, type Message, nowIso, type Patch, REVIEW_FILE, setAgentSession, setThreadStatus, type Thread,
+  updateReview,
 } from './review-store.ts'
 
 export const QUESTION_TOOLS = { allowed: ['Read', 'Grep', 'Glob'], disallowed: ['Edit', 'Write', 'Bash', 'NotebookEdit', 'WebFetch', 'WebSearch'] }
 const REVIEWER_RULES = new URL('./prompts/reviewer.md', import.meta.url)
 const NEW_SESSION_NOTE = 'new agent session — earlier context rebuilt from files'
+const INVALID_TEXT = "The agent's reply did not pass validation twice; nothing was recorded from it."
 
 export const ownerMessage = (text: string, at: Date = new Date()): Message => ({ role: 'owner', at: nowIso(at), text, note: null, patch: null })
 
@@ -50,7 +57,22 @@ export function reviewFiles(view: ChangeView): string[] {
     'features/STEPS.md',
     `${view.relDir}/proposal.md`,
     `${view.relDir}/specs/`,
+    `${view.relDir}/${DECISIONS_FILE}`,
   ]
+}
+
+export function replyContext(agent: AgentKind, view: ChangeView): ReplyContext {
+  return { agent, scenarioKeys: allScenarios(view).map((s) => s.key), decisions: view.review.decisions }
+}
+
+export interface CheckedReply { reply: AgentReply | null; issues: string[]; raw: string }
+
+export async function checkReply(wt: WorktreeInfo, ref: ChangeRef, agent: AgentKind, outcome: ClaudeOutcome): Promise<CheckedReply> {
+  const raw = outcome.structured === null || outcome.structured === undefined ? outcome.text : JSON.stringify(outcome.structured, null, 2)
+  const parsed = parseReply(outcome.structured)
+  if (!parsed.reply) return { reply: null, issues: parsed.issues, raw }
+  const issues = validateReply(parsed.reply, replyContext(agent, await loadChangeView(wt, ref, { withCommits: false })))
+  return { reply: issues.length ? null : parsed.reply, issues, raw }
 }
 
 export interface QuestionDeps {
@@ -103,9 +125,10 @@ export class QuestionService {
       messages: thread.messages,
       files: reviewFiles(view),
       today: nowIso(now()).slice(0, 10),
+      decisions: view.review.decisions,
     })
     const rules = await readFile(REVIEWER_RULES, 'utf8')
-    const spec = (sessionId: string, resume: boolean): ClaudeRunSpec => ({
+    const spec = (sessionId: string, resume: boolean, text: string): ClaudeRunSpec => ({
       bin: config.claudeBin,
       cwd: wt.path,
       sessionId,
@@ -115,18 +138,21 @@ export class QuestionService {
       disallowedTools: QUESTION_TOOLS.disallowed,
       permissionMode: 'default',
       appendSystemPrompt: rules,
-      prompt,
+      jsonSchema: AGENT_REPLY_SCHEMA_ARG,
+      prompt: text,
     })
     const options = {
       timeoutMs: config.questionTimeoutMs,
       onEvent: (e: ClaudeEvent) => {
-        if (e.type === 'delta') bus.publish(topic, { type: 'delta', text: e.text })
+        if (e.type === 'answer_delta') bus.publish(topic, { type: 'delta', text: e.text })
+        if (e.type === 'answer_reset') bus.publish(topic, { type: 'reset' })
       },
     }
     bus.publish(topic, { type: 'running' })
 
     const stored = view.review.agent_session
-    let outcome: ClaudeOutcome | null = stored ? await exec(spec(stored, true), options) : null
+    let session = stored ?? ''
+    let outcome: ClaudeOutcome | null = stored ? await exec(spec(stored, true, prompt), options) : null
     let note: string | null = null
     if (!outcome || isMissingSession(outcome)) {
       if (outcome) {
@@ -134,22 +160,51 @@ export class QuestionService {
         bus.publish(topic, { type: 'reset' })
       }
       const fresh = randomUUID()
+      session = fresh
       await updateReview(ref.dir, (doc) => setAgentSession(doc, fresh))
-      outcome = await exec(spec(fresh, false), options)
+      outcome = await exec(spec(fresh, false, prompt), options)
+    }
+    let checked = outcome.ok ? await checkReply(wt, ref, 'question', outcome) : null
+    if (checked && checked.issues.length) {
+      // Spec §4: one retry in the same session; the UI drops the streamed invalid answer.
+      bus.publish(topic, { type: 'reset' })
+      outcome = await exec(spec(outcome.sessionId || session, true, retryPrompt(checked.issues)), options)
+      checked = outcome.ok ? await checkReply(wt, ref, 'question', outcome) : null
     }
 
-    const message = await this.#agentMessage(wt.path, view.relDir, outcome, note, now())
-    const ok = outcome.ok
-    await updateReview(ref.dir, (doc) => setThreadStatus(appendMessage(doc, threadId, message), threadId, ok ? 'answered' : 'open'))
+    const { message, decisions } = await this.#compose(wt.path, view.relDir, threadId, outcome, checked, note, nowIso(now()))
+    const ok = Boolean(checked?.reply)
+    await updateReview(ref.dir, (doc) => setThreadStatus(appendMessage(addDecisions(doc, decisions), threadId, message), threadId, ok ? 'answered' : 'open'))
     bus.publish(topic, { type: 'done', ok })
     bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }
 
-  async #agentMessage(cwd: string, relDir: string, outcome: ClaudeOutcome, note: string | null, at: Date): Promise<Message> {
-    if (!outcome.ok) {
-      return { role: 'agent', at: nowIso(at), text: `The agent did not answer: ${outcome.error ?? 'unknown error'}`, note, patch: null }
+  async #compose(
+    cwd: string,
+    relDir: string,
+    threadId: string,
+    outcome: ClaudeOutcome,
+    checked: CheckedReply | null,
+    note: string | null,
+    at: string,
+  ): Promise<{ message: Message; decisions: DecisionRecord[] }> {
+    if (!outcome.ok || !checked) {
+      return { message: { role: 'agent', at, text: `The agent did not answer: ${outcome.error ?? 'unknown error'}`, note, patch: null }, decisions: [] }
     }
-    const diff = extractPatch(outcome.text)
-    return { role: 'agent', at: nowIso(at), text: outcome.text, note, patch: diff ? await vetPatch(cwd, relDir, diff) : null }
+    if (!checked.reply) {
+      return { message: { role: 'agent', at, text: INVALID_TEXT, note, patch: null, invalid: { issues: checked.issues, raw: checked.raw } }, decisions: [] }
+    }
+    const reply = checked.reply
+    const decisions = decisionsFromReply(reply.decisions, { kind: 'thread', id: threadId }, at)
+    const message: Message = {
+      role: 'agent',
+      at,
+      text: reply.answer,
+      note,
+      patch: reply.patch ? await vetPatch(cwd, relDir, reply.patch) : null,
+      ...(decisions.length ? { decision_ids: decisions.map((d) => d.id) } : {}),
+      ...(reply.resolves.length ? { resolves: reply.resolves } : {}),
+    }
+    return { message, decisions }
   }
 }

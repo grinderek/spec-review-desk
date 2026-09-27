@@ -8,7 +8,7 @@ import { listChanges, Registry, worktreeId } from '../discovery.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import { readReview, setAgentSession, setEntry, updatePatch, updateReview } from '../review-store.ts'
-import { FAKE_CLAUDE } from '../testing/fake-claude-path.ts'
+import { FAKE_CLAUDE, resetFakeClaude } from '../testing/fake-claude-path.ts'
 import { call, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
 import { registerReadRoutes } from './read.ts'
@@ -43,6 +43,7 @@ async function setup(opts: { applyActive?: boolean; timeoutMs?: number } = {}) {
 }
 
 beforeEach(async () => {
+  resetFakeClaude()
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-threads-'))
   fakeLog = path.join(tmp, 'calls.ndjson')
   process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')

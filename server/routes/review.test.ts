@@ -6,7 +6,7 @@ import { listChanges, worktreeId } from '../discovery.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import { readReview, setEntry, updateReview } from '../review-store.ts'
-import { FAKE_CLAUDE } from '../testing/fake-claude-path.ts'
+import { FAKE_CLAUDE, resetFakeClaude } from '../testing/fake-claude-path.ts'
 import { call, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
 import { approveEverything } from '../testing/review.ts'
@@ -29,6 +29,7 @@ async function setup() {
 }
 
 beforeEach(() => {
+  resetFakeClaude()
   process.env.FAKE_CLAUDE_MODE = 'answer'
   process.env.FAKE_CLAUDE_TEXT = 'Noted.'
   delete process.env.FAKE_CLAUDE_LOG
