@@ -186,3 +186,26 @@ h4.inline { margin: 0 6px 0 0; font-size: 13px; color: var(--ink); }
 .dnew .check input { width: auto; }
 .invalid { border: 1px solid var(--bad-soft); border-radius: 6px; padding: 6px 10px; margin-top: 6px; display: grid; gap: 4px; }
 .resume { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 8px; }
+
+/* Spec B: initiatives, New feature */
+.sideact { padding: 0 12px 10px; }
+.sideact .btn { width: 100%; }
+.segbar { grid-column: 1 / -1; display: flex; height: 5px; border-radius: 3px; overflow: hidden; background: var(--sunk); gap: 1px; }
+.seg { display: block; height: 100%; }
+.s-planned { background: var(--line-strong); } .s-proposing { background: var(--accent); } .s-proposed { background: var(--warn); }
+.s-approved { background: var(--decision); } .s-applied { background: var(--ok); }
+.itag { font-family: var(--mono); color: var(--decision); margin-right: 6px; }
+.subtitle { font: 400 14px var(--sans); color: var(--muted); }
+.newfeature { display: grid; gap: 6px; padding-bottom: 18px; max-width: 760px; }
+.newfeature input, .newfeature select, .newfeature textarea, .editor input, .editor textarea, .panelform input, .panelform textarea {
+  width: 100%; border: 1px solid var(--line-strong); border-radius: 5px; padding: 5px 8px; background: var(--panel); color: var(--ink); font: inherit;
+}
+.newfeature textarea, .panelform textarea, .editor textarea { min-height: 64px; resize: vertical; }
+.newfeature label { font-size: 12.5px; color: var(--muted); }
+.where { border: 1px solid var(--line); border-radius: 6px; display: grid; grid-template-columns: auto 1fr; gap: 6px 10px; align-items: center; }
+.where label { display: flex; gap: 6px; align-items: center; }
+.where input[type="radio"] { width: auto; }
+.preview { background: var(--sunk); border-radius: 6px; padding: 8px 10px; display: grid; gap: 3px; }
+.preview .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
+.preview code { font-size: 12px; overflow-wrap: anywhere; }
+.errtext { color: var(--bad); }

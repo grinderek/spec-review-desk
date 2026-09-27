@@ -1,8 +1,11 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { api, ApiError, type ChangeId } from './api.ts'
+import { api, ApiError } from './api.ts'
 import { ChangeScreen } from './ChangeScreen.tsx'
 import { useInvalidation } from './events.ts'
+import { InitiativeScreen } from './InitiativeScreen.tsx'
+import { NewFeature } from './NewFeature.tsx'
+import { hashOf, readHash, type Selection } from './selection.ts'
 import { Sidebar } from './Sidebar.tsx'
 import { ThreadPanel } from './ThreadPanel.tsx'
 
@@ -10,39 +13,42 @@ export type PanelTarget =
   | { kind: 'new'; anchor: 'scenario' | 'phrase' | 'change'; ref: string; title: string }
   | { kind: 'thread'; id: string }
 
-function readHash(): ChangeId | null {
-  const [wt, ...rest] = window.location.hash.replace(/^#\/?/, '').split('/')
-  return wt && rest.length ? { wt, name: decodeURIComponent(rest.join('/')) } : null
-}
+const keyOf = (s: Selection | null): string => (s ? hashOf(s) : '')
 
 export function App({ sessionError }: { sessionError: string | null }) {
   useInvalidation()
-  const [selected, setSelected] = useState<ChangeId | null>(readHash)
+  const [selected, setSelected] = useState<Selection | null>(() => readHash(window.location.hash))
   const [panel, setPanel] = useState<PanelTarget | null>(null)
   useEffect(() => {
-    const onHash = () => setSelected(readHash())
+    const onHash = () => setSelected(readHash(window.location.hash))
     window.addEventListener('hashchange', onHash)
     return () => window.removeEventListener('hashchange', onHash)
   }, [])
-  useEffect(() => setPanel(null), [selected?.wt, selected?.name])
+  useEffect(() => setPanel(null), [keyOf(selected)])
   const status = useQuery({ queryKey: ['status'], queryFn: api.status })
   const changes = useQuery({ queryKey: ['changes'], queryFn: api.changes })
+  const initiatives = useQuery({ queryKey: ['initiatives'], queryFn: api.initiatives })
   const unauthorized = changes.error instanceof ApiError && changes.error.status === 401
+  const go = (s: Selection) => { window.location.hash = hashOf(s) }
+  const change = selected?.kind === 'change' ? selected.id : null
 
   return (
     <>
       {sessionError || unauthorized ? <div className="banner bad">{sessionError ?? 'Not signed in — open the URL printed in the server console.'}</div> : null}
       {status.data && !status.data.capabilities.claude ? <div className="banner warn">claude is not on PATH — questions and Apply are disabled.</div> : null}
       <div className="layout">
-        <Sidebar data={changes.data} selected={selected} onSelect={(id) => { window.location.hash = `#/${id.wt}/${encodeURIComponent(id.name)}` }} />
+        <Sidebar data={changes.data} initiatives={initiatives.data?.initiatives} selected={selected} onSelect={go} />
         <main className="pane main">
-          {selected ? <ChangeScreen key={`${selected.wt}/${selected.name}`} id={selected} capabilities={status.data?.capabilities} setPanel={setPanel} /> : <p className="empty">Pick a change on the left.</p>}
+          {selected?.kind === 'change' ? <ChangeScreen key={keyOf(selected)} id={selected.id} capabilities={status.data?.capabilities} setPanel={setPanel} /> : null}
+          {selected?.kind === 'initiative' ? <InitiativeScreen key={keyOf(selected)} id={selected.id} /> : null}
+          {selected?.kind === 'new' ? <NewFeature choices={initiatives.data} onCreated={(id) => go({ kind: 'initiative', id })} /> : null}
+          {selected ? null : <p className="empty">Pick a change or an initiative on the left, or start a new feature.</p>}
         </main>
         <aside className="pane thread" aria-label="Thread">
-          {selected && panel ? (
-            <ThreadPanel key={panel.kind === 'thread' ? panel.id : `new:${panel.anchor}:${panel.ref}`} id={selected} target={panel} onTarget={setPanel} />
+          {change && panel ? (
+            <ThreadPanel key={panel.kind === 'thread' ? panel.id : `new:${panel.anchor}:${panel.ref}`} id={change} target={panel} onTarget={setPanel} />
           ) : (
-            <p className="empty">Select a scenario and ask a question, or open a thread.</p>
+            <p className="empty">{selected?.kind === 'initiative' ? 'Runs stream live in the Runs tab and on the slice cards.' : 'Select a scenario and ask a question, or open a thread.'}</p>
           )}
         </aside>
       </div>
