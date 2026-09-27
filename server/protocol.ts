@@ -75,6 +75,19 @@ export function parseReply(raw: unknown): { reply: AgentReply | null; issues: st
   return { reply: { ...result.data, patch: normalizePatch(result.data.patch) }, issues: [] }
 }
 
+// Final review Important 1(c): agents are never shown the scenario keys they must echo, so the
+// one retry after an unknown-key failure is a blind guess unless the issue text itself lists the
+// valid keys. Capped so a large change's list stays a useful hint, not a wall of text.
+const MAX_LISTED_SCENARIO_KEYS = 50
+
+function scenarioKeyHint(keys: ReadonlySet<string>): string {
+  if (keys.size === 0) return 'this change has no scenarios'
+  const all = [...keys]
+  const shown = all.slice(0, MAX_LISTED_SCENARIO_KEYS).join(', ')
+  const more = all.length > MAX_LISTED_SCENARIO_KEYS ? `, and ${all.length - MAX_LISTED_SCENARIO_KEYS} more` : ''
+  return `valid keys: ${shown}${more}`
+}
+
 function decisionIssues(d: ReplyDecision, at: string, earlierIds: readonly string[], keys: ReadonlySet<string>): string[] {
   const ids = d.options.map((o) => o.id)
   return [
@@ -83,7 +96,9 @@ function decisionIssues(d: ReplyDecision, at: string, earlierIds: readonly strin
     ...(d.recommended !== null && !ids.includes(d.recommended)
       ? [`${at}.recommended: "${d.recommended}" is not one of the option ids (${ids.join(', ')})`]
       : []),
-    ...(d.scope.kind === 'scenario' && !keys.has(d.scope.key) ? [`${at}.scope.key: no scenario "${d.scope.key}" in this change`] : []),
+    ...(d.scope.kind === 'scenario' && !keys.has(d.scope.key)
+      ? [`${at}.scope.key: no scenario "${d.scope.key}" in this change (${scenarioKeyHint(keys)})`]
+      : []),
   ]
 }
 

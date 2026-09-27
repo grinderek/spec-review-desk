@@ -8,6 +8,7 @@ export interface QuestionPromptInput {
   files: readonly string[]
   today: string
   decisions?: readonly DecisionRecord[]
+  scenarioKeys?: readonly string[]
 }
 
 const HEADINGS = { scenario: 'Scenario', phrase: 'Step phrase', change: 'Change', apply: 'Apply run' } as const
@@ -19,6 +20,15 @@ function choiceText(d: DecisionRecord): string {
   const option = d.options.find((o) => o.id === d.choice?.option)
   const label = option ? `${option.id} (${option.label})` : 'no option'
   return d.choice?.note ? `${label}; note: ${d.choice.note}` : label
+}
+
+// Final review Important 1(a): agents were never shown the scenario keys that `scope.key` must
+// echo verbatim (spec §7's key format, `<feature file>::<scenario title>`, gherkin.ts scenarioKey),
+// so a scenario-scoped decision mostly failed validation with an invented key. Listing every key
+// here — in both the question prompt and the Apply prompt — gives the agent something to copy.
+export function scenarioKeysSection(keys: readonly string[]): string[] {
+  if (keys.length === 0) return []
+  return ['## Scenario keys', 'Copy one of these verbatim into decisions[].scope.key — never invent one:', ...keys.map((k) => `- ${k}`)]
 }
 
 // Spec §7: every agent prompt lists the change's open and decided decisions, so agents neither
@@ -53,6 +63,8 @@ export function buildQuestionPrompt(input: QuestionPromptInput): string {
     '## Review files',
     ...input.files.map((f) => `- ${f}`),
     '',
+    ...scenarioKeysSection(input.scenarioKeys ?? []),
+    ...(input.scenarioKeys?.length ? [''] : []),
     ...decisionsSection(input.decisions ?? []),
     '',
     '## Thread so far',

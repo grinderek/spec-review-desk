@@ -126,6 +126,7 @@ export class QuestionService {
       files: reviewFiles(view),
       today: nowIso(now()).slice(0, 10),
       decisions: view.review.decisions,
+      scenarioKeys: allScenarios(view).map((s) => s.key),
     })
     const rules = await readFile(REVIEWER_RULES, 'utf8')
     const spec = (sessionId: string, resume: boolean, text: string): ClaudeRunSpec => ({

@@ -78,6 +78,20 @@ describe('structured question replies', () => {
     expect(call!.prompt).toContain('openspec/changes/add-thread-state/decisions.md')
   })
 
+  // Final review Important 1: the prompt now lists every scenario key so an agent can copy one
+  // verbatim into `scope.key` instead of inventing it (the ledger's real-CLI failure, Task 14).
+  it('lists the scenario keys verbatim, and a reply that copies one from the list validates', async () => {
+    const { wt, ref, questions } = await setup()
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ decisions: [decision] }))
+    await questions.ask(wt, ref, 't_1')
+    const [call] = await calls()
+    expect(call!.prompt).toContain('## Scenario keys')
+    expect(call!.prompt).toContain(`- ${OUTLINE}`)
+    const review = await readReview(ref.dir)
+    expect(review.decisions[0]).toMatchObject({ scope: { kind: 'scenario', key: OUTLINE } })
+    expect(review.threads[0]!.messages[1]!.invalid).toBeUndefined()
+  })
+
   it('retries once in the same session with the issues and keeps the valid second reply', async () => {
     const { wt, ref, questions, events } = await setup()
     process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-then-valid'

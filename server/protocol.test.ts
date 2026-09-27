@@ -91,8 +91,22 @@ describe('validateReply', () => {
     expect(validateReply(reply({ decisions: [duplicated, unknownKey] }), ctx())).toEqual([
       'decisions[0].options: option ids must be unique',
       'decisions[1].id: "storage" is used by another decision in this reply',
-      'decisions[1].scope.key: no scenario "features/x.feature::Nope" in this change',
+      'decisions[1].scope.key: no scenario "features/x.feature::Nope" in this change (valid keys: features/x.feature::A title)',
     ])
+  })
+
+  it('lists no keys when the change has none, and caps a long list at 50 (final review Important 1c)', () => {
+    const unknownKey = decision({ scope: { kind: 'scenario', key: 'features/x.feature::Nope' } })
+    expect(validateReply(reply({ decisions: [unknownKey] }), ctx({ scenarioKeys: [] }))).toEqual([
+      'decisions[0].scope.key: no scenario "features/x.feature::Nope" in this change (this change has no scenarios)',
+    ])
+    const many = Array.from({ length: 60 }, (_, i) => `features/x.feature::S${i}`)
+    const issues = validateReply(reply({ decisions: [unknownKey] }), ctx({ scenarioKeys: many }))
+    expect(issues).toHaveLength(1)
+    expect(issues[0]).toContain('features/x.feature::S0')
+    expect(issues[0]).toContain('features/x.feature::S49')
+    expect(issues[0]).not.toContain('features/x.feature::S50')
+    expect(issues[0].endsWith(', and 10 more)')).toBe(true)
   })
 
   it('enforces the status and patch rules per agent', () => {

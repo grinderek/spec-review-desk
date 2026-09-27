@@ -1,7 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
 import { addDecisions, decideDecision, dismissDecision, findDecision, ownerDecision } from './decision-model.ts'
-import { buildQuestionPrompt, buildResumePrompt, decisionsSection } from './prompt.ts'
+import { buildQuestionPrompt, buildResumePrompt, decisionsSection, scenarioKeysSection } from './prompt.ts'
 import { emptyReview } from './review-store.ts'
 
 describe('buildQuestionPrompt', () => {
@@ -24,6 +24,30 @@ describe('buildQuestionPrompt', () => {
     expect(prompt).toContain('- features/STEPS.md')
     expect(prompt.indexOf('Why 97?')).toBeLessThan(prompt.indexOf('And for B = 2?'))
     expect(prompt.trimEnd().endsWith('Answer the last OWNER message.')).toBe(true)
+  })
+})
+
+// Final review Important 1(a): agents were never shown the scenario keys `scope.key` must echo
+// verbatim, so a scenario-scoped decision mostly failed validation with an invented key.
+describe('scenarioKeysSection', () => {
+  it('lists every key verbatim with a copy instruction, and is empty for a change with none', () => {
+    expect(scenarioKeysSection(['features/x.feature::A title', 'features/x.feature::B title'])).toEqual([
+      '## Scenario keys',
+      'Copy one of these verbatim into decisions[].scope.key — never invent one:',
+      '- features/x.feature::A title',
+      '- features/x.feature::B title',
+    ])
+    expect(scenarioKeysSection([])).toEqual([])
+  })
+
+  it('goes into the question prompt before the thread', () => {
+    const prompt = buildQuestionPrompt({
+      changeName: 'c', relDir: 'openspec/changes/c', anchor: { kind: 'change', ref: '', text: 'x' },
+      messages: [{ role: 'owner', at: '2026-09-24T10:00:00.000Z', text: 'Hi?', note: null, patch: null }],
+      files: [], today: '2026-09-24', scenarioKeys: ['features/x.feature::A title'],
+    })
+    expect(prompt).toContain('## Scenario keys\nCopy one of these verbatim into decisions[].scope.key — never invent one:\n- features/x.feature::A title')
+    expect(prompt.indexOf('## Scenario keys')).toBeLessThan(prompt.indexOf('## Thread so far'))
   })
 })
 
@@ -90,5 +114,12 @@ describe('agent rules', () => {
   it('drops the prose channels of v1', async () => {
     expect(await rules('reviewer.md')).not.toContain('fenced block tagged `diff`')
     expect(await rules('apply.md')).not.toContain('NEEDS_OWNER')
+  })
+
+  // Final review Important 1(b): the rules said "scope it to a scenario key" but never defined one.
+  it('states the scenario key format so agents copy one verbatim instead of inventing it', async () => {
+    const KEY_RULE = 'A scenario key has the form `<feature file>::<scenario title>`; copy one verbatim from the "## Scenario keys" list in this prompt — never invent one.'
+    expect(await rules('reviewer.md')).toContain(KEY_RULE)
+    expect(await rules('apply.md')).toContain(KEY_RULE)
   })
 })

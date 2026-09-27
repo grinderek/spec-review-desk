@@ -62,6 +62,12 @@ describe('apply helpers', () => {
   it('builds the prompt and reads outcomes', () => {
     expect(applyPrompt('c', [])).toBe('/opsx:apply c')
     expect(applyPrompt('c', ['features/x.feature::A'])).toContain('- features/x.feature::A')
+    // Final review Important 1(a): the Apply prompt carried no scenario keys at all unless it was
+    // a reapply, so a needs_owner decision invented its own key.
+    const withKeys = applyPrompt('c', [], [], ['features/x.feature::A title', 'features/x.feature::B title'])
+    expect(withKeys).toContain('## Scenario keys')
+    expect(withKeys).toContain('- features/x.feature::A title')
+    expect(withKeys).toContain('- features/x.feature::B title')
     const result = (text: string, ok = true) => [{ type: 'result' as const, ok, text, numTurns: 3, sessionId: 's' }]
     expect(outcomeOf(result('done'), false).outcome).toBe('done')
     expect(outcomeOf(result('Stuck.\nNEEDS_OWNER: which weight?'), false).outcome).toBe('needs_owner')
@@ -132,7 +138,16 @@ describe('ApplyService', () => {
     expect(apply.active(wt.path)).toBe(false)
     expect((await readReview(ref.dir)).apply_runs[0]).toMatchObject({ id: run.id, outcome: 'done', ended_at: expect.any(String) })
     const [call] = await calls()
-    expect(call!.prompt).toBe('/opsx:apply add-thread-state')
+    // Final review Important 1(a): the Apply prompt now always lists the change's scenario keys,
+    // so a scenario-scoped decision can copy one verbatim instead of inventing it.
+    expect(call!.prompt).toBe([
+      '/opsx:apply add-thread-state',
+      '',
+      '## Scenario keys',
+      'Copy one of these verbatim into decisions[].scope.key — never invent one:',
+      "- features/thread_state.feature::The founder's reply resolves a waiting thread",
+      '- features/thread_state.feature::A waiting thread is weighted by its age',
+    ].join('\n'))
     expect(call!.args).toEqual(expect.arrayContaining([
       '--permission-mode', 'acceptEdits', '--session-id', run.session, '--strict-mcp-config', '--json-schema',
       expect.stringMatching(/^--allowedTools=Read,Grep,Glob,Edit,Write,Bash\(git add:\*\)/),

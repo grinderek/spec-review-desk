@@ -11,8 +11,10 @@ Rules:
 - Decisions listed under "## Decisions" in the prompt are known to the owner; do not re-ask them.
 - A question only the owner can answer goes into `decisions[]` with 2–4 options and your
   recommendation — never into prose. Scope it to a scenario key when it changes a scenario's
-  behavior, else to the change. Give each decision a short slug id, each option a slug id, a
-  label and its consequence; `recommended` is one of those option ids.
+  behavior, else to the change. A scenario key has the form `<feature file>::<scenario title>`;
+  copy one verbatim from the "## Scenario keys" list in this prompt — never invent one. Give each
+  decision a short slug id, each option a slug id, a label and its consequence; `recommended` is
+  one of those option ids.
 
 Your final reply is one JSON object; its schema is enforced:
 - `answer`: Markdown for the owner — what you did, what is green, what is left.

@@ -5,7 +5,7 @@ import { mkdir, open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { StructuredStream } from './answer-reader.ts'
 import { outcomeOf, readEvents } from './apply-outcome.ts'
-import { loadChangeView } from './change-view.ts'
+import { allScenarios, loadChangeView } from './change-view.ts'
 import { claudeArgs, type ClaudeRunSpec, parseStreamLine } from './claude.ts'
 import type { Config } from './config.ts'
 import { addDecisions, decisionsFromReply, isActive, pendingBlocking, runDecisions } from './decision-model.ts'
@@ -13,7 +13,7 @@ import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import type { EventBus } from './events.ts'
 import { ensureExcluded } from './git.ts'
-import { buildResumePrompt, decisionsSection } from './prompt.ts'
+import { buildResumePrompt, decisionsSection, scenarioKeysSection } from './prompt.ts'
 import { AGENT_REPLY_SCHEMA_ARG, retryPrompt, validateReply } from './protocol.ts'
 import { replyContext } from './questions.ts'
 import {
@@ -63,7 +63,12 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-export function applyPrompt(changeName: string, onlyKeys: readonly string[], decisions: readonly DecisionRecord[] = []): string {
+export function applyPrompt(
+  changeName: string,
+  onlyKeys: readonly string[],
+  decisions: readonly DecisionRecord[] = [],
+  scenarioKeys: readonly string[] = [],
+): string {
   const lines = [`/opsx:apply ${changeName}`]
   if (onlyKeys.length) {
     lines.push(
@@ -74,6 +79,9 @@ export function applyPrompt(changeName: string, onlyKeys: readonly string[], dec
       ...onlyKeys.map((k) => `- ${k}`),
     )
   }
+  // Final review Important 1(a): the Apply prompt carried no scenario keys at all unless it was a
+  // reapply, so a scenario-scoped `needs_owner` decision invented its own key.
+  if (scenarioKeys.length) lines.push('', ...scenarioKeysSection(scenarioKeys))
   if (decisions.some(isActive)) lines.push('', ...decisionsSection(decisions))
   return lines.join('\n')
 }
@@ -149,7 +157,8 @@ export class ApplyService {
         id, session: randomUUID(), pid: null, log: `.spec-review/runs/${id}.ndjson`, started_at: started, ended_at: null, outcome: 'running',
         resume_offset: 0,
       }
-      return await this.#launch(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? [], view.review.decisions), false)
+      const scenarioKeys = allScenarios(view).map((s) => s.key)
+      return await this.#launch(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? [], view.review.decisions, scenarioKeys), false)
     } finally {
       // #launch sets #active for this path before its first await beyond the spawn call, so by
       // the time we get here on the success path #active already holds the run; on any failure
