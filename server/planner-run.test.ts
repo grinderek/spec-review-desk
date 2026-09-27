@@ -1,11 +1,12 @@
-import { mkdir, mkdtemp, readFile, stat } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { stringify } from 'yaml'
 import { EventBus } from './events.ts'
 import { git } from './git.ts'
 import { REPLY_SCHEMA_ARGS } from './initiative-protocol.ts'
-import { readInitiative, type RunRecord, updateInitiative, upsertRun } from './initiative-store.ts'
+import { INITIATIVE_FILE, InitiativeFileError, readInitiative, type RunRecord, updateInitiative, upsertRun } from './initiative-store.ts'
 import { startPlanner } from './planner-run.ts'
 import { readReview } from './review-store.ts'
 import { FINISHERS } from './run-kinds.ts'
@@ -303,8 +304,8 @@ describe('planner runs', () => {
     s.sandbox.statusValue = { ...s.sandbox.statusValue, image: false, ready: false, fixes: ['Build the sandbox images: npm run agent:build'] }
     await expect(startPlanner(s.service, s.target)).rejects.toMatchObject({ code: 'sandbox_unavailable', message: expect.stringContaining('npm run agent:build') })
     const running: RunRecord = {
-      id: 'r_00000009', kind: 'planner', slice: null, topic: null, session: 's', container: 'sr-r_00000009', log: 'x', started_at: INITIATIVE_AT,
-      ended_at: null, outcome: 'running', notes: null,
+      id: 'r_00000009', kind: 'planner', slice: null, topic: null, session: 's', container: 'sr-r_00000009', log: '.spec-review/runs/r_00000009.ndjson',
+      started_at: INITIATIVE_AT, ended_at: null, outcome: 'running', notes: null,
     }
     await updateInitiative(s.dir, (d) => upsertRun(d, running))
     await expect(startPlanner(s.service, s.target)).rejects.toMatchObject({ code: 'planner_running' })
@@ -315,17 +316,34 @@ describe('planner runs', () => {
   it('marks runs left running by an earlier Desk as failed and cleans them up (ruling 7)', async () => {
     const s = await setup()
     const stale: RunRecord = {
-      id: 'r_0000dead', kind: 'author', slice: 's1', topic: null, session: 's', container: 'sr-r_0000dead', log: 'x', started_at: INITIATIVE_AT,
+      id: 'r_0000dead', kind: 'author', slice: 's1', topic: null, session: 's', container: 'sr-r_0000dead', log: '.spec-review/runs/r_0000dead.ndjson',
+      started_at: INITIATIVE_AT,
       ended_at: null, outcome: 'running', notes: null,
     }
-    const waiting: RunRecord = { ...stale, id: 'r_0000wait', outcome: 'needs_owner' }
+    const waiting: RunRecord = { ...stale, id: 'r_0000beef', log: '.spec-review/runs/r_0000beef.ndjson', outcome: 'needs_owner' }
     await updateInitiative(s.dir, (d) => upsertRun(upsertRun(d, stale), waiting))
     await mkdir(runPaths(s.wt, waiting).sessions, { recursive: true })
     await s.service.failStale(s.target)
     const runs = (await readInitiative(s.dir)).runs
     expect(runs[0]).toMatchObject({ outcome: 'failed', notes: 'The Desk restarted while this run was running.' })
-    expect(runs[1]).toMatchObject({ id: 'r_0000wait', outcome: 'needs_owner' })
+    expect(runs[1]).toMatchObject({ id: 'r_0000beef', outcome: 'needs_owner' })
     expect(s.sandbox.cleaned).toEqual(['r_0000dead'])
     expect((await stat(runPaths(s.wt, waiting).sessions)).isDirectory()).toBe(true)
+  })
+  it('never cleans up a run whose hand-edited id leaves the runs dir — the file is reported instead (final review I4)', async () => {
+    const s = await setup()
+    const victim = path.join(s.wt.path, 'victim')
+    await mkdir(victim, { recursive: true })
+    await writeFile(path.join(victim, 'keep.txt'), 'keep')
+    const doc = await readInitiative(s.dir)
+    const evil = {
+      id: '../../victim', kind: 'author', slice: 's1', topic: null, session: 's', container: 'sr-x', log: '.spec-review/runs/../../victim/keep.txt',
+      started_at: INITIATIVE_AT, ended_at: null, outcome: 'running', notes: null,
+    }
+    await writeFile(path.join(s.dir, INITIATIVE_FILE), stringify({ ...doc, runs: [evil] }))
+    await expect(s.service.failStale(s.target)).rejects.toBeInstanceOf(InitiativeFileError)
+    await expect(s.service.log(s.target, '../../victim')).rejects.toBeInstanceOf(InitiativeFileError)
+    expect(s.sandbox.cleaned).toEqual([])
+    expect(await readFile(path.join(victim, 'keep.txt'), 'utf8')).toBe('keep')
   })
 })

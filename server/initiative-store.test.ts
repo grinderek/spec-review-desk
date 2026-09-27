@@ -2,6 +2,7 @@ import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { stringify } from 'yaml'
 import {
   emptyInitiative, findRun, findSlice, INITIATIVE_FILE, InitiativeFileError, initiativeDir, isInitiativeName, readInitiative,
   type RunRecord, updateInitiative, upsertRun, writeInitiative,
@@ -48,7 +49,7 @@ describe('initiative.yaml', () => {
       ...minimal,
       inputs: [
         { file: 'spec.pdf', bytes: 3, source: { kind: 'upload' as const }, added_at: AT, draft: false },
-        { file: 'research-intuit.md', bytes: 9, source: { kind: 'research' as const, run: 'r_1', domains: ['developer.intuit.com'] }, added_at: AT, draft: true },
+        { file: 'research-intuit.md', bytes: 9, source: { kind: 'research' as const, run: 'r_00000001', domains: ['developer.intuit.com'] }, added_at: AT, draft: true },
         { file: 'c.md', bytes: 5, source: { kind: 'repo' as const, path: 'api/doc/c.md', commit: '13ad9bd' }, added_at: AT, draft: false },
       ],
       research: { domains: ['developer.intuit.com'] },
@@ -71,6 +72,32 @@ describe('initiative.yaml', () => {
     await expect(readInitiative(d)).rejects.toThrow(/name/)
   })
 
+  it('refuses every path-bearing field that could leave its directory (final review I4)', async () => {
+    const d = await dir()
+    const base = emptyInitiative({ name: 'hs', title: 'T', repo: 'api', created_at: AT })
+    const input = { file: 'spec.md', bytes: 1, source: { kind: 'upload' as const }, added_at: AT, draft: false }
+    const slice = { id: 's1', title: 'A', scope: 'B', depends_on: [], change: null }
+    const bad: [string, unknown][] = [
+      ['runs.0.id', { ...base, runs: [run({ id: '../../x', log: '.spec-review/runs/../../x.ndjson' })] }],
+      ['runs.0.id', { ...base, runs: [run({ id: 'r_0000000g', log: '.spec-review/runs/r_0000000g.ndjson' })] }],
+      ['runs.0.log', { ...base, runs: [run({ log: '../../etc/passwd' })] }],
+      ['runs.0.log', { ...base, runs: [run({ log: '.spec-review/runs/r_00000002.ndjson' })] }],
+      ['runs.0.session', { ...base, runs: [run({ session: '../s' })] }],
+      ['runs.0.change', { ...base, runs: [run({ kind: 'author', change: '../escape' })] }],
+      ['inputs.0.file', { ...base, inputs: [{ ...input, file: '../secret.md' }] }],
+      ['inputs.0.file', { ...base, inputs: [{ ...input, file: 'a/b.md' }] }],
+      ['inputs.0.file', { ...base, inputs: [{ ...input, file: '.hidden.md' }] }],
+      ['inputs.0.source.run', { ...base, inputs: [{ ...input, source: { kind: 'research', run: '../r', domains: [] } }] }],
+      ['plan.slices.0.change', { ...base, plan: { status: 'approved', approved_at: AT, slices: [{ ...slice, change: '../../x' }] } }],
+      ['plan.slices.0.change', { ...base, plan: { status: 'approved', approved_at: AT, slices: [{ ...slice, change: 'a/b' }] } }],
+    ]
+    for (const [field, doc] of bad) {
+      await writeFile(path.join(d, INITIATIVE_FILE), stringify(doc))
+      await expect(readInitiative(d), field).rejects.toBeInstanceOf(InitiativeFileError)
+      await expect(readInitiative(d), field).rejects.toMatchObject({ issues: expect.arrayContaining([expect.stringContaining(`${field}:`)]) })
+    }
+  })
+
   it('reports a missing initiative as 404', async () => {
     await expect(readInitiative(await dir())).rejects.toMatchObject({ status: 404, code: 'unknown_initiative' })
   })
@@ -79,15 +106,15 @@ describe('initiative.yaml', () => {
     const d = await dir()
     await writeInitiative(d, emptyInitiative({ name: 'hs', title: 'T', repo: 'api', created_at: AT }))
     await Promise.all([
-      updateInitiative(d, (doc) => upsertRun(doc, run({ id: 'r_a' }))),
-      updateInitiative(d, (doc) => upsertRun(doc, run({ id: 'r_b' }))),
+      updateInitiative(d, (doc) => upsertRun(doc, run({ id: 'r_0000000a', log: '.spec-review/runs/r_0000000a.ndjson' }))),
+      updateInitiative(d, (doc) => upsertRun(doc, run({ id: 'r_0000000b', log: '.spec-review/runs/r_0000000b.ndjson' }))),
     ])
     const doc = await readInitiative(d)
-    expect(doc.runs.map((r) => r.id).sort()).toEqual(['r_a', 'r_b'])
+    expect(doc.runs.map((r) => r.id).sort()).toEqual(['r_0000000a', 'r_0000000b'])
     const frozen = JSON.stringify(doc)
-    const next = upsertRun(doc, { ...findRun(doc, 'r_a'), outcome: 'done' })
+    const next = upsertRun(doc, { ...findRun(doc, 'r_0000000a'), outcome: 'done' })
     expect(JSON.stringify(doc)).toBe(frozen)
-    expect(findRun(next, 'r_a').outcome).toBe('done')
+    expect(findRun(next, 'r_0000000a').outcome).toBe('done')
     expect(() => findRun(doc, 'r_nope')).toThrow(/No run r_nope/)
     expect(() => findSlice(doc, 's9')).toThrow(/No slice s9/)
   })

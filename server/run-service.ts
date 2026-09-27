@@ -10,7 +10,7 @@ import { HttpError } from './errors.ts'
 import type { EventBus } from './events.ts'
 import { ensureExcluded } from './git.ts'
 import { parseRunReply, REPLY_SCHEMA_ARGS, type RunReplies, validateRunReply } from './initiative-protocol.ts'
-import { findRun, type InitiativeDoc, readInitiative, type RunKind, type RunRecord, updateInitiative, upsertRun } from './initiative-store.ts'
+import { findRun, type InitiativeDoc, readInitiative, type RunKind, type RunRecord, runLogPath, updateInitiative, upsertRun } from './initiative-store.ts'
 import { type InitiativeRef, sliceStatuses } from './initiatives.ts'
 import { parseJsonObject, retryPrompt } from './protocol.ts'
 import { newId, nowIso, readReview } from './review-store.ts'
@@ -124,7 +124,7 @@ export class InitiativeRunService {
     const id = newId('r')
     const run: RunRecord = {
       slice: null, topic: null, notes: null, ...fields,
-      id, session: randomUUID(), container: containerName(id), log: `.spec-review/runs/${id}.ndjson`,
+      id, session: randomUUID(), container: containerName(id), log: runLogPath(id),
       started_at: nowIso(this.#now()), ended_at: null, outcome: 'running',
     }
     const paths = runPaths(target.wt, run)

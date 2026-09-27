@@ -5,7 +5,7 @@ import type { WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
 import { authorPrompt } from './initiative-prompt.ts'
-import { findSlice, INITIATIVE_FILE, type InitiativeDoc, readInitiative, type RunRecord } from './initiative-store.ts'
+import { CHANGE_NAME, findSlice, INITIATIVE_FILE, type InitiativeDoc, readInitiative, type RunRecord } from './initiative-store.ts'
 import { sliceStatuses } from './initiatives.ts'
 import { buildResumePrompt } from './prompt.ts'
 import { emptyReview, readReview, updateReview, writeReview } from './review-store.ts'
@@ -14,7 +14,7 @@ import { proposeBlocker } from './slice-plan.ts'
 import { moveChange, vetAuthorOutput } from './vet-output.ts'
 
 // Spec B §4.4: a clean-room author writes one slice as a behavior-driven change.
-export const CHANGE_NAME = /^[a-z0-9][a-z0-9-]{1,63}$/
+export { CHANGE_NAME } from './initiative-store.ts'
 
 export const slugify = (text: string): string =>
   text.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '')

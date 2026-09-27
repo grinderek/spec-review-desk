@@ -70,8 +70,8 @@ describe('research drafts and domains', () => {
     await writeFile(path.join(dir, 'inputs/research-intuit.md'), '# Intuit\n')
     await updateInitiative(dir, (d) => ({
       ...d,
-      inputs: [...d.inputs, { file: 'research-intuit.md', bytes: 9, source: { kind: 'research', run: 'r_1', domains: [] }, added_at: INITIATIVE_AT, draft: true }],
-      runs: [{ id: 'r_1', kind: 'research', slice: null, topic: 'Intuit reports', session: 's', container: 'c', log: 'l', started_at: INITIATIVE_AT, ended_at: INITIATIVE_AT, outcome: 'done', notes: null }],
+      inputs: [...d.inputs, { file: 'research-intuit.md', bytes: 9, source: { kind: 'research', run: 'r_00000001', domains: [] }, added_at: INITIATIVE_AT, draft: true }],
+      runs: [{ id: 'r_00000001', kind: 'research', slice: null, topic: 'Intuit reports', session: 's', container: 'sr-r_00000001', log: '.spec-review/runs/r_00000001.ndjson', started_at: INITIATIVE_AT, ended_at: INITIATIVE_AT, outcome: 'done', notes: null }],
     }))
     return { repo, target: { wt, ini }, dir }
   }

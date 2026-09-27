@@ -140,7 +140,7 @@ describe('author runs', () => {
     await expect(startAuthor(s.service, s.target, 's1', { change: 'Bad Name' })).rejects.toMatchObject({ code: 'invalid_change_name' })
     await expect(startAuthor(s.service, s.target, 's1', { change: 'add-thread-state' })).rejects.toMatchObject({ code: 'change_exists' })
     await updateInitiative(s.dir, (d) => upsertRun(d, {
-      id: 'r_1', kind: 'author', slice: 's9', topic: null, session: 's', container: 'c', log: 'l', started_at: INITIATIVE_AT, ended_at: null, outcome: 'running', notes: null,
+      id: 'r_00000001', kind: 'author', slice: 's9', topic: null, session: 's', container: 'sr-r_00000001', log: '.spec-review/runs/r_00000001.ndjson', started_at: INITIATIVE_AT, ended_at: null, outcome: 'running', notes: null,
     }))
     await expect(startAuthor(s.service, s.target, 's1', {})).rejects.toMatchObject({ code: 'author_running' })
   })

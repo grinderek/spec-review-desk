@@ -201,7 +201,7 @@ describe('initiative routes', () => {
     const url = `/api/initiatives/${json.worktreeId}/health-score`
     const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
     const running: RunRecord = {
-      id: 'r_planner1', kind: 'planner', slice: null, topic: null, session: 's', container: 'sr-r_planner1', log: 'x',
+      id: 'r_0000ab01', kind: 'planner', slice: null, topic: null, session: 's', container: 'sr-r_0000ab01', log: '.spec-review/runs/r_0000ab01.ndjson',
       started_at: '2026-09-24T10:00:00.000Z', ended_at: null, outcome: 'running', notes: null,
     }
     await updateInitiative(dir, (d) => ({
@@ -216,6 +216,19 @@ describe('initiative routes', () => {
     await updateInitiative(dir, (d) => ({ ...d, runs: d.runs.map((r) => ({ ...r, outcome: 'done' as const })) }))
     const approved = await call(app, 'POST', `${url}/plan/approve`)
     expect(approved.status).toBe(200)
+  })
+
+  it('answers 409 review_invalid for a hand-edited initiative.yaml whose run log leaves its dir (final review I4)', async () => {
+    const { app, repo } = await setup()
+    const { json } = await create(app)
+    const url = `/api/initiatives/${json.worktreeId}/health-score`
+    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    const text = await readFile(path.join(dir, 'initiative.yaml'), 'utf8')
+    const evil = 'runs:\n  - id: r_0000ab01\n    kind: planner\n    session: s\n    container: c\n    log: ../../../../etc/passwd\n    started_at: x\n    outcome: done\n'
+    await writeFile(path.join(dir, 'initiative.yaml'), `${text.replace(/^runs:.*$/m, '')}${evil}`)
+    const res = await call(app, 'GET', `${url}/runs/r_0000ab01/log`)
+    expect(res.status).toBe(409)
+    expect(res.json.error).toMatchObject({ code: 'review_invalid', message: expect.stringContaining('runs.0.log') })
   })
 
   it('adds and dismisses an owner decision on the initiative', async () => {
