@@ -3,17 +3,25 @@ import { randomBytes, randomUUID } from 'node:crypto'
 import { closeSync, openSync } from 'node:fs'
 import { mkdir, open, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { StructuredStream } from './answer-reader.ts'
+import { outcomeOf, readEvents } from './apply-outcome.ts'
 import { loadChangeView } from './change-view.ts'
-import { claudeArgs, type ClaudeEvent, type ClaudeRunSpec, parseStreamLine, type ResultEvent } from './claude.ts'
+import { claudeArgs, type ClaudeRunSpec, parseStreamLine } from './claude.ts'
 import type { Config } from './config.ts'
+import { addDecisions, decisionsFromReply, isActive } from './decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import type { EventBus } from './events.ts'
 import { ensureExcluded } from './git.ts'
+import { decisionsSection } from './prompt.ts'
+import { AGENT_REPLY_SCHEMA_ARG, retryPrompt, validateReply } from './protocol.ts'
+import { replyContext } from './questions.ts'
 import {
-  addThread, appendMessage, type ApplyRun, findThread, type Message, newId, nowIso, readReview, type ReviewDoc, setThreadStatus,
-  updateReview, upsertApplyRun,
+  addThread, appendMessage, type ApplyRun, type DecisionRecord, findThread, type Message, newId, nowIso, readReview, type ReviewDoc,
+  setThreadStatus, updateReview, upsertApplyRun,
 } from './review-store.ts'
+
+export { NEEDS_OWNER, outcomeOf, readEvents } from './apply-outcome.ts'
 
 export const DEFAULT_APPLY_TOOLS = [
   'Read', 'Grep', 'Glob', 'Edit', 'Write',
@@ -26,7 +34,6 @@ export const DEFAULT_APPLY_DENY = [
   'Bash(git push:*)', 'Bash(git reset:*)', 'Bash(git rebase:*)', 'Bash(rm:*)',
   'Bash(curl:*)', 'Bash(wget:*)', 'Bash(ssh:*)', 'Bash(scp:*)', 'WebFetch', 'WebSearch',
 ]
-export const NEEDS_OWNER = /^NEEDS_OWNER:\s*(.+)$/m
 const APPLY_RULES = new URL('./prompts/apply.md', import.meta.url)
 
 export interface SpawnedProcess { pid: number; exited: Promise<number | null> }
@@ -56,17 +63,19 @@ export function isAlive(pid: number): boolean {
   }
 }
 
-export function applyPrompt(changeName: string, onlyKeys: readonly string[]): string {
-  const base = `/opsx:apply ${changeName}`
-  if (onlyKeys.length === 0) return base
-  return [
-    base,
-    '',
-    'The owner approved changes to scenarios that are already implemented. The living corpus under',
-    'features/ differs from the change for exactly these scenarios. Bring the corpus, the step',
-    'definitions and the code in line with them, RED first:',
-    ...onlyKeys.map((k) => `- ${k}`),
-  ].join('\n')
+export function applyPrompt(changeName: string, onlyKeys: readonly string[], decisions: readonly DecisionRecord[] = []): string {
+  const lines = [`/opsx:apply ${changeName}`]
+  if (onlyKeys.length) {
+    lines.push(
+      '',
+      'The owner approved changes to scenarios that are already implemented. The living corpus under',
+      'features/ differs from the change for exactly these scenarios. Bring the corpus, the step',
+      'definitions and the code in line with them, RED first:',
+      ...onlyKeys.map((k) => `- ${k}`),
+    )
+  }
+  if (decisions.some(isActive)) lines.push('', ...decisionsSection(decisions))
+  return lines.join('\n')
 }
 
 // review.yaml's `apply_runs[].log` is persisted data, not a server-only constant: a patch can
@@ -79,21 +88,6 @@ export function resolveRunLog(worktreePath: string, log: string): string {
     throw new HttpError(400, 'invalid_run_log', `Run log "${log}" is outside .spec-review/runs/`)
   }
   return resolved
-}
-
-export const readEvents = (text: string): ClaudeEvent[] =>
-  text.split('\n').flatMap((line) => {
-    const event = parseStreamLine(line)
-    return event ? [event] : []
-  })
-
-export function outcomeOf(events: readonly ClaudeEvent[], stopping: boolean): { outcome: ApplyRun['outcome']; text: string } {
-  const result = [...events].reverse().find((e): e is ResultEvent => e.type === 'result')
-  const streamed = events.flatMap((e) => (e.type === 'delta' ? [e.text] : [])).join('')
-  const text = result?.text || streamed
-  if (stopping) return { outcome: 'stopped', text: text || 'Stopped by the owner.' }
-  if (!result || !result.ok) return { outcome: 'failed', text: text || 'The apply run ended without a result.' }
-  return { outcome: NEEDS_OWNER.test(result.text) ? 'needs_owner' : 'done', text: result.text }
 }
 
 async function sizeOf(file: string): Promise<number> {
@@ -127,8 +121,14 @@ export class ApplyService {
     return this.#active.has(worktreePath) || this.#reserved.has(worktreePath)
   }
 
-  settled(runId: string): Promise<void> {
-    return this.#follows.get(runId) ?? Promise.resolve()
+  async settled(runId: string): Promise<void> {
+    // A validation retry relaunches the run from inside its own finalize, replacing this entry.
+    for (let current = this.#follows.get(runId); current; ) {
+      await current
+      const next = this.#follows.get(runId)
+      if (next === current) return
+      current = next
+    }
   }
 
   async start(wt: WorktreeInfo, ref: ChangeRef, opts: { onlyKeys?: readonly string[] } = {}): Promise<ApplyRun> {
@@ -149,7 +149,7 @@ export class ApplyService {
         id, session: randomUUID(), pid: null, log: `.spec-review/runs/${id}.ndjson`, started_at: started, ended_at: null, outcome: 'running',
         resume_offset: 0,
       }
-      return await this.#launch(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? []), false)
+      return await this.#launch(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? [], view.review.decisions), false)
     } finally {
       // #launch sets #active for this path before its first await beyond the spawn call, so by
       // the time we get here on the success path #active already holds the run; on any failure
@@ -168,7 +168,7 @@ export class ApplyService {
       const run = doc.apply_runs.find((r) => r.id === thread.ref)
       if (!run) throw new HttpError(404, 'unknown_run', `No apply run ${thread.ref}`)
       const lastOwner = [...thread.messages].reverse().find((m) => m.role === 'owner')
-      await this.#launch(wt, ref, { ...run, outcome: 'running', ended_at: null }, lastOwner?.text ?? 'Continue.', true)
+      await this.#launch(wt, ref, { ...run, outcome: 'running', ended_at: null, validation_retry: false }, lastOwner?.text ?? 'Continue.', true)
     } finally {
       this.#reserved.delete(wt.path)
     }
@@ -233,6 +233,7 @@ export class ApplyService {
       disallowedTools: DEFAULT_APPLY_DENY,
       permissionMode: 'acceptEdits',
       appendSystemPrompt: await readFile(APPLY_RULES, 'utf8'),
+      jsonSchema: AGENT_REPLY_SCHEMA_ARG,
       prompt,
     }
     const proc = (this.deps.spawn ?? spawnDetached)(spec, logFile)
@@ -250,6 +251,7 @@ export class ApplyService {
     let position = offset
     let partial = ''
     let draining: Promise<void> = Promise.resolve()
+    const structuredStream = new StructuredStream()
     const drainOnce = async (): Promise<void> => {
       const size = await sizeOf(logFile)
       if (size <= position) return
@@ -266,7 +268,9 @@ export class ApplyService {
       partial = lines.pop() ?? ''
       for (const line of lines) {
         const event = parseStreamLine(line)
-        if (event) this.deps.bus.publish(`run:${run.id}`, { type: 'event', event })
+        if (!event) continue
+        this.deps.bus.publish(`run:${run.id}`, { type: 'event', event })
+        for (const derived of structuredStream.feed(event)) this.deps.bus.publish(`run:${run.id}`, { type: 'event', event: derived })
       }
     }
     const drain = (): Promise<void> => {
@@ -293,28 +297,53 @@ export class ApplyService {
     const text = buffer.subarray(offset).toString('utf8')
     const current = this.#active.get(wt.path)
     const stopping = current?.runId === run.id && current.stopping
-    const { outcome, text: summary } = outcomeOf(readEvents(text), stopping)
-    const final: ApplyRun = { ...run, outcome, ended_at: nowIso(this.#now()) }
-    await updateReview(ref.dir, (doc) => this.#record(doc, final, summary))
+    const result = outcomeOf(readEvents(text), stopping)
+    const issues = result.reply
+      ? validateReply(result.reply, replyContext('apply', await loadChangeView(wt, ref, { withCommits: false })))
+      : result.issues
+    if (issues.length && !stopping && !run.validation_retry) {
+      // Spec §4: one retry in the same session. The relaunch replaces this run's follow entry.
+      try {
+        await this.#launch(wt, ref, { ...run, validation_retry: true }, retryPrompt(issues), true)
+        return
+      } catch (error) {
+        console.error(error)
+      }
+    }
+    const at = nowIso(this.#now())
+    const final: ApplyRun = { ...run, outcome: result.outcome, ended_at: at }
+    const valid = issues.length === 0 ? result.reply : null
+    const decisions = valid ? decisionsFromReply(valid.decisions, { kind: 'apply', run: run.id }, at) : []
+    const message: Message = {
+      role: 'agent',
+      at,
+      text: result.text,
+      note: `apply run ${run.id}: ${final.outcome}`,
+      patch: null,
+      ...(decisions.length ? { decision_ids: decisions.map((d) => d.id) } : {}),
+      ...(issues.length ? { invalid: { issues, raw: result.raw ?? result.text } } : {}),
+    }
+    await updateReview(ref.dir, (doc) => this.#record(addDecisions(doc, decisions), final, message))
     if (current?.runId === run.id) this.#active.delete(wt.path)
-    this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome })
+    this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome: final.outcome })
     this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }
 
   async #failReattach(wt: WorktreeInfo, ref: ChangeRef, run: ApplyRun, error: unknown): Promise<void> {
-    const message = error instanceof Error ? error.message : String(error)
-    const final: ApplyRun = { ...run, outcome: 'failed', ended_at: nowIso(this.#now()) }
-    await updateReview(ref.dir, (doc) => this.#record(doc, final, `The apply run could not be reattached: ${message}`))
+    const reason = error instanceof Error ? error.message : String(error)
+    const at = nowIso(this.#now())
+    const final: ApplyRun = { ...run, outcome: 'failed', ended_at: at }
+    const message: Message = { role: 'agent', at, text: `The apply run could not be reattached: ${reason}`, note: `apply run ${run.id}: failed`, patch: null }
+    await updateReview(ref.dir, (doc) => this.#record(doc, final, message))
     this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome: 'failed' })
     this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }
 
-  #record(doc: ReviewDoc, run: ApplyRun, summary: string): ReviewDoc {
+  #record(doc: ReviewDoc, run: ApplyRun, message: Message): ReviewDoc {
     const withRun = upsertApplyRun(doc, run)
-    const message: Message = { role: 'agent', at: nowIso(this.#now()), text: summary, note: `apply run ${run.id}: ${run.outcome}`, patch: null }
     const existing = withRun.threads.find((t) => t.anchor === 'apply' && t.ref === run.id)
     if (existing) return setThreadStatus(appendMessage(withRun, existing.id, message), existing.id, 'answered')
-    if (run.outcome !== 'needs_owner') return withRun
+    if (run.outcome !== 'needs_owner' && !message.invalid) return withRun
     return addThread(withRun, { id: newId('t'), anchor: 'apply', ref: run.id, status: 'answered', messages: [message] })
   }
 

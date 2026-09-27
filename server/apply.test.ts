@@ -6,7 +6,7 @@ import { ApplyService, applyPrompt, DEFAULT_APPLY_DENY, outcomeOf, readEvents, r
 import { listChanges, Registry, discover } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { appendMessage, readReview, recordApproval, updateReview, upsertApplyRun } from './review-store.ts'
-import { FAKE_CLAUDE } from './testing/fake-claude-path.ts'
+import { FAKE_CLAUDE, resetFakeClaude } from './testing/fake-claude-path.ts'
 import { testConfig } from './testing/http.ts'
 import { makeRepo } from './testing/repo.ts'
 import { approveEverything } from './testing/review.ts'
@@ -31,6 +31,7 @@ async function setup(opts: { approve?: boolean; record?: boolean } = {}) {
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string })
 
 beforeEach(async () => {
+  resetFakeClaude()
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-apply-'))
   fakeLog = path.join(tmp, 'calls.ndjson')
   process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
@@ -133,7 +134,7 @@ describe('ApplyService', () => {
     const [call] = await calls()
     expect(call!.prompt).toBe('/opsx:apply add-thread-state')
     expect(call!.args).toEqual(expect.arrayContaining([
-      '--permission-mode', 'acceptEdits', '--session-id', run.session, '--strict-mcp-config',
+      '--permission-mode', 'acceptEdits', '--session-id', run.session, '--strict-mcp-config', '--json-schema',
       expect.stringMatching(/^--allowedTools=Read,Grep,Glob,Edit,Write,Bash\(git add:\*\)/),
       expect.stringMatching(/^--disallowedTools=.*Bash\(git push:\*\).*Bash\(rm:\*\).*WebFetch.*WebSearch/),
     ]))
@@ -142,6 +143,7 @@ describe('ApplyService', () => {
   })
 
   it('opens an apply thread when the agent needs the owner, and resumes the same session on reply', async () => {
+    process.env.FAKE_CLAUDE_STRUCTURED = 'off'
     const { wt, ref, apply } = await setup()
     process.env.FAKE_CLAUDE_TEXT = 'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?'
     const run = await apply.start(wt, ref)
@@ -166,6 +168,7 @@ describe('ApplyService', () => {
   })
 
   it("does not resurface the previous attempt's result when a resumed run is stopped before producing its own", async () => {
+    process.env.FAKE_CLAUDE_STRUCTURED = 'off'
     const { wt, ref, apply } = await setup()
     process.env.FAKE_CLAUDE_TEXT = 'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?'
     const run = await apply.start(wt, ref)
