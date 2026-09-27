@@ -51,6 +51,7 @@ export interface RunContext {
 }
 export type Finisher<K extends RunKind> = (ctx: RunContext, reply: RunReplies[K]) => Promise<void>
 export type Finishers = { [K in RunKind]?: Finisher<K> }
+export interface ResumeGuard { key: string; busy: HttpError; check: (doc: InitiativeDoc) => void }
 export interface RunDeps { config: Config; bus: EventBus; sandbox: Sandbox; finishers: Finishers; now?: () => Date }
 
 const RULES: Record<RunKind, URL> = {
@@ -142,17 +143,42 @@ export class InitiativeRunService {
     return run
   }
 
-  // Owner resume (spec B §4.4/§4.5): enabled once the run's blocking decisions are closed.
-  async resumeRun(target: RunTarget, runId: string, patch: Partial<RunRecord>, prompt: (decisions: ReturnType<typeof runDecisions>) => string): Promise<void> {
-    const run = findRun(await readInitiative(target.ini.dir), runId)
-    if (run.outcome !== 'needs_owner') throw new HttpError(409, 'run_not_waiting', `Run ${runId} is ${run.outcome}, not waiting for the owner`)
+  // Owner resume (spec B §4.4/§4.5): enabled once the run's blocking decisions are closed. One
+  // resume per run at a time, and the needs_owner → running move is atomic in the initiative lock,
+  // so a double click never starts a second attempt of the same run (final review I1) — with
+  // DockerSandbox the loser's teardown would kill the winner's container and wipe its session.
+  // `guard` adds a second exclusive key and a check on the locked document (one author per
+  // initiative: a Resume never overlaps a Propose).
+  resumeRun(
+    target: RunTarget, runId: string, patch: Partial<RunRecord>, prompt: (decisions: ReturnType<typeof runDecisions>) => string,
+    guard?: ResumeGuard,
+  ): Promise<void> {
+    const again = new HttpError(409, 'run_not_waiting', `Run ${runId} is already being resumed`)
+    const resume = (): Promise<void> => this.#resume(target, runId, patch, prompt, guard?.check)
+    return this.exclusive(`${target.ini.dir}#run:${runId}`, again, () => (guard ? this.exclusive(guard.key, guard.busy, resume) : resume()))
+  }
+
+  async #resume(
+    target: RunTarget, runId: string, patch: Partial<RunRecord>, prompt: (decisions: ReturnType<typeof runDecisions>) => string,
+    check?: (doc: InitiativeDoc) => void,
+  ): Promise<void> {
+    const waiting = (doc: InitiativeDoc): RunRecord => {
+      const run = findRun(doc, runId)
+      if (run.outcome !== 'needs_owner') throw new HttpError(409, 'run_not_waiting', `Run ${runId} is ${run.outcome}, not waiting for the owner`)
+      check?.(doc)
+      return run
+    }
+    waiting(await readInitiative(target.ini.dir))
     const decisions = runDecisions(await readReview(target.ini.dir), runId)
     const pending = pendingBlocking(decisions)
     if (pending.length) throw new HttpError(409, 'decisions_pending', `${pending.length} blocking decision(s) of this run are still open`)
     await this.requireReady()
-    const next: RunRecord = { ...run, ...patch, outcome: 'running', ended_at: null, validation_retry: false }
-    await updateInitiative(target.ini.dir, (d) => upsertRun(d, next))
-    this.#launch(target, next, prompt(decisions), true)
+    let next: RunRecord | null = null
+    await updateInitiative(target.ini.dir, (d) => {
+      next = { ...waiting(d), ...patch, outcome: 'running', ended_at: null, validation_retry: false }
+      return upsertRun(d, next)
+    })
+    this.#launch(target, next!, prompt(decisions), true)
     this.#changed(target)
   }
 

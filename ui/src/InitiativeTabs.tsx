@@ -139,7 +139,13 @@ export function ResearchTab({ id, view, sandbox }: TabProps) {
 function RunCard({ id, view, run }: { id: TabProps['id']; view: InitiativeView; run: RunRecord }) {
   const act = useAction()
   const [log, setLog] = useState<string | null>(null)
+  // Disabled while its request is in flight: a double click never sends two resumes (final review I1).
+  const [resuming, setResuming] = useState(false)
   const resumable = canResume(view, run)
+  const resume = (): void => {
+    setResuming(true)
+    void act(() => api.resumeRun(id, run.id), 'Resumed').finally(() => setResuming(false))
+  }
   return (
     <div className="slicecard" data-run={run.id}>
       <div className="shead">
@@ -153,7 +159,7 @@ function RunCard({ id, view, run }: { id: TabProps['id']; view: InitiativeView; 
       <div className="row">
         {run.outcome === 'running' ? <button className="btn bad" onClick={() => void act(() => api.stopRun(id, run.id), 'Stopping…')}>Stop</button> : null}
         {run.outcome === 'needs_owner' ? (
-          <button className="btn pri" disabled={!resumable} title={resumable ? '' : "Decide or dismiss the run's blocking decisions first"} onClick={() => void act(() => api.resumeRun(id, run.id), 'Resumed')}>Resume</button>
+          <button className="btn pri" disabled={!resumable || resuming} title={resumable ? '' : "Decide or dismiss the run's blocking decisions first"} onClick={resume}>Resume</button>
         ) : null}
         <button className="btn" onClick={() => void act(async () => setLog((await api.initiativeRunLog(id, run.id)).text))}>Show log</button>
       </div>

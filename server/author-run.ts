@@ -68,9 +68,13 @@ async function launchAuthor(service: InitiativeRunService, target: RunTarget, sl
   return service.begin(target, { kind: 'author', slice: sliceId, change }, authorPrompt(doc, slice, notes, change, decisions), { sliceId, notes, change })
 }
 
-export async function resumeAuthor(service: InitiativeRunService, target: RunTarget, runId: string): Promise<void> {
-  authorRunning(await readInitiative(target.ini.dir))
-  await service.resumeRun(target, runId, {}, (decisions) => buildResumePrompt(decisions, 'Continue writing the change with these choices.'))
+// Resume takes the same exclusive key as Propose and re-checks for a running author on the locked
+// document, so a Resume and a Propose never run two authors at once (final review I1).
+export function resumeAuthor(service: InitiativeRunService, target: RunTarget, runId: string): Promise<void> {
+  const busy = new HttpError(409, 'author_running', 'An author run of this initiative is already starting')
+  return service.resumeRun(target, runId, {}, (decisions) => buildResumePrompt(decisions, 'Continue writing the change with these choices.'), {
+    key: `${target.ini.dir}#author`, busy, check: authorRunning,
+  })
 }
 
 const setChange = (sliceId: string, change: string | null) => (doc: InitiativeDoc): InitiativeDoc => ({

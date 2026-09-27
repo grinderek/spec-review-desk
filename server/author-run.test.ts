@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defaultChangeName, resumeAuthor, slugify, startAuthor } from './author-run.ts'
 import { dismissDecision } from './decision-model.ts'
 import { EventBus } from './events.ts'
@@ -9,7 +9,7 @@ import { git } from './git.ts'
 import { type InitiativeDoc, readInitiative, updateInitiative, upsertRun } from './initiative-store.ts'
 import { readReview, updateReview } from './review-store.ts'
 import { FINISHERS } from './run-kinds.ts'
-import { InitiativeRunService } from './run-service.ts'
+import { InitiativeRunService, runPaths } from './run-service.ts'
 import { FAKE_OPENSPEC, resetFakeClaude } from './testing/fake-claude-path.ts'
 import { FakeSandbox } from './testing/fake-sandbox.ts'
 import { FEATURE, NEW_STEPS_MD, SPEC_MD } from './testing/fixtures.ts'
@@ -132,6 +132,60 @@ describe('author runs', () => {
     expect(second.claude).toMatchObject({ resume: true, sessionId: run.session })
     expect(second.claude.prompt).toContain(`- ${raised!.id} (Business or calendar age?): dismissed — Use business hours.`)
     expect(second.room).toBe(s.sandbox.runs[0]!.room)
+  })
+
+  // Final review I1: a double-clicked Resume must never start a second attempt of the waiting run —
+  // with DockerSandbox the loser's teardown killed the winner's container and wiped its session.
+  async function waitingAuthor(s: Awaited<ReturnType<typeof setup>>) {
+    const blocking = { id: 'basis', question: 'Business or calendar age?', scope: { kind: 'change' }, options: [option('business'), option('calendar')], recommended: 'business', blocking: true }
+    await writeFile(path.join(tmp, 'replies.json'), JSON.stringify([
+      { match: 'Continue writing the change', reply: reply() },
+      { match: 'Slice s1', reply: reply({ status: 'needs_owner', answer: 'Need the age basis.', decisions: [blocking] }) },
+    ]))
+    process.env.FAKE_CLAUDE_REPLIES_FILE = path.join(tmp, 'replies.json')
+    const run = await startAuthor(s.service, s.target, 's1', {})
+    await s.service.settled(run.id)
+    const [raised] = (await readReview(s.dir)).decisions
+    await updateReview(s.dir, (d) => dismissDecision(d, raised!.id, 'Use business hours.', INITIATIVE_AT))
+    return run
+  }
+
+  it('starts exactly one attempt when Resume is pressed twice at once, and keeps the session until it ends', async () => {
+    const s = await setup()
+    const run = await waitingAuthor(s)
+    process.env.FAKE_CLAUDE_HANG_MATCH = 'Continue writing the change'
+    process.env.FAKE_CLAUDE_HANG_COUNT_FILE = path.join(tmp, 'hung')
+    const results = await Promise.allSettled([resumeAuthor(s.service, s.target, run.id), resumeAuthor(s.service, s.target, run.id)])
+    expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])
+    expect(results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!.reason).toMatchObject({ status: 409, code: 'run_not_waiting' })
+    await expect(resumeAuthor(s.service, s.target, run.id)).rejects.toMatchObject({ status: 409, code: 'run_not_waiting' })
+    await vi.waitFor(() => expect(s.sandbox.runs).toHaveLength(2))
+    const paths = runPaths(s.wt, run)
+    expect((await stat(paths.sessions)).isDirectory()).toBe(true)
+    expect(s.sandbox.cleaned).toEqual([])
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'running' })
+
+    await s.service.stop(s.target, run.id)
+    await s.service.settled(run.id)
+    expect(s.sandbox.runs).toHaveLength(2)
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'stopped' })
+  })
+
+  it('never lets a Resume overlap a Propose: one author per initiative', async () => {
+    const s = await setup()
+    const run = await waitingAuthor(s)
+    await updateInitiative(s.dir, (d) => ({ ...d, plan: { ...d.plan, slices: [...d.plan.slices, { id: 's3', title: 'Invoices', scope: 'Bills.', depends_on: [], change: null }] } }))
+    process.env.FAKE_CLAUDE_MODE = 'hang'
+    delete process.env.FAKE_CLAUDE_REPLIES_FILE
+    const [proposed, resumed] = await Promise.allSettled([startAuthor(s.service, s.target, 's3', {}), resumeAuthor(s.service, s.target, run.id)])
+    expect(proposed.status).toBe('fulfilled')
+    expect(resumed).toMatchObject({ status: 'rejected', reason: { code: 'author_running' } })
+    await expect(resumeAuthor(s.service, s.target, run.id)).rejects.toMatchObject({ code: 'author_running' })
+    expect((await readInitiative(s.dir)).runs.find((r) => r.id === run.id)).toMatchObject({ outcome: 'needs_owner' })
+    const other = (proposed as PromiseFulfilledResult<Awaited<ReturnType<typeof startAuthor>>>).value
+    await vi.waitFor(() => expect(s.sandbox.runs).toHaveLength(2))
+    await s.service.stop(s.target, other.id)
+    await s.service.settled(other.id)
   })
 
   it('refuses a slice that is not ready, a second author, a bad or taken change name', async () => {
