@@ -2,6 +2,7 @@ import { fileURLToPath } from 'node:url'
 
 export const FAKE_CLAUDE = fileURLToPath(new URL('./fake-claude.mjs', import.meta.url))
 export const FAKE_DOCKER = fileURLToPath(new URL('./fake-docker.mjs', import.meta.url))
+export const FAKE_OPENSPEC = fileURLToPath(new URL('./fake-openspec.mjs', import.meta.url))
 
 const STRUCTURED_VARIABLES = [
   'FAKE_CLAUDE_REPLY', 'FAKE_CLAUDE_REPLY_FILE', 'FAKE_CLAUDE_REPLIES_FILE', 'FAKE_CLAUDE_STRUCTURED',
