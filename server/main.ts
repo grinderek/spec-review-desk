@@ -12,6 +12,7 @@ import { run } from './git.ts'
 import { QuestionService } from './questions.ts'
 import { registerApplyRoutes } from './routes/apply.ts'
 import { registerCorpusRoutes } from './routes/corpus.ts'
+import { registerDecisionRoutes } from './routes/decisions.ts'
 import { registerReadRoutes } from './routes/read.ts'
 import { registerReviewRoutes } from './routes/review.ts'
 import { registerRunnerRoutes } from './routes/runner.ts'
@@ -54,6 +55,7 @@ export async function startServer(opts: StartOptions) {
   const threadDeps = { questions, applyActive: (p: string) => apply.active(p), resumeApply }
   registerThreadRoutes(app, ctx, threadDeps)
   registerReviewRoutes(app, ctx, { questions })
+  registerDecisionRoutes(app, ctx, { questions })
   const runner = new RunnerService({ profiles: config.runners, bus })
   await Promise.all(config.runners.map((p) => runner.loadLast(p.worktreePath)))
   if (capabilities.docker) await Promise.all(config.runners.map((p) => runner.refreshUp(p.worktreePath).catch(() => false)))

@@ -2,6 +2,7 @@ import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { findPhrase, findScenario, loadChangeView } from '../change-view.ts'
+import { recordResolved } from '../decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { commitFiles, resetStaged } from '../git.ts'
@@ -106,8 +107,9 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const index = Number(c.req.param('msg'))
     const { summary } = ApplyBody.parse(await c.req.json())
     if (deps.applyActive(wt.path)) throw new HttpError(409, 'apply_running', 'An Apply run is active in this worktree — wait for it to finish.')
-    const patch = threadOf(await readReview(ref.dir), id).messages[index]?.patch
-    if (!patch || patch.state !== 'proposed') throw new HttpError(409, 'patch_not_proposed', 'Only a proposed patch can be applied')
+    const message = threadOf(await readReview(ref.dir), id).messages[index]
+    const patch = message?.patch
+    if (!message || !patch || patch.state !== 'proposed') throw new HttpError(409, 'patch_not_proposed', 'Only a proposed patch can be applied')
     const relDir = relDirOf(wt, ref)
     const vetted = await vetPatch(wt.path, relDir, patch.diff)
     if (vetted.state !== 'proposed') {
@@ -131,7 +133,8 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
       }
       throw error
     }
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { commit: sha }))
+    // Spec §6: the decisions this patch resolves become recorded only once its commit exists.
+    await updateReview(ref.dir, (doc) => recordResolved(updatePatch(doc, id, index, { commit: sha }), message.resolves ?? [], sha))
     changed(wt, ref)
     return c.json({ commit: sha })
   })
