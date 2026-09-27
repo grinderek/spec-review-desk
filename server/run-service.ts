@@ -300,14 +300,18 @@ export class InitiativeRunService {
           if (event.type === 'delta') {
             detector.feed(event.text)
             releaseNarration(narration.push(event.text))
-          } else if (event.type === 'json_delta') {
-            detector.feed(event.json)
           } else if (event.type === 'result') {
             resultEvent = event
+            detector.feed(event.sessionId)
             const meta = { type: 'result' as const, ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns }
             persist(meta)
             publish(meta)
           } else if (event.type === 'init' || event.type === 'message_start' || event.type === 'tool_start') {
+            // Every string that reaches the log or the bus feeds the detector, in stream order
+            // (round 5). Raw json_delta does not: the decoded answer_delta below is the answer's
+            // text — raw JSON would feed it twice and can hide pieces behind \u escapes.
+            if (event.type === 'init') detector.feed(event.sessionId)
+            if (event.type === 'tool_start') detector.feed(event.name)
             persist(event)
             publish(event)
           }

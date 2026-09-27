@@ -179,8 +179,9 @@ export class SecretHoldback {
   }
 }
 
-// Review round 4, finding 3: one detector per run concatenates the raw text of every channel
-// (narration, thinking, the structured reply) and every attempt in stream order, so a token split
+// Review rounds 4–5, finding 3: one detector per run concatenates the decoded text of every channel
+// (narration, thinking, the decoded answer, tool names, session ids — each string once, never the
+// raw reply JSON) and every attempt in stream order, so a token split
 // across channels or attempts is still seen whole. Only a bounded tail is kept: a token (or a full
 // sk-ant- key) that ends in new text started within the last max(token, 256) characters.
 // Accepted residual: pieces shorter than 8 characters deliberately interleaved across channels are

@@ -209,6 +209,56 @@ describe('planner runs', () => {
     expect(iniText).not.toContain(prefix)
   })
 
+  // Review round 5 (leak6 "I", leak7 "K"): sub-8-character pieces interleaved with another stream
+  // must still fail the run through the run-wide detector — the answer pieces arrive \u-escaped in
+  // the raw JSON, and tool names are a stream of their own. " done." keeps the end-of-text check out.
+  const PIECES8 = Array.from({ length: FAKE_TOKEN.length - 7 }, (_, i) => FAKE_TOKEN.slice(i, i + 8))
+  async function interleaved(lines: string[]) {
+    class Scripted extends FakeSandbox {
+      override run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
+        this.runs.push(spec)
+        for (const l of lines) opts.onLine(l)
+        return Promise.resolve({ code: 0, timedOut: false, stopped: false, error: null })
+      }
+    }
+    const s = await setup(new Scripted())
+    const run = await startPlanner(s.service, s.target)
+    await s.service.settled(run.id)
+    const doc = await readInitiative(s.dir)
+    expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
+    expect(doc.runs[0]!.notes).toContain('claude setup-token')
+    expect(doc.plan.status).toBe('none')
+    const surfaces = [
+      await readFile(path.join(s.repo, run.log), 'utf8'), (await s.service.log(s.target, run.id)).text,
+      JSON.stringify(s.events.filter((e) => e.topic === `irun:${run.id}`)), JSON.stringify(doc),
+    ]
+    for (const text of surfaces) {
+      expect(text).not.toContain(FAKE_TOKEN)
+      expect(PIECES8.filter((p) => text.includes(p))).toEqual([])
+    }
+  }
+  const pieces6 = FAKE_TOKEN.match(/.{1,6}/g) ?? []
+  const narrationLine = (text: string) => streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } })
+
+  it('fails a token interleaved narration <-> \\u-escaped answer JSON in pieces under 8 characters (review round 5, I)', async () => {
+    const odd = `${pieces6.filter((_, i) => i % 2 === 1).join('')} ok.`
+    const full = JSON.stringify(reply({ answer: odd }))
+    const head = '{"answer":"'
+    const esc = (p: string) => `\\u${p.charCodeAt(0).toString(16).padStart(4, '0')}${p.slice(1)}`
+    const json = (partial: string) => streamEvent({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: partial } })
+    const lines = [streamEvent({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', name: 'StructuredOutput', id: 't' } }), json(head)]
+    pieces6.forEach((p, i) => lines.push(i % 2 ? json(esc(p)) : narrationLine(p)))
+    lines.push(narrationLine(' done.'), json(` ok.${full.slice(head.length + odd.length)}`))
+    await interleaved([...lines, resultEvent({ structured_output: reply({ answer: odd }) })])
+  })
+
+  it('fails a token interleaved narration <-> tool names in pieces under 8 characters (review round 5, K)', async () => {
+    const lines = pieces6.map((p, i) => (i % 2
+      ? streamEvent({ type: 'content_block_start', index: 10 + i, content_block: { type: 'tool_use', name: p, id: `x${i}` } })
+      : narrationLine(p)))
+    await interleaved([...lines, narrationLine(' done.'), resultEvent({ structured_output: reply() })])
+  })
+
   it('redacts a secret in the container error before it reaches the run notes (review Important #2)', async () => {
     const s = await setup()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
