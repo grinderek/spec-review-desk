@@ -81,6 +81,17 @@ function chooseReply() {
   return JSON.parse(JSON.stringify(scriptedReply()).replaceAll('$DECISION_ID', decisionId))
 }
 
+// Spec B: the sandboxed author writes files. FAKE_CLAUDE_WRITES_FILE is a JSON array of
+// {match, files}; the first entry whose match is in the prompt is written under FAKE_CLAUDE_OUT.
+if (process.env.FAKE_CLAUDE_WRITES_FILE && process.env.FAKE_CLAUDE_OUT) {
+  const hit = JSON.parse(readFileSync(process.env.FAKE_CLAUDE_WRITES_FILE, 'utf8')).find((entry) => prompt.includes(entry.match))
+  for (const [rel, body] of Object.entries(hit?.files ?? {})) {
+    const file = path.join(process.env.FAKE_CLAUDE_OUT, rel)
+    mkdirSync(path.dirname(file), { recursive: true })
+    writeFileSync(file, body)
+  }
+}
+
 const streamEvent = (event) => emit({ type: 'stream_event', event, session_id: id })
 
 if (mode === 'hang') {
