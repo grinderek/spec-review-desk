@@ -29,6 +29,13 @@ export interface WorktreeSummary { id: string; path: string; branch: string | nu
 export interface ChangesResponse { repos: { repo: string; worktrees: WorktreeSummary[] }[] }
 export type Section = 'scenarios' | 'phrases'
 export interface Capabilities { claude: boolean; docker: boolean }
+export interface NewDecisionBody {
+  question: string
+  scope: { kind: 'scenario'; key: string } | { kind: 'change' }
+  blocking: boolean
+  options: { id: string; label: string; consequence: string }[]
+}
+export type DecideResponse = { status: 'recorded'; commit: string } | { status: 'decided'; threadId: string }
 
 const base = ({ wt, name }: ChangeId): string => `/api/changes/${wt}/${encodeURIComponent(name)}`
 type Ok = { ok: boolean }
@@ -66,4 +73,10 @@ export const api = {
   reapply: (id: ChangeId) => request<{ run: ApplyRun }>('POST', `${base(id)}/reapply`),
   runLog: (id: ChangeId, runId: string) => request<{ run: ApplyRun; text: string }>('GET', `${base(id)}/runs/${runId}/log`),
   runEventsUrl: (id: ChangeId, runId: string) => `${base(id)}/runs/${runId}/events`,
+  addDecision: (id: ChangeId, body: NewDecisionBody) => request<{ id: string }>('POST', `${base(id)}/decisions`, body),
+  decide: (id: ChangeId, decisionId: string, body: { option: string | null; note: string }) =>
+    request<DecideResponse>('POST', `${base(id)}/decisions/${decisionId}/decide`, body),
+  dismissDecision: (id: ChangeId, decisionId: string, reason: string) => request<Ok>('POST', `${base(id)}/decisions/${decisionId}/dismiss`, { reason }),
+  reattachDecision: (id: ChangeId, decisionId: string, to: string) => request<Ok>('POST', `${base(id)}/decisions/${decisionId}/reattach`, { to }),
+  resumeApply: (id: ChangeId, runId: string) => request<Ok>('POST', `${base(id)}/apply/resume`, { runId }),
 }

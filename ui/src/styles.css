@@ -162,3 +162,27 @@ table.list td { padding: 8px; border-bottom: 1px solid var(--line); vertical-ali
 .md code { font-family: var(--mono); font-size: 12px; background: var(--sunk); padding: 0 4px; border-radius: 3px; }
 .md pre.doc { margin: 0 0 8px; }
 .msg .body .md { white-space: normal; }
+.p-d-open, .p-block { background: var(--warn-soft); color: var(--warn); }
+.p-d-decided { background: var(--accent-soft); color: var(--accent); }
+.p-d-recorded { background: var(--ok-soft); color: var(--ok); }
+.p-d-dismissed { background: var(--sunk); color: var(--muted); }
+.p-d-orphaned { background: var(--bad-soft); color: var(--bad); }
+.p-dopen { background: var(--decision-soft); color: var(--decision); border: 0; }
+h4.inline { margin: 0 6px 0 0; font-size: 13px; color: var(--ink); }
+.dcard { border: 1px solid var(--line); border-left: 4px solid var(--decision); border-radius: 6px; padding: 8px 10px; margin: 8px 0; background: var(--panel); display: grid; gap: 4px; }
+.dcard.d-recorded, .dcard.d-dismissed { border-left-color: var(--line-strong); }
+.dhead { display: flex; gap: 6px; align-items: baseline; flex-wrap: wrap; }
+.dform { display: grid; gap: 6px; margin-top: 4px; }
+.dopts { border: 0; margin: 0; padding: 0; display: grid; gap: 4px; }
+.dopt { display: flex; gap: 8px; align-items: flex-start; border: 1px solid var(--line); border-radius: 5px; padding: 6px 8px; cursor: pointer; }
+.dopt .cons { display: block; color: var(--muted); font-size: 12.5px; }
+.star { color: var(--warn); }
+.dform textarea, .dnew textarea, .dnew input, .dnew select, .dcard select { width: 100%; border: 1px solid var(--line-strong); border-radius: 5px; padding: 5px 8px; background: var(--panel); color: var(--ink); font: inherit; }
+.dform textarea { min-height: 44px; resize: vertical; }
+.doutcome { font-size: 12.5px; color: var(--muted); }
+.dnew { display: grid; gap: 6px; border: 1px dashed var(--line-strong); border-radius: 6px; padding: 10px; margin-bottom: 12px; }
+.dnew .optrow { display: grid; grid-template-columns: 1fr 2fr auto; gap: 6px; }
+.dnew .check { display: flex; gap: 6px; align-items: center; font-size: 12.5px; }
+.dnew .check input { width: auto; }
+.invalid { border: 1px solid var(--bad-soft); border-radius: 6px; padding: 6px 10px; margin-top: 6px; display: grid; gap: 4px; }
+.resume { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 8px; }

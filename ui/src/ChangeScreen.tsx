@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { api, type Capabilities, type ChangeId } from './api.ts'
 import type { PanelTarget } from './App.tsx'
 import { ChangeHeader } from './ChangeHeader.tsx'
+import { isActive } from './decision-view.ts'
 import { DecisionsTab } from './DecisionsTab.tsx'
 import { DocTab } from './DocTab.tsx'
 import { PhrasesTab } from './PhrasesTab.tsx'
@@ -17,15 +18,15 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
   const runner = useQuery({ queryKey: ['runner', id.wt], queryFn: () => api.runner(id.wt) })
   const [tab, setTab] = useState<TabId>('scenarios')
   const [focusKey, setFocusKey] = useState<string | null>(null)
+  const [focusDecision, setFocusDecision] = useState<string | null>(null)
   if (change.isLoading) return <p className="empty">Loading {id.name}…</p>
   if (change.error || !change.data) return <div className="banner bad">{change.error instanceof Error ? change.error.message : 'Change not found'}</div>
   const view = change.data
   const runnerState = runner.data?.state ?? null
-  const decisionCount = view.features.reduce((n, f) => n + f.scenarios.reduce((m, s) => m + s.decisions.length, 0), 0)
   const tabs: [TabId, string, number | null][] = [
     ['scenarios', 'Scenarios', view.features.reduce((n, f) => n + f.scenarios.length, 0)],
     ['phrases', 'New phrases', view.phrases.length],
-    ['decisions', 'Decisions', decisionCount],
+    ['decisions', 'Decisions', view.decisions.filter(isActive).length],
     ['proposal', 'Proposal', null],
     ['verification', 'Verification', view.review.apply_runs.length || null],
     ['kitchen', 'Kitchen', null],
@@ -43,7 +44,9 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
       <div className="tabpanel">
         {tab === 'scenarios' ? <ScenariosTab id={id} view={view} corpus={corpus.data} runner={runnerState} setPanel={setPanel} focusKey={focusKey} /> : null}
         {tab === 'phrases' ? <PhrasesTab id={id} view={view} setPanel={setPanel} /> : null}
-        {tab === 'decisions' ? <DecisionsTab view={view} onGoto={(key) => { setTab('scenarios'); setFocusKey(key) }} /> : null}
+        {tab === 'decisions' ? (
+          <DecisionsTab id={id} view={view} focusDecision={focusDecision} setPanel={setPanel} onGoto={(key) => { setTab('scenarios'); setFocusKey(key) }} />
+        ) : null}
         {tab === 'proposal' ? <DocTab title="proposal.md" text={view.docs.proposal} /> : null}
         {tab === 'verification' ? <VerificationTab id={id} view={view} runner={runnerState} setPanel={setPanel} /> : null}
         {tab === 'kitchen' ? <KitchenTab view={view} /> : null}
