@@ -1,4 +1,5 @@
 import type { Context, Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { resumeAuthor, startAuthor } from '../author-run.ts'
@@ -8,15 +9,15 @@ import { HttpError } from '../errors.ts'
 import { commitPaths, initiativeCommitMessage } from '../initiative-git.ts'
 import { type CreateInput, createInitiative } from '../initiative-create.ts'
 import { findRun, INITIATIVE_FILE, readInitiative, updateInitiative } from '../initiative-store.ts'
-import { findInitiative, listInitiatives, loadInitiativeView, sliceStatuses, summarizeInitiative } from '../initiatives.ts'
-import { acceptDraft, discardDraft, type IncomingFile, readRepoFile, setDomains, uploadInputs } from '../inputs.ts'
+import { listInitiatives, loadInitiativeView, sliceStatuses, summarizeInitiative } from '../initiatives.ts'
+import { acceptDraft, discardDraft, type IncomingFile, MAX_TOTAL_INPUT_BYTES, readRepoFile, setDomains, uploadInputs } from '../inputs.ts'
 import { startPlanner } from '../planner-run.ts'
 import { resumeResearch, startResearch } from '../research-run.ts'
 import { nowIso, readReview } from '../review-store.ts'
 import type { InitiativeRunService, RunTarget } from '../run-service.ts'
 import type { Sandbox } from '../sandbox.ts'
 import { approvePlan, editPlan } from '../slice-plan.ts'
-import { resolveWorktree } from './resolve.ts'
+import { publishInitiativeChanged, resolveInitiativeTarget } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
 
 export interface InitiativeRouteDeps { runs: InitiativeRunService; sandbox: Sandbox }
@@ -54,13 +55,19 @@ async function uploads(form: Form): Promise<IncomingFile[]> {
   return Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()), source: { kind: 'upload' as const } })))
 }
 
+// Spec B §7's 100 MB-per-initiative cap is enforced again here, before Hono buffers the body: a
+// small margin over the field/file-content cap covers the multipart boundaries and non-file
+// fields (name, title, brief, …) that ride along with the files. Reuses the inputs_too_large
+// code/message of the post-buffering check in inputs.ts so the two are indistinguishable to a caller.
+const uploadBodyLimit = bodyLimit({
+  maxSize: MAX_TOTAL_INPUT_BYTES + 1024 * 1024,
+  onError: (c) => c.json({ error: { code: 'inputs_too_large', message: 'The inputs of one initiative may not exceed 100 MB' } }, 413),
+})
+
 export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: InitiativeRouteDeps): void {
   const base = '/api/initiatives/:wt/:name'
-  const target = async (c: Context): Promise<RunTarget> => {
-    const wt = await resolveWorktree(ctx, c.req.param('wt')!)
-    return { wt, ini: await findInitiative(wt, c.req.param('name')!) }
-  }
-  const changed = (t: RunTarget) => ctx.bus.publish('initiative', { worktreeId: t.wt.id, name: t.ini.name })
+  const target = (c: Context): Promise<RunTarget> => resolveInitiativeTarget(ctx, c)
+  const changed = (t: RunTarget) => publishInitiativeChanged(ctx, t)
   const trailer = ctx.config.commitTrailer
 
   app.get('/api/sandbox/status', async (c) => c.json(await deps.sandbox.status()))
@@ -79,7 +86,7 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
     return c.json({ initiatives: summaries, repos, defaultBase: ctx.config.initiativeBase })
   })
 
-  app.post('/api/initiatives', async (c) => {
+  app.post('/api/initiatives', uploadBodyLimit, async (c) => {
     const form = (await c.req.parseBody({ all: true })) as Form
     const fields = CreateFields.parse({ ...Object.fromEntries(Object.keys(form).map((k) => [k, text(form, k)])) })
     const where: CreateInput['where'] = fields.where === 'new'
@@ -98,7 +105,7 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
     return c.json(await loadInitiativeView(t.wt, t.ini))
   })
 
-  app.post(`${base}/inputs`, async (c) => {
+  app.post(`${base}/inputs`, uploadBodyLimit, async (c) => {
     const t = await target(c)
     const json = (c.req.header('content-type') ?? '').includes('application/json')
     const files = json

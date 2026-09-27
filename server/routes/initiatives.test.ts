@@ -11,7 +11,7 @@ import { InitiativeRunService } from '../run-service.ts'
 import { FAKE_OPENSPEC, resetFakeClaude } from '../testing/fake-claude-path.ts'
 import { FakeSandbox } from '../testing/fake-sandbox.ts'
 import { FEATURE, NEW_STEPS_MD, SPEC_MD } from '../testing/fixtures.ts'
-import { call, callForm, testContext } from '../testing/http.ts'
+import { call, callForm, TEST_PORT, TEST_TOKEN, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
 import { registerInitiativeDecisionRoutes } from './initiative-decisions.ts'
 import { registerInitiativeRoutes } from './initiatives.ts'
@@ -31,6 +31,25 @@ async function setup() {
   registerInitiativeRoutes(app, ctx, { runs, sandbox })
   registerInitiativeDecisionRoutes(app, ctx)
   return { hub, repo, app, runs, sandbox }
+}
+
+// A request whose declared Content-Length exceeds the multipart ceiling, without an actual
+// oversized body: Hono's bodyLimit reads the header and refuses before touching the stream, so
+// this exercises the pre-buffering refusal cheaply (no 100 MB allocation in the test process).
+async function oversizedPost(app: Awaited<ReturnType<typeof setup>>['app'], url: string) {
+  const res = await app.request(`http://127.0.0.1:${TEST_PORT}${url}`, {
+    method: 'POST',
+    headers: {
+      host: `127.0.0.1:${TEST_PORT}`,
+      origin: `http://127.0.0.1:${TEST_PORT}`,
+      cookie: `sr_token=${TEST_TOKEN}`,
+      'content-type': 'multipart/form-data; boundary=x',
+      'content-length': String(200 * 1024 * 1024),
+    },
+    body: 'tiny',
+  })
+  const text = await res.text()
+  return { status: res.status, json: text ? JSON.parse(text) : null }
 }
 
 async function create(app: Awaited<ReturnType<typeof setup>>['app']) {
@@ -162,6 +181,18 @@ describe('initiative routes', () => {
     const refused = await call(app, 'POST', `/api/initiatives/${json.worktreeId}/health-score/plan/run`)
     expect(refused.status).toBe(409)
     expect(refused.json.error.code).toBe('sandbox_unavailable')
+  })
+
+  it('refuses an oversized multipart body on create and on inputs before buffering it (413 inputs_too_large)', async () => {
+    const { app } = await setup()
+    const created = await oversizedPost(app, '/api/initiatives')
+    expect(created.status).toBe(413)
+    expect(created.json.error.code).toBe('inputs_too_large')
+
+    const { json } = await create(app)
+    const oversizedInput = await oversizedPost(app, `/api/initiatives/${json.worktreeId}/health-score/inputs`)
+    expect(oversizedInput.status).toBe(413)
+    expect(oversizedInput.json.error.code).toBe('inputs_too_large')
   })
 
   it('refuses to approve the plan while a planner run of it is still running, then allows it once the planner settles', async () => {

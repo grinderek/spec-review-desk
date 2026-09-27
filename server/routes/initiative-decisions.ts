@@ -3,11 +3,10 @@ import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { addDecisions, dismissDecision, ownerDecision } from '../decision-model.ts'
 import { decideInitiativeDecision } from '../initiative-decisions.ts'
-import { findInitiative } from '../initiatives.ts'
 import { OptionSchema } from '../protocol.ts'
 import { nowIso, updateReview } from '../review-store.ts'
 import type { RunTarget } from '../run-service.ts'
-import { resolveWorktree } from './resolve.ts'
+import { publishInitiativeChanged, resolveInitiativeTarget } from './resolve.ts'
 
 // Sub-project A's decision routes, addressed to an initiative (spec B §9): every initiative
 // decision is about the whole initiative (`scope: {kind: change}`).
@@ -24,11 +23,8 @@ const Dismiss = z.object({ reason: z.string().trim().min(1).max(400) })
 
 export function registerInitiativeDecisionRoutes(app: Hono, ctx: AppContext): void {
   const base = '/api/initiatives/:wt/:name/decisions'
-  const target = async (c: Context): Promise<RunTarget> => {
-    const wt = await resolveWorktree(ctx, c.req.param('wt')!)
-    return { wt, ini: await findInitiative(wt, c.req.param('name')!) }
-  }
-  const changed = (t: RunTarget) => ctx.bus.publish('initiative', { worktreeId: t.wt.id, name: t.ini.name })
+  const target = (c: Context): Promise<RunTarget> => resolveInitiativeTarget(ctx, c)
+  const changed = (t: RunTarget) => publishInitiativeChanged(ctx, t)
 
   app.post(base, async (c) => {
     const t = await target(c)
