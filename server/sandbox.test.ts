@@ -111,6 +111,13 @@ describe('DockerSandbox.run', () => {
     expect(await running).toMatchObject({ timedOut: false, stopped: true })
     expect((await calls()).filter((c) => c.args[0] === 'kill').map((c) => c.args[1])).toEqual(['sr-r_0000abcd', 'sr-r_0000abcd'])
   })
+
+  it('does not carry a stop mark from an earlier out-of-band stop into a later attempt of the same run id', async () => {
+    const sandbox = new DockerSandbox(config())
+    await sandbox.stop('r_0000abcd') // no attempt in flight yet — the mark must not linger
+    const outcome = await sandbox.run(await runSpec(), { timeoutMs: 10_000, onLine: () => undefined })
+    expect(outcome).toMatchObject({ stopped: false, code: 0 })
+  })
 })
 
 describe('DockerSandbox.cleanup', () => {

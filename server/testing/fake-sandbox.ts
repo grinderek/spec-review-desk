@@ -27,6 +27,9 @@ export class FakeSandbox implements Sandbox {
   }
 
   run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
+    // A stop() between two attempts of the same run id (a validation retry, an owner resume) must
+    // not mark THIS attempt stopped: clear any stale mark before the attempt begins.
+    this.#stopped.delete(spec.runId)
     this.runs.push(spec)
     return new Promise((resolve) => {
       const child = spawn(this.claudeBin, [...claudeArgs(spec.claude), ...(spec.extraArgs ?? [])], {

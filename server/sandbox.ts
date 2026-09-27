@@ -93,6 +93,9 @@ export class DockerSandbox implements Sandbox {
   }
 
   async run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
+    // A stop() between two attempts of the same run id (a validation retry, an owner resume) must
+    // not mark THIS attempt stopped: clear any stale mark before the attempt begins.
+    this.#stopped.delete(spec.runId)
     const token = await this.token()
     if (!token) return { code: null, timedOut: false, stopped: false, error: `no CLAUDE_CODE_OAUTH_TOKEN in ${this.config.envFile}` }
     const envFile = path.join(spec.runDir, 'agent.env')

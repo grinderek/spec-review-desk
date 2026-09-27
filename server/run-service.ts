@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, chmod, mkdir, readFile, stat, writeFile } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { StructuredStream } from './answer-reader.ts'
 import { readEvents } from './apply-outcome.ts'
@@ -156,7 +156,9 @@ export class InitiativeRunService {
   #launch(target: RunTarget, run: RunRecord, prompt: string, resume: boolean): void {
     const follow = this.#attempt(target, run, prompt, resume).catch(async (error: unknown) => {
       console.error(error)
-      await this.#final(target, run, 'failed', `The run broke: ${error instanceof Error ? error.message : String(error)}`)
+      await this.#final(target, run, 'failed', `The run broke: ${error instanceof Error ? error.message : String(error)}`).catch(
+        (finalError: unknown) => console.error(finalError),
+      )
     })
     this.#follows.set(run.id, follow)
   }
@@ -166,6 +168,7 @@ export class InitiativeRunService {
     const doc = await readInitiative(target.ini.dir)
     const webFetch = run.kind === 'research' && run.phase === 'read' && run.web_fetch === true
     const tools = agentTools(run.kind, webFetch)
+    const token = await sandbox.token()
     const claude: ClaudeRunSpec = {
       bin: 'claude', cwd: WORK_IN, sessionId: run.session, resume, model: config.model, allowedTools: tools.allowed,
       disallowedTools: tools.disallowed, permissionMode: tools.permissionMode, appendSystemPrompt: await readFile(RULES[run.kind], 'utf8'),
@@ -176,6 +179,10 @@ export class InitiativeRunService {
     const offset = await stat(paths.log).then((s) => s.size, () => 0)
     const stream = new StructuredStream()
     let writes: Promise<void> = Promise.resolve()
+    // Spec §5.2/§10: the token must never sit unredacted on disk or reach the UI live, even for the
+    // seconds before the attempt ends — redact every line before it is written or published. The
+    // scan runs on the RAW line (sawSecret), since by the time it is written it is already safe.
+    let sawSecret = false
     const outcome = await sandbox.run(
       {
         runId: run.id, runDir: paths.runDir, room: paths.room, out: paths.out, sessions: paths.sessions,
@@ -184,8 +191,10 @@ export class InitiativeRunService {
       {
         timeoutMs: config.sandbox.timeoutMs,
         onLine: (line) => {
-          writes = writes.then(() => appendFile(paths.log, `${line}\n`))
-          const event = parseStreamLine(line)
+          if (findSecrets(line, token).length) sawSecret = true
+          const safeLine = redactSecrets(line, token)
+          writes = writes.then(() => appendFile(paths.log, `${safeLine}\n`))
+          const event = parseStreamLine(safeLine)
           if (!event) return
           bus.publish(`irun:${run.id}`, { type: 'event', event })
           for (const derived of stream.feed(event)) bus.publish(`irun:${run.id}`, { type: 'event', event: derived })
@@ -194,15 +203,14 @@ export class InitiativeRunService {
     )
     await writes
     const text = (await readFile(paths.log).catch(() => Buffer.alloc(0))).subarray(offset).toString('utf8')
-    await this.#finish(target, run, paths, text, outcome)
+    await this.#finish(target, run, paths, text, outcome, token, sawSecret)
   }
 
-  async #finish(target: RunTarget, run: RunRecord, paths: RunPaths, text: string, outcome: Awaited<ReturnType<Sandbox['run']>>): Promise<void> {
-    const token = await this.deps.sandbox.token()
-    if (findSecrets(text, token).length) {
-      await writeFile(paths.log, redactSecrets(await readFile(paths.log, 'utf8'), token))
-      return this.#final(target, run, 'failed', ROTATE_HINT, ['a secret appeared in the agent output'])
-    }
+  async #finish(
+    target: RunTarget, run: RunRecord, paths: RunPaths, text: string, outcome: Awaited<ReturnType<Sandbox['run']>>,
+    token: string | null, sawSecret: boolean,
+  ): Promise<void> {
+    if (sawSecret) return this.#final(target, run, 'failed', ROTATE_HINT, ['a secret appeared in the agent output'])
     if (outcome.stopped) return this.#final(target, run, 'stopped', 'Stopped by the owner.')
     if (outcome.timedOut) return this.#final(target, run, 'failed', `Timed out after ${Math.round(this.deps.config.sandbox.timeoutMs / 60_000)} min.`)
     const result = [...readEvents(text)].reverse().find((e): e is ResultEvent => e.type === 'result')
@@ -236,10 +244,15 @@ export class InitiativeRunService {
     target: RunTarget, run: RunRecord, outcome: RunRecord['outcome'], notes: string | null, problems?: string[],
     mutate?: (doc: InitiativeDoc) => InitiativeDoc,
   ): Promise<void> {
+    // notes/problems can carry container stderr or a bare exception message — neither is scanned
+    // by the stream-line scan above, so redact them here, the one place every outcome is recorded.
+    const token = await this.deps.sandbox.token()
+    const safeNotes = notes === null ? null : redactSecrets(notes, token)
+    const safeProblems = problems ? problems.map((p) => redactSecrets(p, token)) : undefined
     await updateInitiative(target.ini.dir, (d) => {
       const base = mutate ? mutate(d) : d
       const current = base.runs.find((r) => r.id === run.id) ?? run
-      return upsertRun(base, { ...current, outcome, notes, ended_at: nowIso(this.#now()), ...(problems ? { problems } : {}) })
+      return upsertRun(base, { ...current, outcome, notes: safeNotes, ended_at: nowIso(this.#now()), ...(safeProblems ? { problems: safeProblems } : {}) })
     })
   }
 

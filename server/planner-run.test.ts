@@ -1,7 +1,7 @@
 import { mkdir, mkdtemp, readFile, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { EventBus } from './events.ts'
 import { git } from './git.ts'
 import { REPLY_SCHEMA_ARGS } from './initiative-protocol.ts'
@@ -121,6 +121,37 @@ describe('planner runs', () => {
     const log = await readFile(path.join(s.repo, run.log), 'utf8')
     expect(log).not.toContain(FAKE_TOKEN)
     expect(log).toContain('[REDACTED]')
+    // The token must never reach the live UI stream either — redaction happens per line, before
+    // publish, not only in a post-hoc rewrite of the finished log (review Important #1).
+    const published = JSON.stringify(s.events.filter((e) => e.topic === `irun:${run.id}`))
+    expect(published).not.toContain(FAKE_TOKEN)
+  })
+
+  it('redacts a secret in the container error before it reaches the run notes (review Important #2)', async () => {
+    const s = await setup()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    s.sandbox.run = async () => ({ code: 1, timedOut: false, stopped: false, error: `container crashed: ${FAKE_TOKEN}` })
+    const run = await startPlanner(s.service, s.target)
+    await s.service.settled(run.id)
+    const doc = await readInitiative(s.dir)
+    expect(doc.runs[0]!.outcome).toBe('failed')
+    expect(doc.runs[0]!.notes).not.toContain(FAKE_TOKEN)
+    expect(doc.runs[0]!.notes).toContain('[REDACTED]')
+    errorSpy.mockRestore()
+  })
+
+  it('redacts a secret in an exception message before it reaches the run notes (review Important #2)', async () => {
+    const s = await setup()
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    s.sandbox.run = () => { throw new Error(`crashed while spawning: ${FAKE_TOKEN}`) }
+    const run = await startPlanner(s.service, s.target)
+    await s.service.settled(run.id)
+    const doc = await readInitiative(s.dir)
+    expect(doc.runs[0]!.outcome).toBe('failed')
+    expect(doc.runs[0]!.notes).not.toContain(FAKE_TOKEN)
+    expect(doc.runs[0]!.notes).toContain('The run broke')
+    expect(doc.runs[0]!.notes).toContain('[REDACTED]')
+    errorSpy.mockRestore()
   })
 
   it('stops a running planner', async () => {
