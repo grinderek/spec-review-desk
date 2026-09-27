@@ -11,7 +11,8 @@ function LiveLog({ id, runId }: { id: ChangeId; runId: string }) {
   const [text, setText] = useState('')
   useEventStream(api.runEventsUrl(id, runId), (message) => {
     const data = message.data as { type?: string; event?: { type?: string; text?: string } } | null
-    if (data?.type === 'event' && data.event?.type === 'delta') setText((current) => current + (data.event?.text ?? ''))
+    const kind = data?.event?.type
+    if (data?.type === 'event' && (kind === 'delta' || kind === 'answer_delta')) setText((current) => current + (data.event?.text ?? ''))
   })
   return <pre className="doc">{text || 'Waiting for the agent…'}</pre>
 }

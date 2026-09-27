@@ -13,14 +13,15 @@ export function Sidebar({ data, selected, onSelect }: { data: ChangesResponse | 
               <div className="wt" title={wt.path}>{wt.branch ?? 'detached'} · {wt.head}</div>
               {wt.changes.map((change) => {
                 const current = selected?.wt === wt.id && selected.name === change.name
-                const tone = change.ready ? 'ok' : change.openThreads ? 'warn' : ''
+                const tone = change.ready ? 'ok' : change.openThreads || change.blockingDecisions ? 'warn' : ''
+                const blocking = change.blockingDecisions ? ` · ${change.blockingDecisions} blocking decision${change.blockingDecisions > 1 ? 's' : ''}` : ''
                 return (
                   <button key={change.name} className="chg" aria-current={current ? 'true' : undefined} onClick={() => onSelect({ wt: wt.id, name: change.name })}>
                     <span className="n">{change.name}</span>
                     <span className={`dot ${tone}`} />
                     <span className="meta">
                       {change.archived ? 'archived · ' : ''}
-                      {change.approved}/{change.total} scenarios · {change.openThreads} open{change.approvedAt ? ' · approval recorded' : ''}
+                      {change.approved}/{change.total} scenarios · {change.openThreads} open{blocking}{change.approvedAt ? ' · approval recorded' : ''}
                     </span>
                     <span className="bar"><i style={{ width: `${change.total ? Math.round((change.approved / change.total) * 100) : 0}%` }} /></span>
                   </button>

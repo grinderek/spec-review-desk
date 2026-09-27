@@ -3,6 +3,7 @@ import type { ChangeView } from '../../server/change-view.ts'
 import type { CorpusReport } from '../../server/corpus.ts'
 import type { RunnerState } from '../../server/runner.ts'
 import { api, type Capabilities, type ChangeId, type Section } from './api.ts'
+import { gateCounts } from './decision-view.ts'
 import { useAction } from './feedback.tsx'
 
 function RunnerStat({ id, runner, docker }: { id: ChangeId; runner: RunnerState | null; docker: boolean }) {
@@ -68,6 +69,7 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
   const approved = scenarios.filter((s) => s.effective.status === 'approved').length
   const phrasesApproved = view.phrases.filter((p) => p.effective.status === 'approved').length
   const openThreads = view.review.threads.filter((t) => t.status !== 'resolved' && t.anchor !== 'apply').length
+  const decisionCounts = gateCounts(view.decisions)
   const running = view.review.apply_runs.some((r) => r.outcome === 'running')
   const drift = corpus?.drift ?? []
   const recorded = view.review.approved_at !== null
@@ -80,6 +82,7 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
         <div><div className="k">Scenarios approved</div><div className="v">{approved} / {scenarios.length}</div></div>
         <div><div className="k">New phrases approved</div><div className="v">{phrasesApproved} / {view.phrases.length}</div></div>
         <div><div className="k">Open threads</div><div className="v">{openThreads}</div></div>
+        <div><div className="k">Open decisions</div><div className="v">{decisionCounts.open} · {decisionCounts.blocking} blocking</div></div>
         <RunnerStat id={id} runner={runner} docker={capabilities?.docker ?? false} />
       </div>
       <div className="gatebar">

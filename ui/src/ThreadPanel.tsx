@@ -1,13 +1,32 @@
 import { useQuery } from '@tanstack/react-query'
 import { type FormEvent, type KeyboardEvent, useState } from 'react'
+import type { ChangeView } from '../../server/change-view.ts'
 import type { Thread } from '../../server/review-store.ts'
 import { api, type ChangeId } from './api.ts'
 import type { PanelTarget } from './App.tsx'
+import { DecisionCard } from './DecisionCard.tsx'
+import { resumeState } from './decision-view.ts'
 import { useEventStream } from './events.ts'
 import { useAction } from './feedback.tsx'
 import { stripDiff } from './keys.ts'
 import { Markdown } from './Markdown.tsx'
 import { PatchCard } from './PatchCard.tsx'
+
+function ApplyResume({ id, view, runId }: { id: ChangeId; view: ChangeView; runId: string }) {
+  const act = useAction()
+  const run = view.review.apply_runs.find((r) => r.id === runId)
+  const state = resumeState(view.decisions, runId)
+  if (!run || run.outcome !== 'needs_owner' || view.archived || state.blocking === 0) return null
+  const running = view.review.apply_runs.some((r) => r.outcome === 'running')
+  return (
+    <div className="resume">
+      <span className="hash">{state.settled} of {state.blocking} blocking decision{state.blocking > 1 ? 's' : ''} recorded or dismissed</span>
+      <button className="btn pri" disabled={!state.ready || running} onClick={() => void act(() => api.resumeApply(id, runId), 'Apply resumed with your decisions')}>
+        Resume with decisions
+      </button>
+    </div>
+  )
+}
 
 function titleOf(thread: Thread): string {
   if (thread.anchor === 'scenario') return thread.ref.split('::').slice(1).join('::')
@@ -26,6 +45,7 @@ export function ThreadPanel({ id, target, onTarget }: { id: ChangeId; target: Pa
   const archived = view?.archived ?? false
   const thread = target.kind === 'thread' ? view?.review.threads.find((t) => t.id === target.id) ?? null : null
   const applyRunning = view?.review.apply_runs.some((r) => r.outcome === 'running') ?? false
+  const scenarioKeys = view?.features.flatMap((f) => f.scenarios.map((s) => s.key)) ?? []
 
   useEventStream(thread ? api.threadEventsUrl(id, thread.id) : null, (message) => {
     const data = message.data as { type?: string; text?: string } | null
@@ -85,11 +105,27 @@ export function ThreadPanel({ id, target, onTarget }: { id: ChangeId; target: Pa
             <div className="who"><b>{m.role === 'owner' ? 'you' : 'agent'}</b>{new Date(m.at).toLocaleTimeString()}</div>
             {m.note ? <div className="mnote">{m.note}</div> : null}
             <div className="body">{m.role === 'agent' ? <Markdown text={stripDiff(m.text) || '(patch only)'} /> : m.text}</div>
+            {m.invalid ? (
+              <div className="invalid">
+                <div className="fail">{m.invalid.issues.map((issue, i) => <div key={i}>{issue}</div>)}</div>
+                <details>
+                  <summary>Raw reply</summary>
+                  <pre className="doc">{m.invalid.raw}</pre>
+                </details>
+              </div>
+            ) : null}
             {m.patch ? <PatchCard id={id} threadId={thread.id} index={index} message={m} disabled={applyRunning} archived={archived} /> : null}
+            {(m.decision_ids ?? []).map((decisionId) => {
+              const decision = view?.decisions.find((d) => d.id === decisionId)
+              return decision ? (
+                <DecisionCard key={decisionId} id={id} decision={decision} archived={archived} scenarioKeys={scenarioKeys} onThread={(t) => onTarget({ kind: 'thread', id: t })} />
+              ) : null
+            })}
           </div>
         ))}
         {live ? <div className="msg"><div className="who"><b>agent</b>streaming</div><div className="body"><Markdown text={stripDiff(live)} /></div></div> : null}
         {!live && phase ? <div className="typing">{phase === 'queued' ? 'Queued — waiting for the agent…' : 'The agent is reading the change…'}</div> : null}
+        {thread?.anchor === 'apply' && view ? <ApplyResume id={id} view={view} runId={thread.ref} /> : null}
       </div>
       {archived ? null : (
         <form className="compose" onSubmit={(e) => void send(e)}>

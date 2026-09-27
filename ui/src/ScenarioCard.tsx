@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import type { ScenarioWithStatus } from '../../server/change-view.ts'
+import type { DecisionView, ScenarioWithStatus } from '../../server/change-view.ts'
 import type { CorpusState } from '../../server/corpus.ts'
 import type { Effective, Thread } from '../../server/review-store.ts'
 import type { ScenarioRun } from '../../server/run-messages.ts'
@@ -32,9 +32,11 @@ export interface ScenarioCardProps {
   readOnly: boolean
   onToggle: () => void
   onAsk: () => void
+  decisions: DecisionView[]
+  onDecision: (decisionId: string) => void
 }
 
-export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selected, readOnly, onToggle, onAsk }: ScenarioCardProps) {
+export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selected, readOnly, onToggle, onAsk, decisions, onDecision }: ScenarioCardProps) {
   const act = useAction()
   const [diff, setDiff] = useState<DiffLine[] | null>(null)
   const [reason, setReason] = useState<string | null>(null)
@@ -55,6 +57,11 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
         </button>
         {s.decisions.length ? <span className="pill p-dec">{s.decisions.length} decision{s.decisions.length > 1 ? 's' : ''}</span> : null}
         {thread ? <span className="pill p-thread">thread · {thread.status}</span> : null}
+        {decisions.length ? (
+          <button className="pill p-dopen" onClick={() => onDecision(decisions[0]!.id)}>
+            {decisions.length > 1 ? `${decisions.length} decisions open` : 'decision open'}
+          </button>
+        ) : null}
         <RunPill run={run} corpus={corpus} />
         <StatusPill effective={s.effective} />
       </div>

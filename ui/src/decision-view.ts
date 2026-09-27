@@ -64,6 +64,21 @@ export function outcomeLine(d: DecisionView): string | null {
   return null
 }
 
+export function gateCounts(decisions: readonly DecisionView[]): { open: number; blocking: number } {
+  const active = decisions.filter(isActive)
+  return { open: active.length, blocking: active.filter((d) => d.blocking).length }
+}
+
+export const scenarioOpen = (decisions: readonly DecisionView[], key: string): DecisionView[] =>
+  decisions.filter((d) => isActive(d) && d.scope.kind === 'scenario' && d.scope.key === key)
+
+// Spec §8: "Resume with decisions" is enabled once every blocking decision of the run is closed.
+export function resumeState(decisions: readonly DecisionView[], runId: string): { blocking: number; settled: number; ready: boolean } {
+  const blocking = decisions.filter((d) => d.source.kind === 'apply' && d.source.run === runId && d.blocking)
+  const settled = blocking.filter((d) => d.status === 'recorded' || d.status === 'dismissed').length
+  return { blocking: blocking.length, settled, ready: settled === blocking.length }
+}
+
 // Option ids must be slugs (server/protocol.ts SLUG); labels may be in any language.
 export function optionIds(labels: readonly string[]): string[] {
   return labels.reduce<string[]>((ids, label, i) => {

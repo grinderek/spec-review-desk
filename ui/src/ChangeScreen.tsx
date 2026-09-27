@@ -22,6 +22,10 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
   if (change.isLoading) return <p className="empty">Loading {id.name}…</p>
   if (change.error || !change.data) return <div className="banner bad">{change.error instanceof Error ? change.error.message : 'Change not found'}</div>
   const view = change.data
+  const openDecision = (decisionId: string) => {
+    setTab('decisions')
+    setFocusDecision(decisionId)
+  }
   const runnerState = runner.data?.state ?? null
   const tabs: [TabId, string, number | null][] = [
     ['scenarios', 'Scenarios', view.features.reduce((n, f) => n + f.scenarios.length, 0)],
@@ -42,7 +46,7 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
         ))}
       </div>
       <div className="tabpanel">
-        {tab === 'scenarios' ? <ScenariosTab id={id} view={view} corpus={corpus.data} runner={runnerState} setPanel={setPanel} focusKey={focusKey} /> : null}
+        {tab === 'scenarios' ? <ScenariosTab id={id} view={view} corpus={corpus.data} runner={runnerState} setPanel={setPanel} focusKey={focusKey} onDecision={openDecision} /> : null}
         {tab === 'phrases' ? <PhrasesTab id={id} view={view} setPanel={setPanel} /> : null}
         {tab === 'decisions' ? (
           <DecisionsTab id={id} view={view} focusDecision={focusDecision} setPanel={setPanel} onGoto={(key) => { setTab('scenarios'); setFocusKey(key) }} />

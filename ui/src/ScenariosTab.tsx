@@ -6,6 +6,7 @@ import type { ChangeId } from './api.ts'
 import type { PanelTarget } from './App.tsx'
 import { useAction } from './feedback.tsx'
 import { api } from './api.ts'
+import { scenarioOpen } from './decision-view.ts'
 import { corpusKey, cssId, useKeys } from './keys.ts'
 import { ScenarioCard } from './ScenarioCard.tsx'
 import { StepLines } from './StepLines.tsx'
@@ -20,9 +21,10 @@ export interface ScenariosTabProps {
   runner: RunnerState | null
   setPanel: (target: PanelTarget) => void
   focusKey: string | null
+  onDecision: (decisionId: string) => void
 }
 
-export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey }: ScenariosTabProps) {
+export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey, onDecision }: ScenariosTabProps) {
   const act = useAction()
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Set<string>>(new Set())
@@ -113,6 +115,8 @@ export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey }: S
               readOnly={view.archived}
               onToggle={() => toggle(s.key)}
               onAsk={() => ask(s)}
+              decisions={scenarioOpen(view.decisions, s.key)}
+              onDecision={onDecision}
             />
           ))}
         </section>

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DecisionView } from '../../server/change-view.ts'
-import { history, inbox, optionIds, outcomeLine, scopeLabel, sourceLabel } from './decision-view.ts'
+import { gateCounts, history, inbox, optionIds, outcomeLine, resumeState, scenarioOpen, scopeLabel, sourceLabel } from './decision-view.ts'
 
 const make = (over: Partial<DecisionView>): DecisionView => ({
   id: 'd_1', agent_id: null, source: { kind: 'owner' }, question: 'Q?', scope: { kind: 'change' }, options: [], recommended: null,
@@ -48,6 +48,22 @@ describe('history', () => {
       { kind: 'decisions_md', date: '2026-09-24', title: 'Ship behind a flag?', text: 'Note: Yes.', commit: null, key: null },
       { kind: 'gherkin', date: '2026-09-23', title: 'A', text: 'rows weigh by age.', commit: 'abc1234', key: 'features/x.feature::A' },
     ])
+  })
+})
+
+describe('counts', () => {
+  it('counts the gate, a scenario pill and an Apply resume', () => {
+    const run = { kind: 'apply' as const, run: 'r_1' }
+    const items = [
+      make({ id: 'a', blocking: true, scope: { kind: 'scenario', key: 'k' }, source: run }),
+      make({ id: 'b', status: 'decided', scope: { kind: 'scenario', key: 'k' } }),
+      make({ id: 'c', status: 'recorded', blocking: true, source: run }),
+      make({ id: 'd', status: 'dismissed', scope: { kind: 'scenario', key: 'k' } }),
+    ]
+    expect(gateCounts(items)).toEqual({ open: 2, blocking: 1 })
+    expect(scenarioOpen(items, 'k').map((d) => d.id)).toEqual(['a', 'b'])
+    expect(resumeState(items, 'r_1')).toEqual({ blocking: 2, settled: 1, ready: false })
+    expect(resumeState(items.filter((d) => d.id !== 'a'), 'r_1')).toEqual({ blocking: 1, settled: 1, ready: true })
   })
 })
 
