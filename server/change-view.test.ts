@@ -2,9 +2,10 @@ import { writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { findScenario, loadChangeView, summarize } from './change-view.ts'
+import { addDecisions, ownerDecision } from './decision-model.ts'
 import { discover, listChanges, Registry, type WorktreeInfo } from './discovery.ts'
 import { headSha } from './git.ts'
-import { emptyReview, setEntry, writeReview } from './review-store.ts'
+import { emptyReview, setEntry, updateReview, writeReview } from './review-store.ts'
 import { makeRepo } from './testing/repo.ts'
 
 async function setup() {
@@ -71,5 +72,26 @@ describe('loadChangeView', () => {
     const view = await loadChangeView(wt, ref, { withCommits: false })
     expect(findScenario(view, "features/thread_state.feature::The founder's reply resolves a waiting thread")?.kind).toBe('Scenario')
     expect(findScenario(view, 'nope')).toBeUndefined()
+  })
+
+  it('serves decisions with an orphaned flag, the decisions.md log and sidebar counts; blocking ones block readiness', async () => {
+    const { wt, ref } = await setup()
+    const at = '2026-09-24T09:00:00.000Z'
+    const outline = 'features/thread_state.feature::A waiting thread is weighted by its age'
+    const keep = ownerDecision({ question: 'Weight?', scope: { kind: 'scenario', key: outline }, blocking: true, options: [] }, at, () => 'd_00000001')
+    const gone = ownerDecision({ question: 'Gone?', scope: { kind: 'scenario', key: 'features/gone.feature::Gone' }, blocking: false, options: [] }, at, () => 'd_00000002')
+    await updateReview(ref.dir, (d) => addDecisions(d, [keep, gone]))
+    await writeFile(
+      path.join(ref.dir, 'decisions.md'),
+      '# Owner decisions — add-thread-state\n\n## 2026-09-24 — Ship behind a flag?\nDecision: —\nNote: Yes.\nSource: owner · d_00000003\n',
+    )
+    const view = await loadChangeView(wt, ref, { withCommits: false })
+    expect(view.decisions.map((d) => [d.id, d.orphaned])).toEqual([['d_00000001', false], ['d_00000002', true]])
+    expect(view.decisionLog).toEqual([
+      { date: '2026-09-24', question: 'Ship behind a flag?', decision: '', note: 'Yes.', source: 'owner · d_00000003', id: 'd_00000003' },
+    ])
+    expect(view.docs.decisions).toContain('# Owner decisions')
+    expect(view.readiness.reasons).toContain('1 blocking decision open')
+    expect(summarize(view)).toMatchObject({ openDecisions: 2, blockingDecisions: 1 })
   })
 })

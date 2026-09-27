@@ -1,18 +1,21 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { type Catalog, emptyCatalog, makeClassifier, parseCatalog, type Phrase } from './catalog.ts'
+import { isActive } from './decision-model.ts'
+import { DECISIONS_FILE, type DecisionLogEntry, parseDecisionLog } from './decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { FeatureParseError, type FeatureView, parseFeature, type ScenarioView } from './gherkin.ts'
 import { findCommitIntroducing, isDirty } from './git.ts'
 import { checkJoinKey, type JoinKeyReport, specTitles } from './joinkey.ts'
 import { computeReadiness, type Readiness } from './readiness.ts'
 import {
-  type Effective, effectiveStatus, emptyReview, orphanKeys, readReview, REVIEW_FILE, type ReviewDoc, ReviewFileError,
+  type DecisionRecord, type Effective, effectiveStatus, emptyReview, orphanKeys, readReview, REVIEW_FILE, type ReviewDoc, ReviewFileError,
 } from './review-store.ts'
 
 export type ScenarioWithStatus = ScenarioView & { effective: Effective }
 export type FeatureWithStatus = Omit<FeatureView, 'scenarios'> & { scenarios: ScenarioWithStatus[] }
 export type PhraseView = Phrase & { effective: Effective; usedBy: number }
+export type DecisionView = DecisionRecord & { orphaned: boolean }
 
 export interface ChangeView {
   worktreeId: string
@@ -31,9 +34,11 @@ export interface ChangeView {
   readiness: Readiness
   orphans: { scenarios: string[]; phrases: string[] }
   review: ReviewDoc
+  decisions: DecisionView[]
+  decisionLog: DecisionLogEntry[]
   reviewErrors: string[] | null
   uncommittedReview: boolean
-  docs: { proposal: string | null; design: string | null; tasks: string | null; result: string | null }
+  docs: { proposal: string | null; design: string | null; tasks: string | null; result: string | null; decisions: string | null }
   errors: { file: string; message: string }[]
 }
 
@@ -45,6 +50,8 @@ export interface ChangeSummary {
   phrasesApproved: number
   phrasesTotal: number
   openThreads: number
+  openDecisions: number
+  blockingDecisions: number
   ready: boolean
   approvedAt: string | null
 }
@@ -136,10 +143,17 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
   const specFiles = await listFiles(path.join(ref.dir, 'specs'), '.md')
   const titles = (await Promise.all(specFiles.map(async (f) => specTitles(await readFile(path.join(ref.dir, 'specs', f), 'utf8'))))).flat()
   const joinKey = checkJoinKey(titles, scenarios.map((s) => s.title))
+  const scenarioKeys = new Set(scenarios.map((s) => s.key))
+  const decisions: DecisionView[] = review.decisions.map((d) => ({
+    ...d,
+    orphaned: d.scope.kind === 'scenario' && isActive(d) && !scenarioKeys.has(d.scope.key),
+  }))
+  const decisionsText = await readOptional(path.join(ref.dir, DECISIONS_FILE))
   const readiness = computeReadiness({
     scenarios: scenarios.map((s) => s.effective),
     phrases: phrases.map((p) => p.effective),
     threads: review.threads.filter((t) => t.anchor !== 'apply'),
+    decisions: review.decisions,
     joinKey,
     uncatalogued: steps.filter((s) => s.kind === 'uncatalogued').length,
     parseErrors: errors.length,
@@ -163,6 +177,8 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
     readiness,
     orphans: orphanKeys(review, scenarios.map((s) => s.key), proposed.phrases.map((p) => p.key)),
     review,
+    decisions,
+    decisionLog: decisionsText ? parseDecisionLog(decisionsText) : [],
     reviewErrors,
     uncommittedReview: await isDirty(wt.path, `${relDir}/${REVIEW_FILE}`),
     docs: {
@@ -170,6 +186,7 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
       design: await readOptional(path.join(ref.dir, 'design.md')),
       tasks: await readOptional(path.join(ref.dir, 'tasks.md')),
       result: await readOptional(path.join(ref.dir, 'RESULT.md')),
+      decisions: decisionsText,
     },
     errors,
   }
@@ -189,6 +206,8 @@ export function summarize(view: ChangeView): ChangeSummary {
     phrasesApproved: view.phrases.filter((p) => p.effective.status === 'approved').length,
     phrasesTotal: view.phrases.length,
     openThreads: view.review.threads.filter((t) => t.status !== 'resolved' && t.anchor !== 'apply').length,
+    openDecisions: view.decisions.filter(isActive).length,
+    blockingDecisions: view.decisions.filter((d) => d.blocking && isActive(d)).length,
     ready: view.readiness.ready,
     approvedAt: view.review.approved_at,
   }
