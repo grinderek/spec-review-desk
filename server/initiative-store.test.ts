@@ -27,6 +27,13 @@ describe('initiative names and paths', () => {
   it('places an initiative under openspec/initiatives', () => {
     expect(initiativeDir('/w', 'health-score')).toBe(path.join('/w', 'openspec', 'initiatives', 'health-score'))
     expect(() => initiativeDir('/w', '../x')).toThrow(/invalid initiative name/)
+    let error: unknown
+    try {
+      initiativeDir('/w', '../x')
+    } catch (caught) {
+      error = caught
+    }
+    expect(error).toMatchObject({ status: 422, code: 'invalid_name' })
   })
 })
 

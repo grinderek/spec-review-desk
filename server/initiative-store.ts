@@ -85,7 +85,7 @@ export class InitiativeFileError extends ReviewFileError {}
 export const isInitiativeName = (name: string): boolean => INITIATIVE_NAME.test(name)
 
 export function initiativeDir(worktreePath: string, name: string): string {
-  if (!isInitiativeName(name)) throw new HttpError(400, 'invalid_name', `invalid initiative name "${name}"`)
+  if (!isInitiativeName(name)) throw new HttpError(422, 'invalid_name', `invalid initiative name "${name}"`)
   return path.join(worktreePath, 'openspec', 'initiatives', name)
 }
 
