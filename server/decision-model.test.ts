@@ -125,3 +125,13 @@ describe('queries and the owner message', () => {
     expect(text).toContain(`List "${agent.id}" in resolves.`)
   })
 })
+
+describe('decisions raised by an initiative run (spec B, ruling 4)', () => {
+  it('keeps the run source and the requested domains, and finds them per run', () => {
+    const raised = decisionsFromReply([{ ...agentItem, scope: { kind: 'change' } }], { kind: 'run', run: 'r_9', agent: 'research' }, AT, ids)[0]!
+    const withDomains = { ...raised, requested_domains: ['developer.intuit.com'] }
+    const doc = addDecisions(emptyReview(), [withDomains])
+    expect(runDecisions(doc, 'r_9')).toEqual([withDomains])
+    expect(findDecision(doc, raised.id).source).toEqual({ kind: 'run', run: 'r_9', agent: 'research' })
+  })
+})

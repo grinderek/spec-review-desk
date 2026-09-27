@@ -1,9 +1,9 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { addDecisions, decideDecision, findDecision, ownerDecision } from './decision-model.ts'
 import {
-  appendDecisionEntry, type ChangeDecisionInput, commitChangeDecision, decisionCommitMessage, parseDecisionLog, renderDecisionEntry,
+  appendDecisionEntry, type ChangeDecisionInput, commitChangeDecision, decisionCommitMessage, parseDecisionLog, renderDecisionEntry, sourceLabel,
 } from './decisions-md.ts'
 import { git } from './git.ts'
 import { emptyReview, readReview, updateReview } from './review-store.ts'
@@ -150,5 +150,30 @@ describe('commitChangeDecision', () => {
     const { repo, input } = await setup()
     await expect(commitChangeDecision(input({ choice: { option: 'sometimes', note: '' } }))).rejects.toMatchObject({ code: 'unknown_option' })
     expect((await git(repo, ['status', '--porcelain'])).trim()).toBe('')
+  })
+})
+
+describe('initiative decisions (spec B)', () => {
+  it('labels a run source by its agent', () => {
+    expect(sourceLabel({ kind: 'run', run: 'r_1', agent: 'planner' })).toBe('planner run r_1')
+  })
+
+  it('commits extra files with the decision and restores them when the commit fails', async () => {
+    const { repo, dir, input } = await setup()
+    const extraFile = path.join(repo, 'extra.yaml')
+    await writeFile(extraFile, 'domains: []\n')
+    sh(repo, 'git', ['add', '-A'])
+    sh(repo, 'git', ['commit', '-q', '-m', 'extra'])
+    const extra = [{ file: extraFile, rel: 'extra.yaml', content: (before: string | null) => `${before ?? ''}# decided\n` }]
+    await writeFile(path.join(repo, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await expect(commitChangeDecision(input({ extra }))).rejects.toThrow(/git commit/)
+    expect(await readFile(extraFile, 'utf8')).toBe('domains: []\n')
+    expect((await git(repo, ['status', '--porcelain'])).trim()).toBe('')
+    await rm(path.join(repo, '.git/hooks/pre-commit'))
+    const { commit } = await commitChangeDecision(input({ extra }))
+    expect((await git(repo, ['show', '--name-only', '--format=', commit])).trim().split('\n').sort())
+      .toEqual(['extra.yaml', `${REL}/decisions.md`, `${REL}/review.yaml`])
+    expect(await readFile(extraFile, 'utf8')).toBe('domains: []\n# decided\n')
+    expect(findDecision(await readReview(dir), flag.id).status).toBe('recorded')
   })
 })

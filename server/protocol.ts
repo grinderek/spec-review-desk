@@ -88,7 +88,7 @@ function scenarioKeyHint(keys: ReadonlySet<string>): string {
   return `valid keys: ${shown}${more}`
 }
 
-function decisionIssues(d: ReplyDecision, at: string, earlierIds: readonly string[], keys: ReadonlySet<string>): string[] {
+export function decisionIssues(d: ReplyDecision, at: string, earlierIds: readonly string[], keys: ReadonlySet<string>): string[] {
   const ids = d.options.map((o) => o.id)
   return [
     ...(earlierIds.includes(d.id) ? [`${at}.id: "${d.id}" is used by another decision in this reply`] : []),

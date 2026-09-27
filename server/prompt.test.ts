@@ -123,3 +123,11 @@ describe('agent rules', () => {
     expect(await rules('apply.md')).toContain(KEY_RULE)
   })
 })
+
+describe('buildResumePrompt for initiative runs', () => {
+  it('takes the closing line of the run it resumes', () => {
+    const decided = decideDecision(addDecisions(emptyReview(), [flag]), 'd_00000002', { option: null, note: 'Yes.' }, AT)
+    expect(buildResumePrompt(decided.decisions, 'Continue the research with these choices.').split('\n').at(-1))
+      .toBe('Continue the research with these choices.')
+  })
+})

@@ -18,6 +18,7 @@ const orEmpty = (value: string): string => (value === '—' ? '' : value)
 export function sourceLabel(source: DecisionRecord['source']): string {
   if (source.kind === 'thread') return `thread ${source.id}`
   if (source.kind === 'apply') return `apply run ${source.run}`
+  if (source.kind === 'run') return `${source.agent} run ${source.run}`
   return 'owner'
 }
 
@@ -84,6 +85,9 @@ export interface ChangeDecisionInput {
   choice: DecisionChoiceInput
   trailer: string
   now: Date
+  // Spec B ruling 3: files committed together with the decision (the initiative.yaml that gains
+  // the approved research domains). `content` maps the file's current text to its new text.
+  extra?: readonly { file: string; rel: string; content: (before: string | null) => string }[]
 }
 
 // Runs entirely under the change's review lock (readReview/writeReview directly — updateReview
@@ -101,11 +105,17 @@ export function commitChangeDecision(input: ChangeDecisionInput): Promise<{ comm
     const record = findDecision(decided, input.decisionId)
     const beforeMd = await readOptional(mdFile)
     const beforeReview = await readOptional(reviewFile)
-    const files = [`${input.relDir}/${DECISIONS_FILE}`, `${input.relDir}/${REVIEW_FILE}`]
+    // Spec B ruling 3: files committed alongside decisions.md + review.yaml (e.g. the initiative's
+    // research.domains). Read before, written on success, restored under the same per-file guard
+    // as the other two on a failed commit.
+    const extra = input.extra ?? []
+    const beforeExtra = await Promise.all(extra.map((e) => readOptional(e.file)))
+    const files = [`${input.relDir}/${DECISIONS_FILE}`, `${input.relDir}/${REVIEW_FILE}`, ...extra.map((e) => e.rel)]
     let commit: string
     try {
       await writeFile(mdFile, appendDecisionEntry(beforeMd, input.changeName, renderDecisionEntry(record, at.slice(0, 10))))
       await writeReview(input.changeDir, recordDecision(decided, input.decisionId, { how: 'decisions_md', commit: null }))
+      for (const [i, e] of extra.entries()) await writeFile(e.file, e.content(beforeExtra[i] ?? null))
       commit = await commitFiles(input.cwd, files, decisionCommitMessage(input.changeName, record.question, input.trailer))
     } catch (error) {
       // Final review Minor 3 (ledger T5): each restore is guarded on its own so a failure restoring
@@ -114,6 +124,9 @@ export function commitChangeDecision(input: ChangeDecisionInput): Promise<{ comm
       await resetStaged(input.cwd, files).catch(() => undefined)
       await restore(mdFile, beforeMd).catch((restoreError: unknown) => console.error(`Failed to restore ${mdFile}:`, restoreError))
       await restore(reviewFile, beforeReview).catch((restoreError: unknown) => console.error(`Failed to restore ${reviewFile}:`, restoreError))
+      for (const [i, e] of extra.entries()) {
+        await restore(e.file, beforeExtra[i] ?? null).catch((restoreError: unknown) => console.error(`Failed to restore ${e.file}:`, restoreError))
+      }
       throw error
     }
     await writeReview(input.changeDir, setRecordedCommit(await readReview(input.changeDir), input.decisionId, commit))

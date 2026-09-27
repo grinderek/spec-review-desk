@@ -118,3 +118,18 @@ describe('decisions in review.yaml', () => {
     expect(await readReview(d)).toEqual(doc)
   })
 })
+
+describe('initiative decisions in review.yaml', () => {
+  it('round-trips a run source and requested domains', async () => {
+    const d = await dir()
+    const record: DecisionRecord = {
+      id: 'd_0000bbbb', agent_id: 'fetch-domains', source: { kind: 'run', run: 'r_1', agent: 'research' }, question: 'Read these pages?',
+      scope: { kind: 'change' },
+      options: [{ id: 'allow_all', label: 'All', consequence: 'Reads all.' }, { id: 'search_only', label: 'None', consequence: 'Search only.' }],
+      recommended: 'allow_all', blocking: true, status: 'open', choice: null, recorded: null, dismissed: null, created_at: 'now',
+      requested_domains: ['developer.intuit.com'],
+    }
+    await writeReview(d, { ...emptyReview(), decisions: [record] })
+    expect((await readReview(d)).decisions).toEqual([record])
+  })
+})

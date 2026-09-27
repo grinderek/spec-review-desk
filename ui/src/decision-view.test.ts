@@ -73,3 +73,9 @@ describe('optionIds', () => {
       .toEqual(['count_partial_days', 'uber_wert', 'count_partial_days_3', 'option_4'])
   })
 })
+
+describe('initiative run sources', () => {
+  it('names the agent and the run', () => {
+    expect(sourceLabel(make({ source: { kind: 'run', run: 'r_2', agent: 'author' } }))).toBe('raised by the author (run r_2)')
+  })
+})

@@ -46,6 +46,7 @@ export const scopeLabel = (d: Pick<DecisionView, 'scope'>): string =>
 export function sourceLabel(d: Pick<DecisionView, 'source'>): string {
   if (d.source.kind === 'thread') return 'raised in a thread'
   if (d.source.kind === 'apply') return `raised by Apply ${d.source.run}`
+  if (d.source.kind === 'run') return `raised by the ${d.source.agent} (run ${d.source.run})`
   return 'added by you'
 }
 

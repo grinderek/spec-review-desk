@@ -76,7 +76,7 @@ export function buildQuestionPrompt(input: QuestionPromptInput): string {
 
 // Spec §8: "Resume with decisions" tells the Apply agent what the owner chose for each decision of
 // its run.
-export function buildResumePrompt(decisions: readonly DecisionRecord[]): string {
+export function buildResumePrompt(decisions: readonly DecisionRecord[], closing = 'Continue the apply with these choices.'): string {
   const line = (d: DecisionRecord): string => {
     if (d.status === 'dismissed') return `- ${d.id} (${d.question}): dismissed — ${d.dismissed?.reason ?? ''}`
     if (d.status === 'open') return `- ${d.id} (${d.question}): still open and not blocking — continue without it`
@@ -88,5 +88,5 @@ export function buildResumePrompt(decisions: readonly DecisionRecord[]): string 
       : d.recorded?.how === 'decisions_md' ? ' Recorded in decisions.md.' : ''
     return `- ${d.id} (${d.question}): ${choice}${note}${where}`
   }
-  return ['The owner answered the decisions you raised:', ...decisions.map(line), '', 'Continue the apply with these choices.'].join('\n')
+  return ['The owner answered the decisions you raised:', ...decisions.map(line), '', closing].join('\n')
 }

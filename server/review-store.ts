@@ -59,6 +59,8 @@ const DecisionRecordSchema = z.object({
     z.object({ kind: z.literal('thread'), id: z.string() }),
     z.object({ kind: z.literal('apply'), run: z.string() }),
     z.object({ kind: z.literal('owner') }),
+    // Spec B ruling 4: raised by a research, planner or author run of an initiative.
+    z.object({ kind: z.literal('run'), run: z.string(), agent: z.enum(['research', 'planner', 'author']) }),
   ]),
   question: z.string(),
   scope: z.union([z.object({ kind: z.literal('scenario'), key: z.string() }), z.object({ kind: z.literal('change') })]),
@@ -70,6 +72,8 @@ const DecisionRecordSchema = z.object({
   recorded: z.object({ how: z.enum(['patch', 'decisions_md']), commit: z.string().nullable() }).nullable().default(null),
   dismissed: z.object({ reason: z.string(), at: z.string() }).nullable().default(null),
   created_at: z.string(),
+  // Spec B ruling 3: the hosts a research run's fetch-domains decision asks to read.
+  requested_domains: z.array(z.string()).optional(),
 })
 export const ReviewSchema = z.object({
   version: z.literal(1),

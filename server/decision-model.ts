@@ -124,7 +124,7 @@ export function recordResolved(doc: ReviewDoc, ids: readonly string[], commit: s
 }
 
 export const runDecisions = (doc: ReviewDoc, runId: string): DecisionRecord[] =>
-  doc.decisions.filter((d) => d.source.kind === 'apply' && d.source.run === runId)
+  doc.decisions.filter((d) => (d.source.kind === 'apply' || d.source.kind === 'run') && d.source.run === runId)
 
 export function ownerDecisionText(d: DecisionRecord, today: string): string {
   const option = d.options.find((o) => o.id === d.choice?.option)

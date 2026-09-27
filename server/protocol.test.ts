@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  AGENT_REPLY_SCHEMA_ARG, type AgentReply, agentReplyJsonSchema, normalizePatch, parseJsonObject, parseReply, type ReplyContext, type ReplyDecision,
-  retryPrompt, validateReply,
+  AGENT_REPLY_SCHEMA_ARG, type AgentReply, agentReplyJsonSchema, decisionIssues, normalizePatch, parseJsonObject, parseReply, type ReplyContext,
+  type ReplyDecision, retryPrompt, validateReply,
 } from './protocol.ts'
 
 const KEY = 'features/x.feature::A title'
@@ -140,5 +140,14 @@ describe('validateReply', () => {
 
   it('builds the retry prompt', () => {
     expect(retryPrompt(['a: x', 'b: y'])).toBe('Your reply did not pass validation: a: x; b: y. Reply again with the same schema.')
+  })
+})
+
+describe('decisionIssues (reused by the initiative agents)', () => {
+  it('checks one decision against earlier ids and the known scenario keys', () => {
+    expect(decisionIssues(decision({ recommended: 'x' }), 'decisions[0]', [], new Set())).toEqual([
+      'decisions[0].recommended: "x" is not one of the option ids (sqlite_path, postgres)',
+    ])
+    expect(decisionIssues(decision(), 'decisions[1]', ['storage'], new Set())).toEqual(['decisions[1].id: "storage" is used by another decision in this reply'])
   })
 })
