@@ -216,9 +216,10 @@ describe('planner runs', () => {
     const run = await startPlanner(s.service, s.target)
     await s.service.settled(run.id)
     const doc = await readInitiative(s.dir)
-    expect(doc.runs[0]!.outcome).toBe('failed')
+    // Round 4: a secret in the container error fails the run as a secret, before any notes are built from it.
+    expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
     expect(doc.runs[0]!.notes).not.toContain(FAKE_TOKEN)
-    expect(doc.runs[0]!.notes).toContain('[REDACTED]')
+    expect(doc.runs[0]!.notes).toContain('claude setup-token')
     errorSpy.mockRestore()
   })
 

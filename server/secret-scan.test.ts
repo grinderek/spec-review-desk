@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findSecrets, findSecretsInLine, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
+import { findSecrets, findSecretsInLine, maskDeep, redactSecrets, ROTATE_HINT, SecretDetector, SecretHoldback } from './secret-scan.ts'
 
 const TOKEN = 'sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'
 const OTHER = `sk-ant-api03-${'x'.repeat(24)}`
@@ -96,5 +96,72 @@ describe('findSecretsInLine', () => {
 
   it('finds nothing in clean JSON', () => {
     expect(findSecretsInLine(JSON.stringify({ ok: true, numTurns: 2 }), TOKEN)).toEqual([])
+  })
+})
+
+// Review round 4: the requirement covers the token "or any >= 8-char piece of it".
+describe('redactSecrets on token pieces', () => {
+  it('masks any piece of the token of 8 characters or more, wherever it sits', () => {
+    const out = redactSecrets(`a ${TOKEN.slice(0, 20)} b ${TOKEN.slice(15, 23)} c ${TOKEN.slice(30)}`, TOKEN)
+    expect(out).toBe('a [REDACTED] b [REDACTED] c [REDACTED]')
+    expect(redactSecrets(`short ${TOKEN.slice(20, 27)} stays`, TOKEN)).toBe(`short ${TOKEN.slice(20, 27)} stays`)
+  })
+
+  it('masks a trailing partial sk-ant- key of a finished text', () => {
+    expect(redactSecrets('the key sk-ant-api03-abc', null)).toBe('the key [REDACTED]')
+  })
+})
+
+describe('maskDeep', () => {
+  it('masks every string value of an object and reports whether a secret piece was masked', () => {
+    const masked = maskDeep({ type: 'tool_start', name: TOKEN, nested: [{ id: TOKEN.slice(10, 30) }], n: 2 }, TOKEN)
+    expect(masked).toEqual({ value: { type: 'tool_start', name: '[REDACTED]', nested: [{ id: '[REDACTED]' }], n: 2 }, secret: true })
+    expect(maskDeep({ type: 'init', sessionId: 's-1' }, TOKEN)).toEqual({ value: { type: 'init', sessionId: 's-1' }, secret: false })
+  })
+
+  it('masks the public sk-ant-oat01- prefix without counting it as a secret', () => {
+    expect(maskDeep({ text: 'tokens look like sk-ant-oat01-...' }, TOKEN)).toEqual({ value: { text: 'tokens look like [REDACTED]...' }, secret: false })
+  })
+})
+
+describe('SecretHoldback flush', () => {
+  it('masks a trailing partial prefix of the token cut off mid-stream (stop/timeout) and reports it', () => {
+    const holdback = new SecretHoldback(TOKEN)
+    holdback.push(`hello ${TOKEN.slice(0, 25)}`)
+    expect(holdback.flush()).toBe('hello [REDACTED]')
+    expect(holdback.sawSecret).toBe(true)
+  })
+
+  it('masks a trailing partial sk-ant- key cut off mid-stream', () => {
+    const holdback = new SecretHoldback(null)
+    holdback.push('key sk-ant-api03-abcdef')
+    expect(holdback.flush()).toBe('key [REDACTED]')
+    expect(holdback.sawSecret).toBe(true)
+  })
+
+  it('never splits a masked piece across two released slices', () => {
+    const holdback = new SecretHoldback(TOKEN)
+    let out = ''
+    const text = `${'x'.repeat(250)} ${TOKEN.slice(5, 40)} ${'y'.repeat(300)}`
+    for (const chunk of text.match(/.{1,7}/g) ?? []) out += holdback.push(chunk)
+    out += holdback.flush()
+    expect(out).toBe(`${'x'.repeat(250)} [REDACTED] ${'y'.repeat(300)}`)
+  })
+})
+
+// One detector per run: concatenates every channel and attempt in stream order.
+describe('SecretDetector', () => {
+  it('detects a token fed in small pieces, keeping only a bounded tail', () => {
+    const detector = new SecretDetector(TOKEN)
+    for (const chunk of `${'z'.repeat(1000)}${TOKEN}`.match(/.{1,5}/g) ?? []) detector.feed(chunk)
+    expect(detector.sawSecret).toBe(true)
+  })
+
+  it('detects a full sk-ant- key and stays quiet on clean text', () => {
+    const detector = new SecretDetector(null)
+    detector.feed('clean ')
+    expect(detector.sawSecret).toBe(false)
+    for (const chunk of OTHER.match(/.{1,3}/g) ?? []) detector.feed(chunk)
+    expect(detector.sawSecret).toBe(true)
   })
 })

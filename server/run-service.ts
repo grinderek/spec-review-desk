@@ -17,7 +17,7 @@ import { newId, nowIso, readReview } from './review-store.ts'
 import { assembleRoom, type RoomInput } from './room.ts'
 import type { Sandbox } from './sandbox.ts'
 import { agentTools, containerName, WORK_IN, WORK_OUT } from './sandbox-args.ts'
-import { findSecretsInLine, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
+import { findSecretsInLine, maskDeep, redactSecrets, ROTATE_HINT, SecretDetector, SecretHoldback } from './secret-scan.ts'
 
 // Spec B §4/§5: research, planner and author runs in the sandbox. One attempt = one container;
 // a validation retry (A §4) or an owner resume is a new attempt in the same session.
@@ -26,9 +26,13 @@ export interface RunPaths { runDir: string; room: string; out: string; sessions:
 // The run's own persisted log format (review round 3, finding 1): only holdback-released, already-
 // redacted text for the free-text channels (narration, thinking, the reconstructed answer), plus
 // text-free structural markers — never a raw stream-json line, and never the result's raw text or
-// structured payload (that lives only in memory for #finish, via the captured ResultEvent).
+// structured payload (that lives only in memory for #finish, via the captured ResultEvent). Every
+// entry is masked as a whole before it is written (review round 4). `attempt` and `answer_reset`
+// mark where a new answer starts, so log() serves only the latest one.
 type LogEntry =
   | { type: 'delta' | 'thinking' | 'answer'; text: string }
+  | { type: 'attempt'; resume: boolean }
+  | { type: 'answer_reset' }
   | { type: 'init'; sessionId: string }
   | { type: 'message_start' }
   | { type: 'tool_start'; index: number; name: string }
@@ -81,6 +85,8 @@ function thinkingDeltaText(line: string): string | null {
 export class InitiativeRunService {
   #follows = new Map<string, Promise<void>>()
   #starting = new Set<string>()
+  // One secret detector per run, shared by its attempts (review round 4, finding 3).
+  #detectors = new Map<string, { token: string | null; detector: SecretDetector }>()
 
   constructor(private readonly deps: RunDeps) {}
 
@@ -182,9 +188,23 @@ export class InitiativeRunService {
       }
     })
     const narration = entries.flatMap((e) => (e.type === 'delta' ? [e.text] : [])).join('')
-    const answer = entries.flatMap((e) => (e.type === 'answer' ? [e.text] : [])).join('')
+    // Only the latest answer: a validation retry, an owner resume or an answer_reset starts a new
+    // one (review round 4, finding 4); an attempt that streamed no answer keeps the previous one.
+    const answers = entries.reduce<string[]>(
+      (acc, e) => (e.type === 'attempt' || e.type === 'answer_reset' ? [...acc, ''] : e.type === 'answer' ? [...acc.slice(0, -1), `${acc.at(-1) ?? ''}${e.text}`] : acc),
+      [''],
+    )
+    const answer = answers.findLast((a) => a !== '') ?? ''
     const text = answer ? `${narration}${narration ? '\n\n' : ''}${answer}` : narration
     return { run, text: redactSecrets(text, await this.deps.sandbox.token()) }
+  }
+
+  #detector(runId: string, token: string | null): SecretDetector {
+    const existing = this.#detectors.get(runId)
+    if (existing?.token === token) return existing.detector
+    const detector = new SecretDetector(token)
+    this.#detectors.set(runId, { token, detector })
+    return detector
   }
 
   #changed(target: RunTarget): void {
@@ -228,16 +248,28 @@ export class InitiativeRunService {
     // line's JSON string values before scanning, so a \u-escaped secret cannot evade it.
     let sawSecret = false
     let resultEvent: ResultEvent | null = null
+    const detector = this.#detector(run.id, token)
     const narration = new SecretHoldback(token)
     const thinking = new SecretHoldback(token)
     let answer = new SecretHoldback(token)
+    // Every object written or published is masked as a whole — all its string values, not just the
+    // free-text ones (a tool name or session id can carry the token too, review round 4).
+    const masked = <T>(value: T): T => {
+      const result = maskDeep(value, token)
+      if (result.secret) sawSecret = true
+      return result.value
+    }
     const persist = (entry: LogEntry): void => {
-      writes = writes.then(() => appendFile(paths.log, `${JSON.stringify(entry)}\n`))
+      const safe = masked(entry)
+      writes = writes.then(() => appendFile(paths.log, `${JSON.stringify(safe)}\n`))
+    }
+    const publish = (event: object): void => {
+      bus.publish(`irun:${run.id}`, { type: 'event', event: masked(event) })
     }
     const releaseNarration = (safe: string): void => {
       if (!safe) return
       persist({ type: 'delta', text: safe })
-      bus.publish(`irun:${run.id}`, { type: 'event', event: { type: 'delta', text: safe } })
+      publish({ type: 'delta', text: safe })
     }
     const releaseThinking = (safe: string): void => {
       if (safe) persist({ type: 'thinking', text: safe })
@@ -245,8 +277,9 @@ export class InitiativeRunService {
     const releaseAnswer = (safe: string): void => {
       if (!safe) return
       persist({ type: 'answer', text: safe })
-      bus.publish(`irun:${run.id}`, { type: 'event', event: { type: 'answer_delta', text: safe } })
+      publish({ type: 'answer_delta', text: safe })
     }
+    persist({ type: 'attempt', resume })
     const outcome = await sandbox.run(
       {
         runId: run.id, runDir: paths.runDir, room: paths.room, out: paths.out, sessions: paths.sessions,
@@ -259,35 +292,45 @@ export class InitiativeRunService {
           const event = parseStreamLine(line)
           if (!event) {
             const text = thinkingDeltaText(line)
-            if (text !== null) releaseThinking(thinking.push(text))
+            if (text === null) return
+            detector.feed(text)
+            releaseThinking(thinking.push(text))
             return
           }
           if (event.type === 'delta') {
+            detector.feed(event.text)
             releaseNarration(narration.push(event.text))
+          } else if (event.type === 'json_delta') {
+            detector.feed(event.json)
           } else if (event.type === 'result') {
             resultEvent = event
-            persist({ type: 'result', ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns })
-            bus.publish(`irun:${run.id}`, { type: 'event', event: { type: 'result', ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns } })
+            const meta = { type: 'result' as const, ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns }
+            persist(meta)
+            publish(meta)
           } else if (event.type === 'init' || event.type === 'message_start' || event.type === 'tool_start') {
             persist(event)
-            bus.publish(`irun:${run.id}`, { type: 'event', event })
+            publish(event)
           }
           for (const derived of stream.feed(event)) {
             if (derived.type === 'answer_delta') {
+              detector.feed(derived.text)
               releaseAnswer(answer.push(derived.text))
             } else if (derived.type === 'answer_reset') {
+              answer.flush() // the superseded draft is dropped unreleased, but still scanned
               if (answer.sawSecret) sawSecret = true
               answer = new SecretHoldback(token)
-              bus.publish(`irun:${run.id}`, { type: 'event', event: derived })
+              persist(derived)
+              publish(derived)
             }
           }
         },
       },
     )
-    if (narration.sawSecret || thinking.sawSecret || answer.sawSecret) sawSecret = true
+    // flush() masks a partial token a stop or timeout cut off mid-stream and reports it (finding 2).
     releaseNarration(narration.flush())
     releaseThinking(thinking.flush())
     releaseAnswer(answer.flush())
+    if (narration.sawSecret || thinking.sawSecret || answer.sawSecret || detector.sawSecret) sawSecret = true
     await writes
     await this.#finish(target, run, paths, resultEvent, outcome, token, sawSecret)
   }
@@ -296,7 +339,11 @@ export class InitiativeRunService {
     target: RunTarget, run: RunRecord, paths: RunPaths, resultEvent: ResultEvent | null, outcome: Awaited<ReturnType<Sandbox['run']>>,
     token: string | null, sawSecret: boolean,
   ): Promise<void> {
-    if (sawSecret) return this.#final(target, run, 'failed', ROTATE_HINT, ['a secret appeared in the agent output'])
+    // The result's text/structured payload and the container error never reach the log or the bus,
+    // but they feed the finisher and the run notes: a piece of the token in any of them — even
+    // halves spread over two reply fields — fails the run before anything is written (round 4).
+    const inResult = maskDeep([outcome.error, resultEvent?.text, resultEvent?.structured], token).secret
+    if (sawSecret || inResult) return this.#final(target, run, 'failed', ROTATE_HINT, ['a secret appeared in the agent output'])
     if (outcome.stopped) return this.#final(target, run, 'stopped', 'Stopped by the owner.')
     if (outcome.timedOut) return this.#final(target, run, 'failed', `Timed out after ${Math.round(this.deps.config.sandbox.timeoutMs / 60_000)} min.`)
     if (!resultEvent?.ok) return this.#final(target, run, 'failed', outcome.error ?? resultEvent?.text ?? 'The agent ended without a result.')
@@ -346,7 +393,11 @@ export class InitiativeRunService {
   async #settle(target: RunTarget, run: RunRecord): Promise<void> {
     const current = findRun(await readInitiative(target.ini.dir), run.id)
     if (current.outcome === 'running') return
-    if (current.outcome !== 'needs_owner') await this.deps.sandbox.cleanup(run.id, runPaths(target.wt, run).runDir).catch((error: unknown) => console.error(error))
+    // A run waiting for the owner also keeps its secret detector: the resumed attempt continues it.
+    if (current.outcome !== 'needs_owner') {
+      this.#detectors.delete(run.id)
+      await this.deps.sandbox.cleanup(run.id, runPaths(target.wt, run).runDir).catch((error: unknown) => console.error(error))
+    }
     this.deps.bus.publish(`irun:${run.id}`, { type: 'done', outcome: current.outcome })
     this.#changed(target)
   }
