@@ -2,7 +2,8 @@
 
 Local review app for behavior-driven OpenSpec changes (`openspec/changes/*` with
 `schema: behavior-driven`), across every git worktree of the repos in `config.yaml`.
-Design: `docs/superpowers/specs/2026-09-23-spec-review-desk-design.md` (local, gitignored).
+Design: `docs/superpowers/specs/2026-09-23-spec-review-desk-design.md` and
+`docs/superpowers/specs/2026-09-24-spec-review-decisions-design.md` (local, gitignored).
 
 ## Run
 
@@ -22,12 +23,21 @@ Restarting the server issues a new token.
   scenario's text hash: any edit sends it back to pending, with a diff since approval.
 - Ask the change's agent (one `claude` session per change, opus, read-only tools). A proposed patch
   is applied only by "Apply & commit" → `docs(openspec): <change> — <summary> (owner decision)`.
-- "Record approval" when everything is approved and every thread resolved; then "Apply" runs
-  `/opsx:apply` detached with the allowlist from `config.yaml`. Stop, reply to `NEEDS_OWNER`,
-  and re-apply scenarios whose corpus copy differs.
+- Every agent replies with one JSON object (`claude --json-schema`, schema in `server/protocol.ts`),
+  validated again on the server; an invalid reply is retried once in the same session, then shown
+  with its issues and raw text.
+- Questions only the owner can answer arrive as **open decisions** (Decisions tab inbox, thread
+  cards, "decision open" pill, gate counter). A blocking decision keeps the change from being ready.
+  A scenario decision is recorded by the agent's patch (`# Owner decision …`, `resolves`); a decision
+  about the whole change is written by the Desk to `<change>/decisions.md` and committed with
+  `review.yaml`. "+ Open decision" adds one by hand; decisions are dismissed, never deleted.
+- "Record approval" when everything is approved, every thread resolved and no blocking decision
+  open; then "Apply" runs `/opsx:apply` detached with the allowlist from `config.yaml`. An Apply run
+  that needs the owner raises decisions; "Resume with decisions" continues it once they are recorded
+  or dismissed. Stop, and re-apply scenarios whose corpus copy differs.
 - Runs the cucumber corpus in the warm `nucleus-bdd` container on every file change.
 
-State lives in `openspec/changes/<name>/review.yaml` (committed with each decision). Run logs live in
+State lives in `openspec/changes/<name>/review.yaml` (committed with each decision) and `decisions.md`. Run logs live in
 `<worktree>/.spec-review/` (added to `.git/info/exclude` automatically).
 A patch commit's sha is written back into `review.yaml` after the commit that includes it, so
 `review.yaml` shows as modified in `git status` until the next decision commits it.
