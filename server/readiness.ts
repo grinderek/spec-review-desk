@@ -1,3 +1,4 @@
+import { pendingBlocking } from './decision-model.ts'
 import type { JoinKeyReport } from './joinkey.ts'
 import type { DecisionRecord, Effective, Thread } from './review-store.ts'
 
@@ -27,7 +28,7 @@ export function computeReadiness(input: ReadinessInput): Readiness {
   const threads = input.threads.filter((t) => t.status !== 'resolved').length
   if (threads) reasons.push(`${count(threads, 'thread')} not resolved`)
   // Spec §9: only blocking decisions that are still open or decided (not yet recorded) block.
-  const blocking = input.decisions.filter((d) => d.blocking && (d.status === 'open' || d.status === 'decided')).length
+  const blocking = pendingBlocking(input.decisions).length
   if (blocking) reasons.push(`${count(blocking, 'blocking decision')} open`)
   if (!input.joinKey.ok) {
     const j = input.joinKey
