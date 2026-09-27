@@ -6,21 +6,27 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { ApplyService } from './apply.ts'
 import { createBaseApp } from './app.ts'
 import { loadConfig } from './config.ts'
-import { type ChangeRef, discover, listChanges, Registry, type WorktreeInfo } from './discovery.ts'
+import { type ChangeRef, discover, listChanges, listWorktrees, Registry, type WorktreeInfo } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { run } from './git.ts'
+import { listInitiatives } from './initiatives.ts'
 import { QuestionService } from './questions.ts'
 import { registerApplyRoutes } from './routes/apply.ts'
 import { registerCorpusRoutes } from './routes/corpus.ts'
 import { registerDecisionRoutes } from './routes/decisions.ts'
+import { registerInitiativeDecisionRoutes } from './routes/initiative-decisions.ts'
+import { registerInitiativeRoutes } from './routes/initiatives.ts'
 import { registerReadRoutes } from './routes/read.ts'
 import { registerReviewRoutes } from './routes/review.ts'
 import { registerRunnerRoutes } from './routes/runner.ts'
 import { registerThreadRoutes } from './routes/threads.ts'
+import { FINISHERS } from './run-kinds.ts'
+import { InitiativeRunService } from './run-service.ts'
 import { RunnerService } from './runner.ts'
+import { DockerSandbox, type Sandbox } from './sandbox.ts'
 import { watchChanges } from './watch.ts'
 
-export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number }
+export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number; sandbox?: Sandbox }
 
 async function available(cmd: string, args: string[]): Promise<boolean> {
   try {
@@ -65,6 +71,16 @@ export async function startServer(opts: StartOptions) {
   registerApplyRoutes(app, ctx, { apply })
   for (const wt of registry.all()) {
     for (const ref of await listChanges(wt)) await apply.reattach(wt, ref).catch((error: unknown) => console.error(error))
+  }
+  // Spec B: initiatives and their sandboxed research/planner/author runs.
+  const sandbox = opts.sandbox ?? new DockerSandbox(config.sandbox)
+  const runs = new InitiativeRunService({ config, bus, sandbox, finishers: FINISHERS })
+  registerInitiativeRoutes(app, ctx, { runs, sandbox })
+  registerInitiativeDecisionRoutes(app, ctx)
+  for (const repo of config.repos) {
+    for (const wt of await listWorktrees(repo)) {
+      for (const ini of await listInitiatives(wt)) await runs.failStale({ wt, ini }).catch((error: unknown) => console.error(error))
+    }
   }
   // SERVICES: later tasks create their services and register their routes here.
 

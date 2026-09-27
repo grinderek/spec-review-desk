@@ -5,6 +5,7 @@ import { discover } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { parseFeature, unclassified } from '../gherkin.ts'
 import { showFile } from '../git.ts'
+import { initiativeTags } from '../initiatives.ts'
 import { resolveChange } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
 
@@ -19,13 +20,20 @@ export function registerReadRoutes(app: Hono, ctx: AppContext, capabilities: Cap
       trees.map(async (tree) => ({
         repo: tree.repo,
         worktrees: await Promise.all(
-          tree.worktrees.map(async (w) => ({
-            id: w.id,
-            path: w.path,
-            branch: w.branch,
-            head: w.head,
-            changes: await Promise.all(w.changes.map(async (ref) => summarize(await loadChangeView(w, ref, { withCommits: false })))),
-          })),
+          tree.worktrees.map(async (w) => {
+            // Spec B §8: a change that belongs to an initiative carries "initiative · sN".
+            const tags = await initiativeTags(w)
+            return {
+              id: w.id,
+              path: w.path,
+              branch: w.branch,
+              head: w.head,
+              changes: await Promise.all(w.changes.map(async (ref) => ({
+                ...summarize(await loadChangeView(w, ref, { withCommits: false })),
+                initiative: tags[ref.name] ?? null,
+              }))),
+            }
+          }),
         ),
       })),
     )

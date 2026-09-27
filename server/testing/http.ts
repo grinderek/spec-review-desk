@@ -51,3 +51,13 @@ export async function call(app: Hono, method: string, url: string, body?: unknow
   const text = await res.text()
   return { status: res.status, json: text ? JSON.parse(text) : null }
 }
+
+export async function callForm(app: Hono, url: string, form: FormData): Promise<{ status: number; json: any }> {
+  const res = await app.request(`http://127.0.0.1:${TEST_PORT}${url}`, {
+    method: 'POST',
+    headers: { host: `127.0.0.1:${TEST_PORT}`, origin: `http://127.0.0.1:${TEST_PORT}`, cookie: `sr_token=${TEST_TOKEN}` },
+    body: form,
+  })
+  const text = await res.text()
+  return { status: res.status, json: text ? JSON.parse(text) : null }
+}
