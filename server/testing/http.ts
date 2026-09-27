@@ -1,3 +1,4 @@
+import path from 'node:path'
 import type { Hono } from 'hono'
 import type { AppContext } from '../app.ts'
 import type { Config } from '../config.ts'
@@ -18,6 +19,15 @@ export function testConfig(repoPath: string, overrides: Partial<Config> = {}): C
     questionTimeoutMs: 10_000,
     devUiOrigin: 'http://127.0.0.1:5173',
     runners: [],
+    sandbox: {
+      image: 'spec-review-agent:test',
+      egressImage: 'spec-review-egress:test',
+      envFile: path.join(repoPath, '.sandbox.env'),
+      timeoutMs: 20_000,
+      dockerBin: 'docker',
+    },
+    openspecBin: 'openspec',
+    initiativeBase: 'main',
     ...overrides,
   }
 }

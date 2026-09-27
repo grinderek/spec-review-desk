@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse } from 'yaml'
 import { z } from 'zod'
+import { AGENT_IMAGE, EGRESS_IMAGE } from './sandbox-args.ts'
 
 const RunnerSchema = z.object({
   worktree: z.string().min(1),
@@ -25,7 +26,21 @@ const ConfigSchema = z.object({
   questionTimeoutMinutes: z.number().positive().default(10),
   devUiOrigin: z.string().default('http://127.0.0.1:5173'),
   runners: z.record(z.string(), RunnerSchema).default({}),
+  // Spec B §5: the sandboxed research/planner/author runs.
+  sandbox: z
+    .object({
+      image: z.string().min(1).default(AGENT_IMAGE),
+      egressImage: z.string().min(1).default(EGRESS_IMAGE),
+      envFile: z.string().min(1).default('.env'),
+      timeoutMinutes: z.number().positive().default(30),
+      dockerBin: z.string().min(1).default('docker'),
+    })
+    .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, envFile: '.env', timeoutMinutes: 30, dockerBin: 'docker' }),
+  openspecBin: z.string().min(1).default('openspec'),
+  initiativeBase: z.string().min(1).default('staging'),
 })
+
+export interface SandboxConfig { image: string; egressImage: string; envFile: string; timeoutMs: number; dockerBin: string }
 
 export interface RunnerProfile {
   name: string
@@ -46,6 +61,9 @@ export interface Config {
   questionTimeoutMs: number
   devUiOrigin: string
   runners: RunnerProfile[]
+  sandbox: SandboxConfig
+  openspecBin: string
+  initiativeBase: string
 }
 
 export class ConfigError extends Error {}
@@ -76,5 +94,15 @@ export async function loadConfig(file: string): Promise<Config> {
       watch: r.watch,
       applyAllowedTools: r.applyAllowedTools,
     })),
+    sandbox: {
+      image: c.sandbox.image,
+      egressImage: c.sandbox.egressImage,
+      // The token file lives next to config.yaml (tools/spec-review/.env, gitignored).
+      envFile: path.resolve(configDir, c.sandbox.envFile),
+      timeoutMs: c.sandbox.timeoutMinutes * 60_000,
+      dockerBin: c.sandbox.dockerBin,
+    },
+    openspecBin: c.openspecBin,
+    initiativeBase: c.initiativeBase,
   }
 }
