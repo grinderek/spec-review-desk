@@ -1,8 +1,7 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, chmod, mkdir, readFile, stat } from 'node:fs/promises'
+import { appendFile, chmod, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { StructuredStream } from './answer-reader.ts'
-import { readEvents } from './apply-outcome.ts'
 import { type ClaudeRunSpec, parseStreamLine, type ResultEvent } from './claude.ts'
 import type { Config } from './config.ts'
 import { pendingBlocking, runDecisions } from './decision-model.ts'
@@ -18,12 +17,22 @@ import { newId, nowIso, readReview } from './review-store.ts'
 import { assembleRoom, type RoomInput } from './room.ts'
 import type { Sandbox } from './sandbox.ts'
 import { agentTools, containerName, WORK_IN, WORK_OUT } from './sandbox-args.ts'
-import { findSecrets, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
+import { findSecretsInLine, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
 
 // Spec B §4/§5: research, planner and author runs in the sandbox. One attempt = one container;
 // a validation retry (A §4) or an owner resume is a new attempt in the same session.
 export interface RunTarget { wt: WorktreeInfo; ini: InitiativeRef }
 export interface RunPaths { runDir: string; room: string; out: string; sessions: string; log: string }
+// The run's own persisted log format (review round 3, finding 1): only holdback-released, already-
+// redacted text for the free-text channels (narration, thinking, the reconstructed answer), plus
+// text-free structural markers — never a raw stream-json line, and never the result's raw text or
+// structured payload (that lives only in memory for #finish, via the captured ResultEvent).
+type LogEntry =
+  | { type: 'delta' | 'thinking' | 'answer'; text: string }
+  | { type: 'init'; sessionId: string }
+  | { type: 'message_start' }
+  | { type: 'tool_start'; index: number; name: string }
+  | { type: 'result'; ok: boolean; sessionId: string; numTurns: number }
 export interface RunContext {
   target: RunTarget
   run: RunRecord
@@ -49,6 +58,24 @@ const RULES: Record<RunKind, URL> = {
 export function runPaths(wt: WorktreeInfo, run: Pick<RunRecord, 'id' | 'log'>): RunPaths {
   const runDir = path.join(wt.path, '.spec-review', 'runs', run.id)
   return { runDir, room: path.join(runDir, 'room'), out: path.join(runDir, 'out'), sessions: path.join(runDir, 'sessions'), log: path.join(wt.path, run.log) }
+}
+
+interface RawStreamLine { type?: string; event?: { type?: string; delta?: { type?: string; thinking?: unknown } } }
+
+// claude.ts's ClaudeEvent model has no `thinking` variant (nothing outside this file ever needed
+// it); extracting it locally, straight off the raw line, avoids widening that shared model just for
+// a channel this file redacts and never surfaces anywhere else (review round 3).
+function thinkingDeltaText(line: string): string | null {
+  let parsed: RawStreamLine
+  try {
+    parsed = JSON.parse(line) as RawStreamLine
+  } catch {
+    return null
+  }
+  const inner = parsed.event
+  return inner?.type === 'content_block_delta' && inner.delta?.type === 'thinking_delta' && typeof inner.delta.thinking === 'string'
+    ? inner.delta.thinking
+    : null
 }
 
 export class InitiativeRunService {
@@ -140,13 +167,24 @@ export class InitiativeRunService {
     }
   }
 
+  // Reads the run's own persisted log (§ below: only holdback-released, already-redacted text and
+  // text-free structural entries — never a raw delta line, review round 3). `redactSecrets` runs
+  // once more over the assembled text as a defense-in-depth backstop (round 3, item 3).
   async log(target: RunTarget, runId: string): Promise<{ run: RunRecord; text: string }> {
     const run = findRun(await readInitiative(target.ini.dir), runId)
-    const events = readEvents(await readFile(runPaths(target.wt, run).log, 'utf8').catch(() => ''))
-    const narration = events.flatMap((e) => (e.type === 'delta' ? [e.text] : [])).join('')
-    const result = [...events].reverse().find((e): e is ResultEvent => e.type === 'result')
-    const answer = result ? parseRunReply(run.kind, result.structured ?? parseJsonObject(result.text)).reply?.answer : undefined
-    return { run, text: answer ? `${narration}${narration ? '\n\n' : ''}${answer}` : narration }
+    const raw = await readFile(runPaths(target.wt, run).log, 'utf8').catch(() => '')
+    const entries = raw.split('\n').flatMap((line): LogEntry[] => {
+      if (!line) return []
+      try {
+        return [JSON.parse(line) as LogEntry]
+      } catch {
+        return []
+      }
+    })
+    const narration = entries.flatMap((e) => (e.type === 'delta' ? [e.text] : [])).join('')
+    const answer = entries.flatMap((e) => (e.type === 'answer' ? [e.text] : [])).join('')
+    const text = answer ? `${narration}${narration ? '\n\n' : ''}${answer}` : narration
+    return { run, text: redactSecrets(text, await this.deps.sandbox.token()) }
   }
 
   #changed(target: RunTarget): void {
@@ -176,23 +214,38 @@ export class InitiativeRunService {
     }
     const paths = runPaths(target.wt, run)
     await mkdir(path.dirname(paths.log), { recursive: true })
-    const offset = await stat(paths.log).then((s) => s.size, () => 0)
     const stream = new StructuredStream()
     let writes: Promise<void> = Promise.resolve()
     // Spec §5.2/§10: the token must never sit unredacted on disk or reach the UI live, even for the
-    // seconds before the attempt ends. Two defenses, since a secret can also arrive split across
-    // many small stream fragments that no single line contains in full (review finding 1, round 2):
-    // (1) each raw line is still scanned/redacted whole before it is logged (catches anything one
-    // line carries in full, e.g. the terminal result line); (2) the reconstructed narration and
-    // answer TEXT (which reassembles those fragments) is fed through a per-channel SecretHoldback
-    // that only ever releases text older than its holdback window, so a still-forming secret is
-    // never partially published or logged. Raw json_delta fragments are never logged or published
-    // themselves — their only legitimate use is feeding that reconstruction.
+    // seconds before the attempt ends, and never reassembled from many small pieces that no single
+    // line or fragment carries in full (review finding 1, rounds 2–3). Free-text channels (narration,
+    // thinking, the reconstructed answer) never reach the log or the bus raw: each is fed through its
+    // own SecretHoldback and only its holdback-released, already-redacted output is persisted/
+    // published. Raw json_delta fragments are never logged or published at all — their only
+    // legitimate use is feeding the answer reconstruction below. The result event's raw text/
+    // structured payload is captured in memory only (for #finish) and is never itself logged or
+    // published — only its non-text metadata is. Detection (sawSecret) additionally decodes each raw
+    // line's JSON string values before scanning, so a \u-escaped secret cannot evade it.
     let sawSecret = false
+    let resultEvent: ResultEvent | null = null
     const narration = new SecretHoldback(token)
+    const thinking = new SecretHoldback(token)
     let answer = new SecretHoldback(token)
-    const publishSafe = (type: 'delta' | 'answer_delta', text: string): void => {
-      if (text) bus.publish(`irun:${run.id}`, { type: 'event', event: { type, text } })
+    const persist = (entry: LogEntry): void => {
+      writes = writes.then(() => appendFile(paths.log, `${JSON.stringify(entry)}\n`))
+    }
+    const releaseNarration = (safe: string): void => {
+      if (!safe) return
+      persist({ type: 'delta', text: safe })
+      bus.publish(`irun:${run.id}`, { type: 'event', event: { type: 'delta', text: safe } })
+    }
+    const releaseThinking = (safe: string): void => {
+      if (safe) persist({ type: 'thinking', text: safe })
+    }
+    const releaseAnswer = (safe: string): void => {
+      if (!safe) return
+      persist({ type: 'answer', text: safe })
+      bus.publish(`irun:${run.id}`, { type: 'event', event: { type: 'answer_delta', text: safe } })
     }
     const outcome = await sandbox.run(
       {
@@ -202,16 +255,26 @@ export class InitiativeRunService {
       {
         timeoutMs: config.sandbox.timeoutMs,
         onLine: (line) => {
-          if (findSecrets(line, token).length) sawSecret = true
-          const safeLine = redactSecrets(line, token)
-          const event = parseStreamLine(safeLine)
-          if (!event || event.type !== 'json_delta') writes = writes.then(() => appendFile(paths.log, `${safeLine}\n`))
-          if (!event) return
-          if (event.type === 'delta') publishSafe('delta', narration.push(event.text))
-          else if (event.type !== 'json_delta') bus.publish(`irun:${run.id}`, { type: 'event', event })
+          if (findSecretsInLine(line, token).length) sawSecret = true
+          const event = parseStreamLine(line)
+          if (!event) {
+            const text = thinkingDeltaText(line)
+            if (text !== null) releaseThinking(thinking.push(text))
+            return
+          }
+          if (event.type === 'delta') {
+            releaseNarration(narration.push(event.text))
+          } else if (event.type === 'result') {
+            resultEvent = event
+            persist({ type: 'result', ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns })
+            bus.publish(`irun:${run.id}`, { type: 'event', event: { type: 'result', ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns } })
+          } else if (event.type === 'init' || event.type === 'message_start' || event.type === 'tool_start') {
+            persist(event)
+            bus.publish(`irun:${run.id}`, { type: 'event', event })
+          }
           for (const derived of stream.feed(event)) {
             if (derived.type === 'answer_delta') {
-              publishSafe('answer_delta', answer.push(derived.text))
+              releaseAnswer(answer.push(derived.text))
             } else if (derived.type === 'answer_reset') {
               if (answer.sawSecret) sawSecret = true
               answer = new SecretHoldback(token)
@@ -221,24 +284,23 @@ export class InitiativeRunService {
         },
       },
     )
-    if (narration.sawSecret || answer.sawSecret) sawSecret = true
-    publishSafe('delta', narration.flush())
-    publishSafe('answer_delta', answer.flush())
+    if (narration.sawSecret || thinking.sawSecret || answer.sawSecret) sawSecret = true
+    releaseNarration(narration.flush())
+    releaseThinking(thinking.flush())
+    releaseAnswer(answer.flush())
     await writes
-    const text = (await readFile(paths.log).catch(() => Buffer.alloc(0))).subarray(offset).toString('utf8')
-    await this.#finish(target, run, paths, text, outcome, token, sawSecret)
+    await this.#finish(target, run, paths, resultEvent, outcome, token, sawSecret)
   }
 
   async #finish(
-    target: RunTarget, run: RunRecord, paths: RunPaths, text: string, outcome: Awaited<ReturnType<Sandbox['run']>>,
+    target: RunTarget, run: RunRecord, paths: RunPaths, resultEvent: ResultEvent | null, outcome: Awaited<ReturnType<Sandbox['run']>>,
     token: string | null, sawSecret: boolean,
   ): Promise<void> {
     if (sawSecret) return this.#final(target, run, 'failed', ROTATE_HINT, ['a secret appeared in the agent output'])
     if (outcome.stopped) return this.#final(target, run, 'stopped', 'Stopped by the owner.')
     if (outcome.timedOut) return this.#final(target, run, 'failed', `Timed out after ${Math.round(this.deps.config.sandbox.timeoutMs / 60_000)} min.`)
-    const result = [...readEvents(text)].reverse().find((e): e is ResultEvent => e.type === 'result')
-    if (!result?.ok) return this.#final(target, run, 'failed', outcome.error ?? result?.text ?? 'The agent ended without a result.')
-    const parsed = parseRunReply(run.kind, result.structured ?? parseJsonObject(result.text))
+    if (!resultEvent?.ok) return this.#final(target, run, 'failed', outcome.error ?? resultEvent?.text ?? 'The agent ended without a result.')
+    const parsed = parseRunReply(run.kind, resultEvent.structured ?? parseJsonObject(resultEvent.text))
     const issues = parsed.reply ? validateRunReply(run.kind, parsed.reply, { change: run.change }) : parsed.issues
     const ctx = this.#context(target, run, paths, token)
     if (issues.length) {

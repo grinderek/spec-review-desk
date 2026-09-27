@@ -10,6 +10,7 @@ import { startPlanner } from './planner-run.ts'
 import { readReview } from './review-store.ts'
 import { FINISHERS } from './run-kinds.ts'
 import { InitiativeRunService, runPaths } from './run-service.ts'
+import type { RunOptions, SandboxOutcome, SandboxRun } from './sandbox.ts'
 import { resetFakeClaude } from './testing/fake-claude-path.ts'
 import { FAKE_TOKEN, FakeSandbox } from './testing/fake-sandbox.ts'
 import { testConfig } from './testing/http.ts'
@@ -27,16 +28,20 @@ const reply = (over: Record<string, unknown> = {}) => ({
 })
 let fakeLog = ''
 
-async function setup() {
+async function setup(sandbox: FakeSandbox = new FakeSandbox()) {
   const { repo } = await makeRepo()
   const { wt, ini, dir } = await makeInitiative(repo)
-  const sandbox = new FakeSandbox()
   const bus = new EventBus()
   const events: { topic: string; data: unknown }[] = []
   bus.subscribe('*', (e) => events.push(e))
   const service = new InitiativeRunService({ config: testConfig(repo), bus, sandbox, finishers: FINISHERS })
   return { repo, wt, ini, dir, sandbox, service, events, target: { wt, ini } }
 }
+// Emits a raw stream_event line as the fake CLI would, for scripted-sandbox tests that need exact
+// control over how the stream is chunked (review round 3's leak.mts reproduction).
+const streamEvent = (event: unknown): string => JSON.stringify({ type: 'stream_event', event, session_id: 's' })
+const resultEvent = (over: Record<string, unknown> = {}): string =>
+  JSON.stringify({ type: 'result', subtype: 'success', is_error: false, num_turns: 1, result: 'ok', session_id: 's', ...over })
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string; cwd: string })
 
 beforeEach(async () => {
@@ -144,6 +149,64 @@ describe('planner runs', () => {
     expect(published).not.toContain(FAKE_TOKEN)
     expect(published).not.toContain(prefix)
     expect(doc.runs[0]!.notes).not.toContain(prefix)
+  })
+
+  it('redacts a secret split across narration AND thinking fragments, leaking nowhere: log file, log(), the bus, or initiative.yaml (review round 3, finding 1)', async () => {
+    const chunks = FAKE_TOKEN.match(/.{1,6}/g) ?? []
+    class Scripted extends FakeSandbox {
+      override run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
+        this.runs.push(spec)
+        opts.onLine(streamEvent({ type: 'message_start', message: { id: 'm' } }))
+        for (const c of chunks) opts.onLine(streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: c } }))
+        for (const c of chunks) opts.onLine(streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: c } }))
+        opts.onLine(resultEvent())
+        return Promise.resolve({ code: 0, timedOut: false, stopped: false, error: null })
+      }
+    }
+    const s = await setup(new Scripted())
+    const run = await startPlanner(s.service, s.target)
+    await s.service.settled(run.id)
+    const doc = await readInitiative(s.dir)
+    expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
+    const prefix = FAKE_TOKEN.slice(0, 8)
+    const logText = await readFile(path.join(s.repo, run.log), 'utf8')
+    expect(logText).not.toContain(FAKE_TOKEN)
+    expect(logText).not.toContain(prefix)
+    const served = await s.service.log(s.target, run.id)
+    expect(served.text).not.toContain(FAKE_TOKEN)
+    expect(served.text).not.toContain(prefix)
+    const published = JSON.stringify(s.events.filter((e) => e.topic === `irun:${run.id}`))
+    expect(published).not.toContain(FAKE_TOKEN)
+    expect(published).not.toContain(prefix)
+    const iniText = JSON.stringify(doc)
+    expect(iniText).not.toContain(FAKE_TOKEN)
+    expect(iniText).not.toContain(prefix)
+  })
+
+  it('detects a token hidden behind \\u escapes in the terminal result line (review round 3, minor)', async () => {
+    // The token's bytes never appear literally on the wire — each character is a \u escape, decoded
+    // to its literal form only once the line is JSON.parsed.
+    const escaped = [...FAKE_TOKEN].map((c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, '0')}`).join('')
+    class Scripted extends FakeSandbox {
+      override run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
+        this.runs.push(spec)
+        opts.onLine(JSON.stringify({ type: 'system', subtype: 'init', session_id: 's' }))
+        opts.onLine(
+          `{"type":"result","subtype":"success","is_error":false,"num_turns":1,"result":"ok",` +
+            `"structured_output":{"answer":"${escaped}","patch":null,"decisions":[],"resolves":[],"status":"done"},"session_id":"s"}`,
+        )
+        return Promise.resolve({ code: 0, timedOut: false, stopped: false, error: null })
+      }
+    }
+    const s = await setup(new Scripted())
+    const run = await startPlanner(s.service, s.target)
+    await s.service.settled(run.id)
+    const doc = await readInitiative(s.dir)
+    expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
+    const prefix = FAKE_TOKEN.slice(0, 8)
+    const iniText = JSON.stringify(doc)
+    expect(iniText).not.toContain(FAKE_TOKEN)
+    expect(iniText).not.toContain(prefix)
   })
 
   it('redacts a secret in the container error before it reaches the run notes (review Important #2)', async () => {

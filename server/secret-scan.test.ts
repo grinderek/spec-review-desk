@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findSecrets, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
+import { findSecrets, findSecretsInLine, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
 
 const TOKEN = 'sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'
 const OTHER = `sk-ant-api03-${'x'.repeat(24)}`
@@ -72,5 +72,29 @@ describe('SecretHoldback', () => {
     const emitted = holdback.push(text) + holdback.flush()
     expect(emitted).toBe(text)
     expect(holdback.sawSecret).toBe(false)
+  })
+})
+
+// Review round 3, minor: a \u-escaped secret decodes to its literal form only once JSON.parse runs.
+describe('findSecretsInLine', () => {
+  it('finds a token hidden behind \\u escapes by scanning decoded JSON string values', () => {
+    const escaped = [...TOKEN].map((ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`).join('')
+    const line = `{"answer":"${escaped}"}`
+    expect(line).not.toContain(TOKEN) // sanity: the raw bytes never contain the token
+    expect(findSecretsInLine(line, TOKEN)).toEqual(expect.arrayContaining(['the OAuth token']))
+  })
+
+  it('walks nested objects and arrays', () => {
+    const line = JSON.stringify({ decisions: [{ options: [{ consequence: `see ${TOKEN}` }] }] })
+    expect(findSecretsInLine(line, TOKEN)).toEqual(expect.arrayContaining(['the OAuth token']))
+  })
+
+  it('falls back to a plain scan when the line is not valid JSON', () => {
+    expect(findSecretsInLine(`not json but has ${TOKEN} anyway`, TOKEN)).toEqual(expect.arrayContaining(['the OAuth token']))
+    expect(findSecretsInLine('not json, clean', TOKEN)).toEqual([])
+  })
+
+  it('finds nothing in clean JSON', () => {
+    expect(findSecretsInLine(JSON.stringify({ ok: true, numTurns: 2 }), TOKEN)).toEqual([])
   })
 })

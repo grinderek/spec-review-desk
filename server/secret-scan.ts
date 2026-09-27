@@ -18,6 +18,30 @@ export function redactSecrets(text: string, token: string | null): string {
   return withoutToken.replace(SK_ANT, '[REDACTED]')
 }
 
+function collectStrings(value: unknown, into: string[]): void {
+  if (typeof value === 'string') into.push(value)
+  else if (Array.isArray(value)) for (const item of value) collectStrings(item, into)
+  else if (value && typeof value === 'object') for (const item of Object.values(value as Record<string, unknown>)) collectStrings(item, into)
+}
+
+// A \u-escaped secret decodes to its literal form once JSON.parse runs; a plain substring/regex
+// scan of the raw bytes would miss it (review round 3, minor). Parse the line and scan every
+// decoded string value instead of the raw text; falls back to a plain scan when the line is not
+// valid JSON (e.g. plain narration text, already decoded by the time it reaches this function).
+export function findSecretsInLine(line: string, token: string | null): string[] {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line)
+  } catch {
+    return findSecrets(line, token)
+  }
+  const strings: string[] = []
+  collectStrings(parsed, strings)
+  const found = new Set<string>()
+  for (const value of strings) for (const reason of findSecrets(value, token)) found.add(reason)
+  return [...found]
+}
+
 // A structured reply streams as many small fragments (the CLI's input_json_delta chunking); no
 // single fragment need contain the whole token, but their reassembly (the reconstructed narration
 // or answer text) can. Buffer the reconstructed text per channel and release only the part old
