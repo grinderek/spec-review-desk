@@ -112,13 +112,17 @@ if (mode === 'hang') {
     streamEvent({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: chunk } })
   }
   const failed = mode === 'fail'
+  // FAKE_CLAUDE_RESULT_SAFE: simulates a terminal result that carries no trace of the reply text —
+  // only the chunked input_json_delta stream above ever carried it. Proves redaction cannot rely on
+  // the result line alone (review finding 1, round 2).
+  const resultSafe = process.env.FAKE_CLAUDE_RESULT_SAFE === '1'
   emit({
     type: 'result',
     subtype: failed ? 'error_during_execution' : 'success',
     is_error: failed,
     num_turns: 2,
-    result: failed ? 'boom' : json,
-    ...(failed || process.env.FAKE_CLAUDE_OMIT_STRUCTURED ? {} : { structured_output: reply }),
+    result: failed ? 'boom' : resultSafe ? 'ok' : json,
+    ...(failed || process.env.FAKE_CLAUDE_OMIT_STRUCTURED || resultSafe ? {} : { structured_output: reply }),
     session_id: id,
   })
   process.exit(failed ? 1 : 0)

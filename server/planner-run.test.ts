@@ -127,6 +127,25 @@ describe('planner runs', () => {
     expect(published).not.toContain(FAKE_TOKEN)
   })
 
+  it('redacts a secret split across small stream chunks even when the terminal result carries no trace of it (review round 2, finding 1)', async () => {
+    const s = await setup()
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: `Here: ${FAKE_TOKEN}` }))
+    process.env.FAKE_CLAUDE_RESULT_SAFE = '1'
+    const run = await startPlanner(s.service, s.target)
+    await s.service.settled(run.id)
+    const doc = await readInitiative(s.dir)
+    expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
+    expect(doc.plan.status).toBe('none')
+    const prefix = FAKE_TOKEN.slice(0, 8)
+    const log = await readFile(path.join(s.repo, run.log), 'utf8')
+    expect(log).not.toContain(FAKE_TOKEN)
+    expect(log).not.toContain(prefix)
+    const published = JSON.stringify(s.events.filter((e) => e.topic === `irun:${run.id}`))
+    expect(published).not.toContain(FAKE_TOKEN)
+    expect(published).not.toContain(prefix)
+    expect(doc.runs[0]!.notes).not.toContain(prefix)
+  })
+
   it('redacts a secret in the container error before it reaches the run notes (review Important #2)', async () => {
     const s = await setup()
     const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)

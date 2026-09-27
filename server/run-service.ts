@@ -18,7 +18,7 @@ import { newId, nowIso, readReview } from './review-store.ts'
 import { assembleRoom, type RoomInput } from './room.ts'
 import type { Sandbox } from './sandbox.ts'
 import { agentTools, containerName, WORK_IN, WORK_OUT } from './sandbox-args.ts'
-import { findSecrets, redactSecrets, ROTATE_HINT } from './secret-scan.ts'
+import { findSecrets, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
 
 // Spec B §4/§5: research, planner and author runs in the sandbox. One attempt = one container;
 // a validation retry (A §4) or an owner resume is a new attempt in the same session.
@@ -180,9 +180,20 @@ export class InitiativeRunService {
     const stream = new StructuredStream()
     let writes: Promise<void> = Promise.resolve()
     // Spec §5.2/§10: the token must never sit unredacted on disk or reach the UI live, even for the
-    // seconds before the attempt ends — redact every line before it is written or published. The
-    // scan runs on the RAW line (sawSecret), since by the time it is written it is already safe.
+    // seconds before the attempt ends. Two defenses, since a secret can also arrive split across
+    // many small stream fragments that no single line contains in full (review finding 1, round 2):
+    // (1) each raw line is still scanned/redacted whole before it is logged (catches anything one
+    // line carries in full, e.g. the terminal result line); (2) the reconstructed narration and
+    // answer TEXT (which reassembles those fragments) is fed through a per-channel SecretHoldback
+    // that only ever releases text older than its holdback window, so a still-forming secret is
+    // never partially published or logged. Raw json_delta fragments are never logged or published
+    // themselves — their only legitimate use is feeding that reconstruction.
     let sawSecret = false
+    const narration = new SecretHoldback(token)
+    let answer = new SecretHoldback(token)
+    const publishSafe = (type: 'delta' | 'answer_delta', text: string): void => {
+      if (text) bus.publish(`irun:${run.id}`, { type: 'event', event: { type, text } })
+    }
     const outcome = await sandbox.run(
       {
         runId: run.id, runDir: paths.runDir, room: paths.room, out: paths.out, sessions: paths.sessions,
@@ -193,14 +204,26 @@ export class InitiativeRunService {
         onLine: (line) => {
           if (findSecrets(line, token).length) sawSecret = true
           const safeLine = redactSecrets(line, token)
-          writes = writes.then(() => appendFile(paths.log, `${safeLine}\n`))
           const event = parseStreamLine(safeLine)
+          if (!event || event.type !== 'json_delta') writes = writes.then(() => appendFile(paths.log, `${safeLine}\n`))
           if (!event) return
-          bus.publish(`irun:${run.id}`, { type: 'event', event })
-          for (const derived of stream.feed(event)) bus.publish(`irun:${run.id}`, { type: 'event', event: derived })
+          if (event.type === 'delta') publishSafe('delta', narration.push(event.text))
+          else if (event.type !== 'json_delta') bus.publish(`irun:${run.id}`, { type: 'event', event })
+          for (const derived of stream.feed(event)) {
+            if (derived.type === 'answer_delta') {
+              publishSafe('answer_delta', answer.push(derived.text))
+            } else if (derived.type === 'answer_reset') {
+              if (answer.sawSecret) sawSecret = true
+              answer = new SecretHoldback(token)
+              bus.publish(`irun:${run.id}`, { type: 'event', event: derived })
+            }
+          }
         },
       },
     )
+    if (narration.sawSecret || answer.sawSecret) sawSecret = true
+    publishSafe('delta', narration.flush())
+    publishSafe('answer_delta', answer.flush())
     await writes
     const text = (await readFile(paths.log).catch(() => Buffer.alloc(0))).subarray(offset).toString('utf8')
     await this.#finish(target, run, paths, text, outcome, token, sawSecret)

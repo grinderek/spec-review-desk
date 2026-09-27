@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { findSecrets, redactSecrets, ROTATE_HINT } from './secret-scan.ts'
+import { findSecrets, redactSecrets, ROTATE_HINT, SecretHoldback } from './secret-scan.ts'
 
 const TOKEN = 'sk-ant-oat01-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789'
 const OTHER = `sk-ant-api03-${'x'.repeat(24)}`
@@ -30,5 +30,47 @@ describe('redactSecrets', () => {
 
   it('tells the owner how to rotate', () => {
     expect(ROTATE_HINT).toContain('claude setup-token')
+  })
+})
+
+// A structured reply streams as many small fragments; no single fragment need contain the whole
+// secret, but their reassembly can (review finding 1, round 2).
+describe('SecretHoldback', () => {
+  it('never emits a partial prefix of a token still arriving in small chunks, and detects it once fully arrived', () => {
+    const holdback = new SecretHoldback(TOKEN)
+    let out = ''
+    for (const chunk of TOKEN.match(/.{1,5}/g) ?? []) out += holdback.push(chunk)
+    expect(out).toBe('') // the whole token is still inside the trailing 256-char holdback window
+    expect(holdback.sawSecret).toBe(true) // detection runs on the whole reassembled buffer
+    out += holdback.push('after')
+    expect(out).toBe('')
+    expect(out).not.toContain(TOKEN.slice(0, 8))
+  })
+
+  it('emits older text progressively once enough has arrived, always already redacted', () => {
+    const holdback = new SecretHoldback(TOKEN)
+    let out = holdback.push(`before ${TOKEN} `)
+    expect(out).toBe('') // everything so far is still within the holdback window
+    out += holdback.push('x'.repeat(300)) // pushes the token's position well past the window
+    expect(out).not.toContain(TOKEN)
+    expect(out).not.toContain(TOKEN.slice(0, 8))
+    expect(out).toContain('before [REDACTED] ')
+    out += holdback.flush()
+    expect(out).toBe(`before [REDACTED] ${'x'.repeat(300)}`)
+    expect(holdback.sawSecret).toBe(true)
+  })
+
+  it('flush releases whatever is still held back, redacted', () => {
+    const holdback = new SecretHoldback(TOKEN)
+    holdback.push(`short and ${TOKEN}`)
+    expect(holdback.flush()).toBe('short and [REDACTED]')
+  })
+
+  it('lets clean text through once past the window and never reports a secret', () => {
+    const holdback = new SecretHoldback(TOKEN)
+    const text = 'x'.repeat(300)
+    const emitted = holdback.push(text) + holdback.flush()
+    expect(emitted).toBe(text)
+    expect(holdback.sawSecret).toBe(false)
   })
 })
