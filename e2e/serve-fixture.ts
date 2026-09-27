@@ -3,12 +3,15 @@ import os from 'node:os'
 import path from 'node:path'
 import { git } from '../server/git.ts'
 import { startServer } from '../server/main.ts'
-import { FAKE_CLAUDE } from '../server/testing/fake-claude-path.ts'
+import { FAKE_CLAUDE, FAKE_OPENSPEC } from '../server/testing/fake-claude-path.ts'
+import { FakeSandbox } from '../server/testing/fake-sandbox.ts'
+import { FEATURE as FEATURE_TEXT, NEW_STEPS_MD, SPEC_MD } from '../server/testing/fixtures.ts'
 import { changeFiles, makeRepo, sh, writeFiles } from '../server/testing/repo.ts'
 
 const FEATURE = 'openspec/changes/add-thread-state/features/thread_state.feature'
 const DECISION_FEATURE = 'openspec/changes/add-decision-flow/features/thread_state.feature'
 const FIRST = "features/thread_state.feature::The founder's reply resolves a waiting thread"
+const ENGINE = 'openspec/changes/add-health-score-engine'
 
 async function diffOf(repo: string, rel: string, before: string, insert: string): Promise<string> {
   const file = path.join(repo, rel)
@@ -26,6 +29,12 @@ async function main(): Promise<void> {
   await writeFiles(repo, changeFiles('add-decision-flow'))
   sh(repo, 'git', ['add', '-A'])
   sh(repo, 'git', ['commit', '-q', '-m', 'a second change for the decisions flow'])
+  // The initiative flow branches its worktree from a base without the review fixtures' changes, so
+  // the sidebar never lists add-thread-state twice.
+  sh(repo, 'git', ['checkout', '-q', '-b', 'initiative-base'])
+  sh(repo, 'git', ['rm', '-q', '-r', 'openspec/changes'])
+  sh(repo, 'git', ['commit', '-q', '-m', 'a base for the initiative flow'])
+  sh(repo, 'git', ['checkout', '-q', 'main'])
   const ageDiff = await diffOf(repo, FEATURE, '  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by business-hour age.\n')
   const partialDiff = await diffOf(repo, DECISION_FEATURE, "  Scenario: The founder's reply", '  # Owner decision 2026-09-24: partial days count as business days only.\n')
   // First match wins, so the most specific prompt text comes first: a thread replays its history.
@@ -49,12 +58,35 @@ async function main(): Promise<void> {
       }),
     },
     { match: 'Why business hours?', reply: reply({ answer: 'Rows weigh by business-hour age, not calendar age.', patch: ageDiff }) },
+    // Spec B: the sandboxed planner and author (FakeSandbox runs the fake claude against the room).
+    {
+      match: 'Propose how to slice',
+      reply: reply({
+        answer: 'Two slices: the engine, then delivery.',
+        status: 'done',
+        slices: [{ title: 'Engine', scope: 'The pure scoring engine.', depends_on: [] }, { title: 'Delivery', scope: 'Delivery states.', depends_on: [1] }],
+      }),
+    },
+    { match: 'Slice s1', reply: reply({ answer: 'Wrote the engine slice.', status: 'done', change: 'add-health-score-engine' }) },
   ]
+  const writes = [{
+    match: 'Slice s1',
+    files: {
+      [`${ENGINE}/.openspec.yaml`]: 'schema: behavior-driven\n',
+      [`${ENGINE}/proposal.md`]: '## Why\n\nThe engine.\n',
+      [`${ENGINE}/specs/thread-state/spec.md`]: SPEC_MD,
+      [`${ENGINE}/features/thread_state.feature`]: FEATURE_TEXT,
+      [`${ENGINE}/features/NEW_STEPS.md`]: NEW_STEPS_MD,
+    },
+  }]
 
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-e2e-'))
   const repliesFile = path.join(tmp, 'replies.json')
   await writeFile(repliesFile, JSON.stringify(replies))
   process.env.FAKE_CLAUDE_REPLIES_FILE = repliesFile
+  const writesFile = path.join(tmp, 'writes.json')
+  await writeFile(writesFile, JSON.stringify(writes))
+  process.env.FAKE_CLAUDE_WRITES_FILE = writesFile
   process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
   process.env.FAKE_CLAUDE_MODE = 'answer'
 
@@ -64,10 +96,12 @@ async function main(): Promise<void> {
     'repos: [{ name: api, path: api }]',
     'port: 4620',
     `claudeBin: ${FAKE_CLAUDE}`,
+    `openspecBin: ${FAKE_OPENSPEC}`,
+    'initiativeBase: initiative-base',
     'commitTrailer: "Co-Authored-By: E2E <e2e@example.com>"',
     '',
   ].join('\n'))
-  await startServer({ configPath: config, token: 'e2e' })
+  await startServer({ configPath: config, token: 'e2e', sandbox: new FakeSandbox() })
   console.log(`e2e fixture repo: ${repo}`)
 }
 
