@@ -5,7 +5,7 @@ import { parse, YAMLParseError } from 'yaml'
 import { FeatureParseError, parseFeature, unclassified } from './gherkin.ts'
 import { run } from './git.ts'
 import { checkJoinKey, specTitles } from './joinkey.ts'
-import { findSecrets } from './secret-scan.ts'
+import { findSecrets, maskSecrets } from './secret-scan.ts'
 
 // Spec B §6: nothing the author wrote touches the worktree before every rule here holds.
 export const MAX_FILES = 200
@@ -80,15 +80,32 @@ async function schemaProblem(dir: string, files: readonly string[]): Promise<str
   }
 }
 
+// The same >= 8-character piece rule as every other committed surface (final review I3): per file,
+// and over all files joined in order, so pieces spread across files — or across a file boundary —
+// are caught too.
+function secretKinds(text: string, token: string | null): string[] {
+  const whole = findSecrets(text, token)
+  if (whole.length) return whole
+  return maskSecrets(text, token).secret ? ['a piece of the OAuth token'] : []
+}
+
+async function secretProblems(dir: string, files: readonly string[], token: string | null): Promise<string[]> {
+  const texts = await Promise.all(files.map((rel) => readFile(path.join(dir, rel), 'utf8')))
+  const perFile = files.flatMap((rel, i) => {
+    const kinds = secretKinds(texts[i]!, token)
+    return kinds.length ? [`${rel}: contains a secret (${kinds.join(', ')})`] : []
+  })
+  if (perFile.length) return perFile
+  const joined = secretKinds(texts.join(''), token)
+  return joined.length ? [`the files together contain a secret split across them (${joined.join(', ')})`] : []
+}
+
 async function contentProblems(dir: string, files: readonly string[], input: VetInput): Promise<{ problems: string[]; keys: string[] }> {
   const problems: string[] = []
   const schema = await schemaProblem(dir, files)
   if (schema) problems.push(schema)
   if (await exists(path.join(input.worktree, 'openspec', 'changes', input.change))) problems.push(`${input.change} already exists in the worktree`)
-  for (const rel of files) {
-    const secrets = findSecrets(await readFile(path.join(dir, rel), 'utf8'), input.token)
-    if (secrets.length) problems.push(`${rel}: contains a secret (${secrets.join(', ')})`)
-  }
+  problems.push(...(await secretProblems(dir, files, input.token)))
   const keys: string[] = []
   const titles: string[] = []
   for (const rel of files.filter((f) => f.startsWith('features/') && f.endsWith('.feature'))) {

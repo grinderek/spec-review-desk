@@ -105,6 +105,31 @@ describe('vetAuthorOutput', () => {
     expect((await vet()).problems).toEqual(['proposal.md: contains a secret (the OAuth token, an sk-ant- key)'])
   })
 
+  it('finds a piece of the token, and halves of it split over two files (final review I3)', async () => {
+    const half = TOKEN.length / 2
+    await writeFiles(out, {
+      [`${BASE}/proposal.md`]: `## Why\n\nEmail ${TOKEN.slice(0, half)}\n`,
+      [`${BASE}/features/NEW_STEPS.md`]: `${NEW_STEPS_MD}\n${TOKEN.slice(half)}\n`,
+    })
+    expect((await vet()).problems).toEqual([
+      'features/NEW_STEPS.md: contains a secret (a piece of the OAuth token)',
+      'proposal.md: contains a secret (a piece of the OAuth token)',
+    ])
+  })
+
+  it('finds a token piece only the concatenation of the files carries, across a file boundary', async () => {
+    // Each file holds 6 characters — under the 8-character piece — but proposal.md's tail and the
+    // next file's head join into 12 contiguous characters of the token.
+    const at = TOKEN.indexOf('alue-0')
+    const spec = `${BASE}/specs/thread-state/spec.md`
+    await writeFiles(out, {
+      [`${BASE}/proposal.md`]: `## Why\n\nEmail inputs. ${TOKEN.slice(at, at + 6)}`,
+      [spec]: `${TOKEN.slice(at + 6, at + 12)}\n${SPEC_MD}`,
+    })
+    const problems = (await vet()).problems
+    expect(problems.filter((p) => p.includes('secret'))).toEqual(['the files together contain a secret split across them (a piece of the OAuth token)'])
+  })
+
   it('reports a failing openspec validate with its output', async () => {
     process.env.FAKE_OPENSPEC_FAIL = 'requirement without scenario'
     expect((await vet()).problems).toEqual(['openspec validate --strict failed: ✗ add-hs-email: requirement without scenario'])
