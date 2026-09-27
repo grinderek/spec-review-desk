@@ -61,10 +61,14 @@ CLI rejects a schema that carries a top-level `$schema` key (zod's `toJSONSchema
 `REPLY_SCHEMA_ARGS` in `server/initiative-protocol.ts` strips it the same way `server/protocol.ts`
 already does for `AGENT_REPLY_SCHEMA_ARG` — a test pins that no schema arg ever carries `$schema`.
 
-`npm run e2e` exercises the whole flow above (research/planner/author) against `FakeSandbox` and the
-fake `claude`/`openspec` binaries — no docker, no real agent. Task 21 (building the real images,
-running one real sandboxed run end to end) is a manual, one-time check outside the automated suite;
-see its task brief before doing it.
+`npm run e2e` exercises New feature → plan (**planner**) → approve → propose (**author**, including
+stopping a hung run and proposing again) against `FakeSandbox` and the fake `claude`/`openspec`
+binaries — no docker, no real agent. It does **not** cover **research**: no spec drives the Research
+tab, its WebSearch/WebFetch phases, or the domain-approval decision flow — that coverage is still
+outstanding. Task 21 (building the real images, running one real sandboxed run end to end against
+the real `claude` CLI and docker) is a manual, one-time check outside the automated suite; see
+"Task 21: MANUAL — the real sandbox" in
+`docs/superpowers/plans/2026-09-24-spec-review-initiatives.md` (local, gitignored) before doing it.
 
 State lives in `openspec/changes/<name>/review.yaml` (committed with each decision) and `decisions.md`. Run logs live in
 `<worktree>/.spec-review/` (added to `.git/info/exclude` automatically).

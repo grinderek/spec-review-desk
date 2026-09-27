@@ -1,3 +1,4 @@
+import { rmSync } from 'node:fs'
 import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -24,8 +25,30 @@ async function diffOf(repo: string, rel: string, before: string, insert: string)
 
 const reply = (over: Record<string, unknown>) => ({ answer: '', patch: null, decisions: [], resolves: [], status: 'answered', ...over })
 
+// Every fixture temp dir this process creates (makeRepo's `hub`, and the `tmp` below) is removed on
+// exit — the suite previously leaked ~17k /tmp/sr-* dirs across runs. By default Playwright SIGKILLs
+// the whole webServer process group on teardown, which no listener can catch, so this only fires
+// because playwright.config.ts's `webServer.gracefulShutdown` makes it send SIGTERM first — that
+// reaches this process (same process group), our SIGTERM handler below calls process.exit(), and the
+// 'exit' listener runs its (synchronous) rmSync cleanup before the process actually terminates.
+const cleanupDirs: string[] = []
+process.on('exit', () => {
+  for (const dir of cleanupDirs) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+    } catch {
+      // best-effort: never let cleanup crash the shutdown path
+    }
+  }
+})
+// Explicit handlers so the signal reaches process.exit() (and so the 'exit' cleanup above runs) even
+// if some dependency (e.g. the HTTP server) has already registered its own SIGINT/SIGTERM listener,
+// which would otherwise override Node's default terminate-on-signal disposition.
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => process.exit(0))
+
 async function main(): Promise<void> {
   const { hub, repo } = await makeRepo()
+  cleanupDirs.push(hub)
   await writeFiles(repo, changeFiles('add-decision-flow'))
   sh(repo, 'git', ['add', '-A'])
   sh(repo, 'git', ['commit', '-q', '-m', 'a second change for the decisions flow'])
@@ -81,6 +104,7 @@ async function main(): Promise<void> {
   }]
 
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-e2e-'))
+  cleanupDirs.push(tmp)
   const repliesFile = path.join(tmp, 'replies.json')
   await writeFile(repliesFile, JSON.stringify(replies))
   process.env.FAKE_CLAUDE_REPLIES_FILE = repliesFile
@@ -89,6 +113,10 @@ async function main(): Promise<void> {
   process.env.FAKE_CLAUDE_WRITES_FILE = writesFile
   process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
   process.env.FAKE_CLAUDE_MODE = 'answer'
+  // The propose/stop e2e scenario proposes slice s1 twice: the first attempt hangs (so the UI's
+  // Stop control is exercised), the second is the real scripted 'Slice s1' reply above.
+  process.env.FAKE_CLAUDE_HANG_MATCH = 'Slice s1'
+  process.env.FAKE_CLAUDE_HANG_COUNT_FILE = path.join(tmp, 'hang-count')
 
   const config = path.join(hub, 'config.yaml')
   await writeFile(config, [

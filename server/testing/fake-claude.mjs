@@ -94,7 +94,17 @@ if (process.env.FAKE_CLAUDE_WRITES_FILE && process.env.FAKE_CLAUDE_OUT) {
 
 const streamEvent = (event) => emit({ type: 'stream_event', event, session_id: id })
 
-if (mode === 'hang') {
+// FAKE_CLAUDE_HANG_MATCH: like FAKE_CLAUDE_MODE=hang, but scoped to prompts containing this text,
+// and only the FIRST such invocation — tracked via FAKE_CLAUDE_HANG_COUNT_FILE, a marker file this
+// process creates on its first hang. This lets an e2e fixture simulate one run hanging (so the UI's
+// Stop control can be exercised), then retry the same action and let it finish normally, without a
+// second global FAKE_CLAUDE_MODE flip (the e2e server is one long-lived process shared by every run).
+const hangMatch = process.env.FAKE_CLAUDE_HANG_MATCH
+const hangCountFile = process.env.FAKE_CLAUDE_HANG_COUNT_FILE
+const hangOnce = Boolean(hangMatch) && prompt.includes(hangMatch) && hangCountFile !== undefined && !existsSync(hangCountFile)
+if (hangOnce) writeFileSync(hangCountFile, 'hung once')
+
+if (mode === 'hang' || hangOnce) {
   setInterval(() => undefined, 1000)
 } else if (structured) {
   const reply = chooseReply()

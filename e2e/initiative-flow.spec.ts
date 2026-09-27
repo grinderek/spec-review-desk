@@ -21,6 +21,17 @@ test('New feature → plan → approve → propose s1 → the change appears', a
   await expect(s1).toContainText('planned')
   await expect(page.locator('[data-slice="s2"]')).toContainText('Delivery states, edited by the owner.')
   await expect(page.locator('[data-slice="s2"]')).toContainText('waiting for s1')
+  // The first attempt hangs (the fixture's fake author hangs once on the 'Slice s1' prompt) so the
+  // Plan tab's Stop control can be exercised, then the slice must become proposable again.
+  await s1.getByLabel('Notes for s1').fill('Keep it small.')
+  await s1.getByRole('button', { name: 'Propose s1' }).click()
+  await expect(s1.locator('.pill')).toHaveText('proposing', { timeout: 20_000 })
+  await expect(s1.getByRole('button', { name: 'Stop' })).toBeVisible()
+  await s1.getByRole('button', { name: 'Stop' }).click()
+  await expect(s1.locator('.pill')).toHaveText('planned', { timeout: 20_000 })
+  await expect(s1.getByRole('button', { name: 'Propose s1' })).toBeVisible()
+
+  // Propose s1 again — the hang-once budget is spent, so this attempt finishes for real.
   await s1.getByLabel('Notes for s1').fill('Keep it small.')
   await s1.getByRole('button', { name: 'Propose s1' }).click()
   await expect(s1.locator('.pill')).toHaveText('proposed', { timeout: 20_000 })
