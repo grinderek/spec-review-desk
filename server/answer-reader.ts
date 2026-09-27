@@ -1,3 +1,5 @@
+import type { ClaudeEvent } from './claude.ts'
+
 // Reads the top-level "answer" string out of a JSON object that arrives in arbitrary chunks (the
 // StructuredOutput tool's input_json_delta stream) and returns its decoded text as it grows.
 // Everything else in the object (other keys, nested objects, strings containing "answer") is skipped.
@@ -135,5 +137,38 @@ export class AnswerReader {
     }
     this.#high = null
     return held + unit
+  }
+}
+
+export const STRUCTURED_TOOL = 'StructuredOutput'
+
+// Routes the CLI's stream to one AnswerReader: only the input_json_delta chunks of the
+// StructuredOutput content block (by index, reset on each new assistant message) carry the reply;
+// Read/Grep inputs, narration text and thinking never do.
+export class StructuredStream {
+  #tools = new Map<number, string>()
+  #reader: AnswerReader | null = null
+  #emitted = false
+
+  feed(event: ClaudeEvent): ClaudeEvent[] {
+    if (event.type === 'message_start') {
+      this.#tools = new Map()
+      return []
+    }
+    if (event.type === 'tool_start') {
+      this.#tools = new Map(this.#tools).set(event.index, event.name)
+      if (event.name !== STRUCTURED_TOOL) return []
+      const reset = this.#emitted
+      this.#reader = new AnswerReader()
+      this.#emitted = false
+      return reset ? [{ type: 'answer_reset' }] : []
+    }
+    if (event.type === 'json_delta' && this.#reader && this.#tools.get(event.index) === STRUCTURED_TOOL) {
+      const text = this.#reader.push(event.json)
+      if (!text) return []
+      this.#emitted = true
+      return [{ type: 'answer_delta', text }]
+    }
+    return []
   }
 }

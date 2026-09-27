@@ -4,7 +4,8 @@ import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { claudeArgs, type ClaudeEvent, type ClaudeRunSpec, isMissingSession, parseStreamLine, runClaude } from './claude.ts'
 import { run } from './git.ts'
-import { FAKE_CLAUDE } from './testing/fake-claude-path.ts'
+import { AGENT_REPLY_SCHEMA_ARG } from './protocol.ts'
+import { FAKE_CLAUDE, resetFakeClaude } from './testing/fake-claude-path.ts'
 
 let log = ''
 const spec = (over: Partial<ClaudeRunSpec> = {}): ClaudeRunSpec => ({
@@ -13,6 +14,7 @@ const spec = (over: Partial<ClaudeRunSpec> = {}): ClaudeRunSpec => ({
 })
 
 beforeEach(async () => {
+  resetFakeClaude()
   const dir = await mkdtemp(path.join(os.tmpdir(), 'sr-claude-'))
   log = path.join(dir, 'log.ndjson')
   process.env.FAKE_CLAUDE_SESSIONS = path.join(dir, 'sessions')
@@ -86,5 +88,57 @@ describe('runClaude', () => {
     const outcome = await runClaude(spec({ bin: '/nonexistent/claude' }), { timeoutMs: 1000 })
     expect(outcome).toMatchObject({ ok: false, error: expect.stringMatching(/ENOENT/) })
     expect(isMissingSession(outcome)).toBe(false)
+  })
+})
+
+describe('structured replies (--json-schema)', () => {
+  const reply = { answer: 'Partial days count.\n"Quoted" ü 😀', patch: null, decisions: [], resolves: [], status: 'answered' }
+
+  it('passes the schema as --json-schema only when asked', () => {
+    const args = claudeArgs(spec({ jsonSchema: AGENT_REPLY_SCHEMA_ARG }))
+    expect(args[args.indexOf('--json-schema') + 1]).toBe(AGENT_REPLY_SCHEMA_ARG)
+    expect(claudeArgs(spec())).not.toContain('--json-schema')
+  })
+
+  it('reads message starts, tool starts, json deltas and structured_output', () => {
+    expect(parseStreamLine('{"type":"stream_event","event":{"type":"message_start","message":{}}}')).toEqual({ type: 'message_start' })
+    expect(parseStreamLine('{"type":"stream_event","event":{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","name":"StructuredOutput","input":{}}}}'))
+      .toEqual({ type: 'tool_start', index: 1, name: 'StructuredOutput' })
+    expect(parseStreamLine('{"type":"stream_event","event":{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\\"an"}}}'))
+      .toEqual({ type: 'json_delta', index: 1, json: '{"an' })
+    expect(parseStreamLine('{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"{}","structured_output":{"a":1},"session_id":"s"}'))
+      .toEqual({ type: 'result', ok: true, text: '{}', numTurns: 2, sessionId: 's', structured: { a: 1 } })
+  })
+
+  it('streams only the answer of a multi-turn reply and returns the structured object', async () => {
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply)
+    const events: ClaudeEvent[] = []
+    const outcome = await runClaude(spec({ jsonSchema: AGENT_REPLY_SCHEMA_ARG }), { timeoutMs: 10_000, onEvent: (e) => events.push(e) })
+    expect(outcome).toMatchObject({ ok: true, structured: reply, text: JSON.stringify(reply), numTurns: 2 })
+    expect(events.flatMap((e) => (e.type === 'answer_delta' ? [e.text] : [])).join('')).toBe(reply.answer)
+    expect(events.some((e) => e.type === 'delta' && e.text === 'Reading the change.')).toBe(true)
+  })
+
+  it('falls back to parsing the result text when structured_output is absent', async () => {
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply)
+    process.env.FAKE_CLAUDE_OMIT_STRUCTURED = '1'
+    const outcome = await runClaude(spec({ jsonSchema: AGENT_REPLY_SCHEMA_ARG }), { timeoutMs: 10_000 })
+    expect(outcome.structured).toEqual(reply)
+  })
+
+  it('keeps structured null for a plain run', async () => {
+    expect((await runClaude(spec(), { timeoutMs: 10_000 })).structured).toBeNull()
+  })
+
+  it('fake: invalid-then-valid answers only the validation retry with the valid reply', async () => {
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply)
+    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-then-valid'
+    const first = await runClaude(spec({ jsonSchema: AGENT_REPLY_SCHEMA_ARG }), { timeoutMs: 10_000 })
+    expect((first.structured as { decisions: { recommended: string }[] }).decisions[0]!.recommended).toBe('sqlite')
+    const retry = await runClaude(
+      spec({ jsonSchema: AGENT_REPLY_SCHEMA_ARG, prompt: 'Your reply did not pass validation: x. Reply again with the same schema.' }),
+      { timeoutMs: 10_000 },
+    )
+    expect(retry.structured).toEqual(reply)
   })
 })

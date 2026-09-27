@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { AnswerReader } from './answer-reader.ts'
+import { AnswerReader, StructuredStream } from './answer-reader.ts'
+import type { ClaudeEvent } from './claude.ts'
 
 const chunks = (text: string, size: number): string[] =>
   Array.from({ length: Math.ceil(text.length / size) }, (_, i) => text.slice(i * size, (i + 1) * size))
@@ -49,5 +50,45 @@ describe('AnswerReader', () => {
     const { out, reader } = read(['{"answer":null,"patch":"x"}'])
     expect(out.join('')).toBe('')
     expect(reader.done).toBe(false)
+  })
+})
+
+describe('StructuredStream', () => {
+  const feedAll = (events: ClaudeEvent[]): ClaudeEvent[] => {
+    const stream = new StructuredStream()
+    return events.flatMap((e) => stream.feed(e))
+  }
+
+  it('emits the answer of the StructuredOutput call only — never text, thinking or another tool input', () => {
+    expect(feedAll([
+      { type: 'message_start' },
+      { type: 'delta', text: 'Reading the change.' },
+      { type: 'tool_start', index: 1, name: 'Read' },
+      { type: 'json_delta', index: 1, json: '{"file_path":"x","answer":"not this"}' },
+      { type: 'message_start' },
+      { type: 'tool_start', index: 1, name: 'StructuredOutput' },
+      { type: 'json_delta', index: 1, json: '{"answer":"Yes' },
+      { type: 'json_delta', index: 1, json: ', because."}' },
+    ])).toEqual([{ type: 'answer_delta', text: 'Yes' }, { type: 'answer_delta', text: ', because.' }])
+  })
+
+  it('ignores json deltas of another block index in the same message', () => {
+    expect(feedAll([
+      { type: 'message_start' },
+      { type: 'tool_start', index: 0, name: 'Grep' },
+      { type: 'tool_start', index: 1, name: 'StructuredOutput' },
+      { type: 'json_delta', index: 0, json: '{"answer":"grep"}' },
+      { type: 'json_delta', index: 1, json: '{"answer":"real"}' },
+    ])).toEqual([{ type: 'answer_delta', text: 'real' }])
+  })
+
+  it('resets when a second StructuredOutput call starts after text was emitted', () => {
+    expect(feedAll([
+      { type: 'tool_start', index: 0, name: 'StructuredOutput' },
+      { type: 'json_delta', index: 0, json: '{"answer":"first"}' },
+      { type: 'message_start' },
+      { type: 'tool_start', index: 0, name: 'StructuredOutput' },
+      { type: 'json_delta', index: 0, json: '{"answer":"second"}' },
+    ])).toEqual([{ type: 'answer_delta', text: 'first' }, { type: 'answer_reset' }, { type: 'answer_delta', text: 'second' }])
   })
 })
