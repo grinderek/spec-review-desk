@@ -4,3 +4,5 @@ coverage/
 test-results/
 playwright-report/
 .fake-claude-sessions/
+.fake-docker/
+.env
