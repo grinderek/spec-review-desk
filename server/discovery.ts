@@ -92,9 +92,11 @@ export async function discover(repos: readonly { name: string; path: string }[],
     repos.map(async (repo) => {
       const worktrees = await Promise.all((await listWorktrees(repo)).map(async (wt) => ({ ...wt, changes: await listChanges(wt) })))
       const newest = (w: { changes: ChangeRef[] }) => Math.max(0, ...w.changes.map((c) => c.mtimeMs))
-      return { repo: repo.name, worktrees: worktrees.filter((w) => w.changes.length > 0).sort((a, b) => newest(b) - newest(a)) }
+      return { repo: repo.name, all: worktrees, worktrees: worktrees.filter((w) => w.changes.length > 0).sort((a, b) => newest(b) - newest(a)) }
     }),
   )
-  registry.set(trees.flatMap((t) => t.worktrees.map(({ changes: _changes, ...wt }) => wt)))
-  return trees.filter((t) => t.worktrees.length > 0)
+  // Every worktree is registered, even one without changes: a new initiative lives in its own
+  // worktree before its first change exists (spec B §4.1).
+  registry.set(trees.flatMap((t) => t.all.map(({ changes: _changes, ...wt }) => wt)))
+  return trees.map(({ all: _all, ...t }) => t).filter((t) => t.worktrees.length > 0)
 }
