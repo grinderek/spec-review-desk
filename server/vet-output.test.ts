@@ -109,6 +109,25 @@ describe('vetAuthorOutput', () => {
     process.env.FAKE_OPENSPEC_FAIL = 'requirement without scenario'
     expect((await vet()).problems).toEqual(['openspec validate --strict failed: ✗ add-hs-email: requirement without scenario'])
   })
+
+  it('turns a malformed .openspec.yaml into a problem instead of throwing, and moves nothing', async () => {
+    await writeFiles(out, { [`${BASE}/.openspec.yaml`]: 'schema: [unterminated\n' })
+    const result = await vet()
+    expect(result.problems).toEqual([expect.stringMatching(/^\.openspec\.yaml: /)])
+    await expect(readFile(path.join(wt, BASE, 'proposal.md'), 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('refuses a symlinked openspec directory in the output', async () => {
+    await rm(path.join(out, 'openspec'), { recursive: true })
+    await symlink(os.tmpdir(), path.join(out, 'openspec'))
+    expect((await vet()).problems).toEqual(['openspec: symlinks are not allowed'])
+  })
+
+  it('refuses a symlinked openspec/changes directory in the output', async () => {
+    await rm(path.join(out, 'openspec', 'changes'), { recursive: true })
+    await symlink(os.tmpdir(), path.join(out, 'openspec', 'changes'))
+    expect((await vet()).problems).toEqual(['openspec/changes: symlinks are not allowed'])
+  })
 })
 
 describe('moveChange', () => {

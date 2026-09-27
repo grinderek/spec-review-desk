@@ -1,7 +1,7 @@
 import { cp, lstat, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { parse } from 'yaml'
+import { parse, YAMLParseError } from 'yaml'
 import { FeatureParseError, parseFeature, unclassified } from './gherkin.ts'
 import { run } from './git.ts'
 import { checkJoinKey, specTitles } from './joinkey.ts'
@@ -34,6 +34,10 @@ async function layoutProblems(out: string, change: string): Promise<string[]> {
   const expected = ['openspec', 'openspec/changes', `openspec/changes/${change}`]
   const problems: string[] = []
   for (const [i, dir] of ['', ...expected.slice(0, 2)].entries()) {
+    if (dir) {
+      const s = await lstat(path.join(out, dir)).catch(() => null)
+      if (s?.isSymbolicLink()) return [`${dir}: symlinks are not allowed`]
+    }
     const names = (await readdir(path.join(out, dir)).catch(() => [] as string[])).sort()
     for (const name of names) {
       const rel = dir ? `${dir}/${name}` : name
@@ -65,10 +69,21 @@ async function exists(file: string): Promise<boolean> {
   return (await lstat(file).catch(() => null)) !== null
 }
 
+async function schemaProblem(dir: string, files: readonly string[]): Promise<string | null> {
+  if (!files.includes('.openspec.yaml')) return '.openspec.yaml must say schema: behavior-driven'
+  try {
+    const meta = parse(await readFile(path.join(dir, '.openspec.yaml'), 'utf8')) as { schema?: unknown } | null
+    return meta?.schema === 'behavior-driven' ? null : '.openspec.yaml must say schema: behavior-driven'
+  } catch (error) {
+    if (!(error instanceof YAMLParseError)) throw error
+    return `.openspec.yaml: ${error.message.split('\n')[0]}`
+  }
+}
+
 async function contentProblems(dir: string, files: readonly string[], input: VetInput): Promise<{ problems: string[]; keys: string[] }> {
   const problems: string[] = []
-  const meta = files.includes('.openspec.yaml') ? (parse(await readFile(path.join(dir, '.openspec.yaml'), 'utf8')) as { schema?: unknown } | null) : null
-  if (meta?.schema !== 'behavior-driven') problems.push('.openspec.yaml must say schema: behavior-driven')
+  const schema = await schemaProblem(dir, files)
+  if (schema) problems.push(schema)
   if (await exists(path.join(input.worktree, 'openspec', 'changes', input.change))) problems.push(`${input.change} already exists in the worktree`)
   for (const rel of files) {
     const secrets = findSecrets(await readFile(path.join(dir, rel), 'utf8'), input.token)
