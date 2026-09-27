@@ -1,5 +1,5 @@
 import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
-import type { Plan } from '../../server/initiative-store.ts'
+import type { Plan, RunRecord } from '../../server/initiative-store.ts'
 import type { SliceEdit, SliceStatus } from '../../server/slice-plan.ts'
 
 // Pure helpers of the initiative screens (spec B §8).
@@ -65,4 +65,18 @@ export function sliceCard(view: InitiativeView, sliceId: string): SliceCard {
   if (status !== 'planned') return { kind: 'done' }
   const blocker = view.blockers[sliceId]
   return blocker ? { kind: 'waiting', text: blocker } : { kind: 'ready' }
+}
+
+export function runTitle(run: Pick<RunRecord, 'kind' | 'slice' | 'topic'>): string {
+  if (run.kind === 'author') return `author · ${run.slice ?? '?'}`
+  if (run.kind === 'research') return `research · ${run.topic ?? ''}`
+  return 'planner'
+}
+
+// Resume is enabled when the run's blocking decisions are recorded or dismissed (spec B §4.4).
+export function canResume(view: Pick<InitiativeView, 'decisions'>, run: RunRecord): boolean {
+  if (run.outcome !== 'needs_owner') return false
+  return view.decisions
+    .filter((d) => d.source.kind === 'run' && d.source.run === run.id && d.blocking)
+    .every((d) => d.status === 'recorded' || d.status === 'dismissed')
 }

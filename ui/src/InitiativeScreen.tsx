@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { api, type InitiativeId, type InitiativeView, type SandboxStatus } from './api.ts'
 import { DocTab } from './DocTab.tsx'
+import { InitiativeDecisionsTab, InputsTab, ResearchTab, RunsTab } from './InitiativeTabs.tsx'
 import { PlanTab } from './PlanTab.tsx'
 
 // Spec B §8: header + tabs Plan, Brief, Inputs, Decisions, Research, Runs.
@@ -12,6 +13,10 @@ type TabEntry = [InitiativeTab, string, (view: InitiativeView) => number | null,
 const TABS: TabEntry[] = [
   ['plan', 'Plan', (v) => v.doc.plan.slices.length, (props) => <PlanTab {...props} />],
   ['brief', 'Brief', () => null, ({ view }) => <DocTab title="brief.md" text={view.brief} />],
+  ['inputs', 'Inputs', (v) => v.inputs.length, (props) => <InputsTab {...props} />],
+  ['decisions', 'Decisions', (v) => v.openDecisions, (props) => <InitiativeDecisionsTab {...props} />],
+  ['research', 'Research', (v) => v.doc.runs.filter((r) => r.kind === 'research').length, (props) => <ResearchTab {...props} />],
+  ['runs', 'Runs', (v) => v.doc.runs.length, (props) => <RunsTab {...props} />],
 ]
 
 function Header({ view, sandbox }: { view: InitiativeView; sandbox: SandboxStatus | undefined }) {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
 import type { RunRecord } from '../../server/initiative-store.ts'
-import { addEdit, createPreview, editsChanged, moveEdit, progressLabel, removeEdit, sliceCard, statusSegments, toEdits, toggleDependency } from './initiative-view.ts'
+import {
+  addEdit, canResume, createPreview, editsChanged, moveEdit, progressLabel, removeEdit, runTitle, sliceCard, statusSegments, toEdits, toggleDependency,
+} from './initiative-view.ts'
 
 const plan = {
   status: 'draft' as const,
@@ -82,5 +84,21 @@ describe('slice cards', () => {
     const proposing = viewOf({ statuses: { s1: 'proposing', s2: 'planned' }, doc: { ...viewOf({}).doc, runs: [run({})] } as InitiativeView['doc'] })
     expect(sliceCard(proposing, 's1')).toEqual({ kind: 'proposing', runId: 'r_1' })
     expect(sliceCard(viewOf({ statuses: { s1: 'proposed', s2: 'planned' } }), 's1')).toEqual({ kind: 'done' })
+  })
+})
+
+describe('runs', () => {
+  it('names runs', () => {
+    expect(runTitle(run({}))).toBe('author · s1')
+    expect(runTitle(run({ kind: 'research', slice: null, topic: 'Intuit' }))).toBe('research · Intuit')
+    expect(runTitle(run({ kind: 'planner', slice: null }))).toBe('planner')
+  })
+
+  it('resumes a waiting run once its blocking decisions are recorded or dismissed', () => {
+    const waiting = run({ outcome: 'needs_owner' })
+    const decision = { id: 'd_1', source: { kind: 'run', run: 'r_1', agent: 'author' }, blocking: true, status: 'open' }
+    expect(canResume(viewOf({ decisions: [decision] as InitiativeView['decisions'] }), waiting)).toBe(false)
+    expect(canResume(viewOf({ decisions: [{ ...decision, status: 'recorded' }] as InitiativeView['decisions'] }), waiting)).toBe(true)
+    expect(canResume(viewOf({}), run({ outcome: 'done' }))).toBe(false)
   })
 })
