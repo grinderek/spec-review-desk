@@ -27,7 +27,16 @@ describe('agentReplyJsonSchema', () => {
     const item = schema.properties.decisions.items
     expect(item.properties.options).toMatchObject({ minItems: 2, maxItems: 4 })
     expect(item.properties.id.pattern).toBe('^[a-z0-9][a-z0-9_-]{0,39}$')
-    expect(JSON.parse(AGENT_REPLY_SCHEMA_ARG)).toEqual(agentReplyJsonSchema)
+    const { $schema, ...withoutDialect } = agentReplyJsonSchema as Record<string, unknown>
+    expect(JSON.parse(AGENT_REPLY_SCHEMA_ARG)).toEqual(withoutDialect)
+  })
+
+  // The real `claude` CLI's --json-schema validator rejects the "$schema" dialect key
+  // z.toJSONSchema() emits by default (verified against the real CLI, 2026-09-27): "no schema with
+  // key or ref https://json-schema.org/draft/2020-12/schema".
+  it('drops the top-level "$schema" dialect key the real CLI rejects', () => {
+    expect(JSON.parse(AGENT_REPLY_SCHEMA_ARG)).not.toHaveProperty('$schema')
+    expect(agentReplyJsonSchema).toHaveProperty('$schema')
   })
 })
 

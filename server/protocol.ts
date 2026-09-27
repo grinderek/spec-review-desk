@@ -41,7 +41,13 @@ export interface KnownDecision { id: string; status: 'open' | 'decided' | 'recor
 export interface ReplyContext { agent: AgentKind; scenarioKeys: readonly string[]; decisions: readonly KnownDecision[] }
 
 export const agentReplyJsonSchema = z.toJSONSchema(AgentReplySchema)
-export const AGENT_REPLY_SCHEMA_ARG = JSON.stringify(agentReplyJsonSchema)
+// The real `claude` CLI's --json-schema validator rejects the top-level "$schema" dialect key
+// z.toJSONSchema() emits (verified 2026-09-27 against the real CLI: "no schema with key or ref
+// https://json-schema.org/draft/2020-12/schema"). Strip it — immutably — for the arg the CLI sees;
+// agentReplyJsonSchema itself (used by tests and anything else that wants the full JSON Schema)
+// keeps it.
+const { $schema: _agentReplySchemaDialect, ...agentReplyJsonSchemaForCli } = agentReplyJsonSchema
+export const AGENT_REPLY_SCHEMA_ARG = JSON.stringify(agentReplyJsonSchemaForCli)
 
 export function normalizePatch(patch: string | null): string | null {
   if (patch === null) return null
