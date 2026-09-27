@@ -35,6 +35,13 @@ export async function vetPatch(cwd: string, relDir: string, diff: string): Promi
   if (files.includes(reviewFile)) {
     return { diff, state: 'stale', commit: null, error: `a patch may not touch ${reviewFile} — it is written by the apply route itself`, files }
   }
+  // Final review Minor 2: reviewer.md tells the question agent it may never touch decisions.md
+  // (the Desk writes it, spec §6) — enforce that the same way review.yaml is enforced, so a
+  // forged history entry can never reach it through a patch.
+  const decisionsFile = `${relDir}/${DECISIONS_FILE}`
+  if (files.includes(decisionsFile)) {
+    return { diff, state: 'stale', commit: null, error: `a patch may not touch ${decisionsFile} — it is written by the Desk itself`, files }
+  }
   const pathErrors = validatePatchPaths(files, relDir)
   if (pathErrors.length) return { diff, state: 'stale', commit: null, error: pathErrors.join('; '), files }
   const checkError = await checkPatch(cwd, diff)

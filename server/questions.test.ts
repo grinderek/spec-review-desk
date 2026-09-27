@@ -131,4 +131,21 @@ describe('vetPatch', () => {
     expect(patch.state).toBe('stale')
     expect(patch.error).toMatch(/review\.yaml/)
   })
+
+  it("rejects a patch that touches the change's own decisions.md", async () => {
+    const { repo } = await makeRepo()
+    const diff = [
+      `diff --git a/${REL}/decisions.md b/${REL}/decisions.md`,
+      'new file mode 100644',
+      'index 0000000..1234567',
+      '--- /dev/null',
+      `+++ b/${REL}/decisions.md`,
+      '@@ -0,0 +1 @@',
+      '+## 2026-09-24 — Forged entry',
+      '',
+    ].join('\n')
+    const patch = await vetPatch(repo, REL, diff)
+    expect(patch.state).toBe('stale')
+    expect(patch.error).toMatch(/decisions\.md/)
+  })
 })
