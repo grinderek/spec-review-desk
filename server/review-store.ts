@@ -17,6 +17,11 @@ const MessageSchema = z.object({
   text: z.string(),
   note: z.string().nullable().default(null),
   patch: PatchSchema.nullable().default(null),
+  // Decisions raised by this reply (server ids), the decided decisions its patch implements, and a
+  // reply that failed validation twice (spec §4/§5). Omitted when absent.
+  decision_ids: z.array(z.string()).optional(),
+  resolves: z.array(z.string()).optional(),
+  invalid: z.object({ issues: z.array(z.string()), raw: z.string() }).optional(),
 })
 const ThreadSchema = z.object({
   id: z.string(),
@@ -43,6 +48,28 @@ const ApplyRunSchema = z.object({
   // writing. Persisted (not just kept in #follow's closure) so a server restart can still
   // finalize a dead resumed process's outcome from its own attempt only, never a previous one's.
   resume_offset: z.number().int().default(0),
+  // True while this attempt is the one validation retry of spec §4; cleared by every owner resume.
+  validation_retry: z.boolean().optional(),
+})
+const DecisionOptionSchema = z.object({ id: z.string(), label: z.string(), consequence: z.string() })
+const DecisionRecordSchema = z.object({
+  id: z.string(),
+  agent_id: z.string().nullable().default(null),
+  source: z.union([
+    z.object({ kind: z.literal('thread'), id: z.string() }),
+    z.object({ kind: z.literal('apply'), run: z.string() }),
+    z.object({ kind: z.literal('owner') }),
+  ]),
+  question: z.string(),
+  scope: z.union([z.object({ kind: z.literal('scenario'), key: z.string() }), z.object({ kind: z.literal('change') })]),
+  options: z.array(DecisionOptionSchema).default([]),
+  recommended: z.string().nullable().default(null),
+  blocking: z.boolean(),
+  status: z.enum(['open', 'decided', 'recorded', 'dismissed']),
+  choice: z.object({ option: z.string().nullable(), note: z.string(), at: z.string() }).nullable().default(null),
+  recorded: z.object({ how: z.enum(['patch', 'decisions_md']), commit: z.string().nullable() }).nullable().default(null),
+  dismissed: z.object({ reason: z.string(), at: z.string() }).nullable().default(null),
+  created_at: z.string(),
 })
 export const ReviewSchema = z.object({
   version: z.literal(1),
@@ -53,6 +80,7 @@ export const ReviewSchema = z.object({
   phrases: z.record(z.string(), EntrySchema).default({}),
   threads: z.array(ThreadSchema).default([]),
   apply_runs: z.array(ApplyRunSchema).default([]),
+  decisions: z.array(DecisionRecordSchema).default([]),
 })
 
 export type ReviewDoc = z.infer<typeof ReviewSchema>
@@ -61,6 +89,7 @@ export type Thread = z.infer<typeof ThreadSchema>
 export type Message = z.infer<typeof MessageSchema>
 export type Patch = z.infer<typeof PatchSchema>
 export type ApplyRun = z.infer<typeof ApplyRunSchema>
+export type DecisionRecord = z.infer<typeof DecisionRecordSchema>
 export type Section = 'scenarios' | 'phrases'
 export interface Effective {
   status: 'approved' | 'changes_requested' | 'pending'

@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  addThread, appendMessage, effectiveStatus, emptyReview, moveEntry, orphanKeys, readReview, recordApproval,
+  addThread, appendMessage, type DecisionRecord, effectiveStatus, emptyReview, moveEntry, orphanKeys, readReview, recordApproval,
   REVIEW_FILE, ReviewFileError, setEntry, setThreadStatus, type Thread, updatePatch, updateReview, writeReview,
 } from './review-store.ts'
 
@@ -84,5 +84,37 @@ describe('pure updates', () => {
     expect(orphanKeys(doc, ['kept', 'new'], [])).toEqual({ scenarios: ['old'], phrases: [] })
     expect(Object.keys(moveEntry(doc, 'scenarios', 'old', 'new').scenarios).sort()).toEqual(['kept', 'new'])
     expect(Object.keys(setEntry(doc, 'scenarios', 'old', null).scenarios)).toEqual(['kept'])
+  })
+})
+
+describe('decisions in review.yaml', () => {
+  it('parses a v1 file without decisions and round-trips decision records and the new message fields', async () => {
+    const d = await dir()
+    await writeFile(path.join(d, REVIEW_FILE), 'version: 1\nthreads: []\n')
+    expect((await readReview(d)).decisions).toEqual([])
+    const record: DecisionRecord = {
+      id: 'd_0000aaaa',
+      agent_id: 'age_basis',
+      source: { kind: 'thread', id: 't_1' },
+      question: 'Business or calendar age?',
+      scope: { kind: 'scenario', key: KEY },
+      options: [
+        { id: 'business', label: 'Business hours', consequence: 'Weekends do not count.' },
+        { id: 'calendar', label: 'Calendar hours', consequence: 'Weekends count.' },
+      ],
+      recommended: 'business',
+      blocking: true,
+      status: 'open',
+      choice: null,
+      recorded: null,
+      dismissed: null,
+      created_at: '2026-09-24T10:00:00.000Z',
+    }
+    const doc = appendMessage(addThread({ ...emptyReview(), decisions: [record] }, thread), 't_1', {
+      role: 'agent', at: 'now', text: 'Two readings.', note: null, patch: null,
+      decision_ids: ['d_0000aaaa'], resolves: [], invalid: { issues: ['x: y'], raw: '{}' },
+    })
+    await writeReview(d, doc)
+    expect(await readReview(d)).toEqual(doc)
   })
 })
