@@ -1,4 +1,4 @@
-import type { Message } from './review-store.ts'
+import type { DecisionRecord, Message } from './review-store.ts'
 
 export interface QuestionPromptInput {
   changeName: string
@@ -7,9 +7,35 @@ export interface QuestionPromptInput {
   messages: readonly Message[]
   files: readonly string[]
   today: string
+  decisions?: readonly DecisionRecord[]
 }
 
 const HEADINGS = { scenario: 'Scenario', phrase: 'Step phrase', change: 'Change', apply: 'Apply run' } as const
+const sentence = (text: string): string => (/[.!?]$/.test(text) ? text : `${text}.`)
+
+const scopeText = (d: DecisionRecord): string => (d.scope.kind === 'scenario' ? `scenario ${d.scope.key}` : 'the whole change')
+
+function choiceText(d: DecisionRecord): string {
+  const option = d.options.find((o) => o.id === d.choice?.option)
+  const label = option ? `${option.id} (${option.label})` : 'no option'
+  return d.choice?.note ? `${label}; note: ${d.choice.note}` : label
+}
+
+// Spec §7: every agent prompt lists the change's open and decided decisions, so agents neither
+// re-ask them nor lose the owner's choice.
+export function decisionsSection(decisions: readonly DecisionRecord[]): string[] {
+  const listed = decisions.filter((d) => d.status === 'open' || d.status === 'decided')
+  if (listed.length === 0) return ['## Decisions', 'No open or decided decisions.']
+  return [
+    '## Decisions',
+    ...listed.map((d) => {
+      const head = `- ${d.id} [${d.status}${d.blocking ? ', blocking' : ''}] ${scopeText(d)} — ${d.question}`
+      return d.status === 'decided'
+        ? `${head}\n  Owner's choice: ${choiceText(d)}`
+        : `${head}\n  Options: ${d.options.map((o) => o.id).join(', ') || 'none'}`
+    }),
+  ]
+}
 
 export function buildQuestionPrompt(input: QuestionPromptInput): string {
   const history = input.messages
@@ -27,9 +53,28 @@ export function buildQuestionPrompt(input: QuestionPromptInput): string {
     '## Review files',
     ...input.files.map((f) => `- ${f}`),
     '',
+    ...decisionsSection(input.decisions ?? []),
+    '',
     '## Thread so far',
     history,
     '',
     'Answer the last OWNER message.',
   ].join('\n')
+}
+
+// Spec §8: "Resume with decisions" tells the Apply agent what the owner chose for each decision of
+// its run.
+export function buildResumePrompt(decisions: readonly DecisionRecord[]): string {
+  const line = (d: DecisionRecord): string => {
+    if (d.status === 'dismissed') return `- ${d.id} (${d.question}): dismissed — ${d.dismissed?.reason ?? ''}`
+    if (d.status === 'open') return `- ${d.id} (${d.question}): still open and not blocking — continue without it`
+    const option = d.options.find((o) => o.id === d.choice?.option)
+    const choice = sentence(option ? `${option.label} — ${option.consequence}` : '(no option)')
+    const note = d.choice?.note ? ` Note: ${sentence(d.choice.note)}` : ''
+    const where = d.recorded?.how === 'patch'
+      ? ` Recorded in the scenario by ${d.recorded.commit ?? 'a patch'}.`
+      : d.recorded?.how === 'decisions_md' ? ' Recorded in decisions.md.' : ''
+    return `- ${d.id} (${d.question}): ${choice}${note}${where}`
+  }
+  return ['The owner answered the decisions you raised:', ...decisions.map(line), '', 'Continue the apply with these choices.'].join('\n')
 }
