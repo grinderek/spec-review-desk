@@ -6,13 +6,12 @@ import type { PanelTarget } from './App.tsx'
 import { DocTab } from './DocTab.tsx'
 import { useEventStream } from './events.ts'
 import { useAction } from './feedback.tsx'
+import { reduceLiveLog, type RunEventMessage } from './live-log.ts'
 
 function LiveLog({ id, runId }: { id: ChangeId; runId: string }) {
   const [text, setText] = useState('')
   useEventStream(api.runEventsUrl(id, runId), (message) => {
-    const data = message.data as { type?: string; event?: { type?: string; text?: string } } | null
-    const kind = data?.event?.type
-    if (data?.type === 'event' && (kind === 'delta' || kind === 'answer_delta')) setText((current) => current + (data.event?.text ?? ''))
+    setText((current) => reduceLiveLog(current, message.data as RunEventMessage | null))
   })
   return <pre className="doc">{text || 'Waiting for the agent…'}</pre>
 }
