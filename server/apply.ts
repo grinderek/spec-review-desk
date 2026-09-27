@@ -346,7 +346,11 @@ export class ApplyService {
       }
     }
     const at = nowIso(this.#now())
-    const final: ApplyRun = { ...run, outcome: result.outcome, ended_at: at }
+    // Final review Important 2: issues surviving the retry (or a claim we never even validated,
+    // e.g. an unparseable reply) mean the outcome is `failed` regardless of what the agent's reply
+    // claimed — a `needs_owner` or `done` status from an invalid reply must not read as if it happened.
+    const outcome = issues.length ? 'failed' : result.outcome
+    const final: ApplyRun = { ...run, outcome, ended_at: at }
     const valid = issues.length === 0 ? result.reply : null
     const decisions = valid ? decisionsFromReply(valid.decisions, { kind: 'apply', run: run.id }, at) : []
     const message: Message = {

@@ -102,6 +102,49 @@ describe('structured Apply outcomes', () => {
     expect(message.invalid?.issues.some((i) => i.startsWith('status:'))).toBe(true)
   })
 
+  // Final review Important 2: the run's outcome must be `failed` whenever issues survive the
+  // retry, regardless of what the agent's own (invalid) reply claimed — not `needs_owner` with
+  // zero decisions (which would hide ApplyResume and never block readiness), and not `done`.
+  it('forces outcome to failed on a second invalid reply even when it claims needs_owner', async () => {
+    const { wt, ref, apply } = await setup()
+    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-twice'
+    process.env.FAKE_CLAUDE_INVALID_REPLY = JSON.stringify({
+      answer: 'Stuck, needs a decision.',
+      patch: null,
+      decisions: [{ ...blocking, recommended: 'nonexistent_option' }],
+      resolves: [],
+      status: 'needs_owner',
+    })
+    const run = await apply.start(wt, ref)
+    await apply.settled(run.id)
+    expect(await calls()).toHaveLength(2)
+    const review = await readReview(ref.dir)
+    expect(review.apply_runs[0]!.outcome).toBe('failed')
+    expect(review.decisions).toEqual([])
+    const message = review.threads.find((t) => t.anchor === 'apply')!.messages[0]!
+    expect(message.invalid?.issues.some((i) => i.includes('recommended'))).toBe(true)
+  })
+
+  it('forces outcome to failed on a second invalid reply even when it claims done', async () => {
+    const { wt, ref, apply } = await setup()
+    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-twice'
+    process.env.FAKE_CLAUDE_INVALID_REPLY = JSON.stringify({
+      answer: 'All done supposedly.',
+      patch: '--- a bare diff the Apply agent must never send ---',
+      decisions: [],
+      resolves: [],
+      status: 'done',
+    })
+    const run = await apply.start(wt, ref)
+    await apply.settled(run.id)
+    expect(await calls()).toHaveLength(2)
+    const review = await readReview(ref.dir)
+    expect(review.apply_runs[0]!.outcome).toBe('failed')
+    expect(review.decisions).toEqual([])
+    const message = review.threads.find((t) => t.anchor === 'apply')!.messages[0]!
+    expect(message.invalid?.issues.some((i) => i.includes('patch'))).toBe(true)
+  })
+
   it('keeps the NEEDS_OWNER prose fallback when the reply is not structured', async () => {
     const { wt, ref, apply } = await setup()
     process.env.FAKE_CLAUDE_STRUCTURED = 'off'
