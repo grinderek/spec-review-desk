@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { type FormEvent, type KeyboardEvent, useState } from 'react'
 import type { ChangeView } from '../../server/change-view.ts'
 import type { Thread } from '../../server/review-store.ts'
-import { api, type ChangeId } from './api.ts'
+import { api, type ChangeId, changeDecisions } from './api.ts'
 import type { PanelTarget } from './App.tsx'
 import { DecisionCard } from './DecisionCard.tsx'
 import { resumeState } from './decision-view.ts'
@@ -118,7 +118,7 @@ export function ThreadPanel({ id, target, onTarget }: { id: ChangeId; target: Pa
             {(m.decision_ids ?? []).map((decisionId) => {
               const decision = view?.decisions.find((d) => d.id === decisionId)
               return decision ? (
-                <DecisionCard key={decisionId} id={id} decision={decision} archived={archived} scenarioKeys={scenarioKeys} onThread={(t) => onTarget({ kind: 'thread', id: t })} />
+                <DecisionCard key={decisionId} client={changeDecisions(id)} decision={decision} archived={archived} scenarioKeys={scenarioKeys} onThread={(t) => onTarget({ kind: 'thread', id: t })} />
               ) : null
             })}
           </div>

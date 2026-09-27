@@ -37,7 +37,7 @@ export function useAction() {
         toast(error instanceof Error ? error.message : String(error), 'bad')
         return false
       } finally {
-        for (const key of ['change', 'changes', 'corpus', 'runner']) void client.invalidateQueries({ queryKey: [key] })
+        for (const key of ['change', 'changes', 'corpus', 'runner', 'initiative', 'initiatives']) void client.invalidateQueries({ queryKey: [key] })
       }
     },
     [client, toast],

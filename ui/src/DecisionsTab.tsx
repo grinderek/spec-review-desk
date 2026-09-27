@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { ChangeView } from '../../server/change-view.ts'
-import type { ChangeId } from './api.ts'
+import { type ChangeId, changeDecisions } from './api.ts'
 import type { PanelTarget } from './App.tsx'
 import { DecisionCard } from './DecisionCard.tsx'
 import { history, inbox, type InboxFilter } from './decision-view.ts'
@@ -34,12 +34,12 @@ export function DecisionsTab({ id, view, onGoto, focusDecision, setPanel }: Deci
         <button className="chip" aria-pressed={filter === 'all'} onClick={() => setFilter('all')}>All</button>
         {view.archived ? null : <button className="btn" disabled={adding} onClick={() => setAdding(true)}>+ Open decision</button>}
       </div>
-      {adding ? <NewDecisionForm id={id} view={view} onClose={() => setAdding(false)} /> : null}
+      {adding ? <NewDecisionForm client={changeDecisions(id)} scenarioKeys={keys} onClose={() => setAdding(false)} /> : null}
       {items.length === 0 ? <p className="empty">{filter === 'open' ? 'No open decisions.' : 'No decisions yet.'}</p> : null}
       {items.map((d) => (
         <DecisionCard
           key={d.id}
-          id={id}
+          client={changeDecisions(id)}
           decision={d}
           archived={view.archived}
           scenarioKeys={keys}

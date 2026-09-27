@@ -1,7 +1,11 @@
 import type { ChangeSummary, ChangeView } from '../../server/change-view.ts'
+import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
+import type { Plan, RunRecord } from '../../server/initiative-store.ts'
 import type { CorpusReport } from '../../server/corpus.ts'
 import type { ApplyRun } from '../../server/review-store.ts'
 import type { RunnerState } from '../../server/runner.ts'
+import type { SandboxStatus } from '../../server/sandbox.ts'
+import type { SliceEdit } from '../../server/slice-plan.ts'
 
 export class ApiError extends Error {
   constructor(readonly code: string, message: string, readonly status: number) {
@@ -9,11 +13,12 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(method: 'GET' | 'POST', url: string, body?: unknown): Promise<T> {
+async function request<T>(method: 'GET' | 'POST' | 'PUT', url: string, body?: unknown): Promise<T> {
+  const form = body instanceof FormData
   const res = await fetch(url, {
     method,
-    headers: body === undefined ? undefined : { 'content-type': 'application/json' },
-    body: body === undefined ? undefined : JSON.stringify(body),
+    headers: body === undefined || form ? undefined : { 'content-type': 'application/json' },
+    body: body === undefined ? undefined : form ? body : JSON.stringify(body),
   })
   const text = await res.text()
   const json = text ? (JSON.parse(text) as unknown) : null
@@ -25,7 +30,7 @@ async function request<T>(method: 'GET' | 'POST', url: string, body?: unknown): 
 }
 
 export interface ChangeId { wt: string; name: string }
-export interface WorktreeSummary { id: string; path: string; branch: string | null; head: string; changes: ChangeSummary[] }
+export interface WorktreeSummary { id: string; path: string; branch: string | null; head: string; changes: (ChangeSummary & { initiative: string | null })[] }
 export interface ChangesResponse { repos: { repo: string; worktrees: WorktreeSummary[] }[] }
 export type Section = 'scenarios' | 'phrases'
 export interface Capabilities { claude: boolean; docker: boolean }
@@ -39,6 +44,13 @@ export type DecideResponse = { status: 'recorded'; commit: string } | { status: 
 
 const base = ({ wt, name }: ChangeId): string => `/api/changes/${wt}/${encodeURIComponent(name)}`
 type Ok = { ok: boolean }
+
+// Spec B: an initiative is addressed like a change — worktree id + name.
+export type InitiativeId = ChangeId
+const ibase = ({ wt, name }: InitiativeId): string => `/api/initiatives/${wt}/${encodeURIComponent(name)}`
+export type { InitiativeSummary, InitiativeView, RunRecord, SandboxStatus, SliceEdit }
+export interface RepoChoice { name: string; path: string; worktrees: { id: string; path: string; branch: string | null }[] }
+export interface InitiativesResponse { initiatives: InitiativeSummary[]; repos: RepoChoice[]; defaultBase: string }
 
 export const api = {
   status: () => request<{ capabilities: Capabilities }>('GET', '/api/status'),
@@ -79,4 +91,46 @@ export const api = {
   dismissDecision: (id: ChangeId, decisionId: string, reason: string) => request<Ok>('POST', `${base(id)}/decisions/${decisionId}/dismiss`, { reason }),
   reattachDecision: (id: ChangeId, decisionId: string, to: string) => request<Ok>('POST', `${base(id)}/decisions/${decisionId}/reattach`, { to }),
   resumeApply: (id: ChangeId, runId: string) => request<Ok>('POST', `${base(id)}/apply/resume`, { runId }),
+  initiatives: () => request<InitiativesResponse>('GET', '/api/initiatives'),
+  initiative: (id: InitiativeId) => request<InitiativeView>('GET', ibase(id)),
+  sandboxStatus: () => request<SandboxStatus>('GET', '/api/sandbox/status'),
+  createInitiative: (form: FormData) => request<{ worktreeId: string; name: string }>('POST', '/api/initiatives', form),
+  uploadInputs: (id: InitiativeId, form: FormData) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, form),
+  addFromRepo: (id: InitiativeId, from: string) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, { from }),
+  acceptDraft: (id: InitiativeId, file: string) => request<{ commit: string }>('POST', `${ibase(id)}/inputs/${encodeURIComponent(file)}/accept`),
+  discardDraft: (id: InitiativeId, file: string) => request<Ok>('POST', `${ibase(id)}/inputs/${encodeURIComponent(file)}/discard`),
+  startResearch: (id: InitiativeId, body: { topic: string; questions: string }) => request<{ run: RunRecord }>('POST', `${ibase(id)}/research`, body),
+  setDomains: (id: InitiativeId, domains: string[]) => request<{ domains: string[] }>('PUT', `${ibase(id)}/research/domains`, { domains }),
+  runPlanner: (id: InitiativeId) => request<{ run: RunRecord }>('POST', `${ibase(id)}/plan/run`),
+  savePlan: (id: InitiativeId, slices: SliceEdit[]) => request<{ plan: Plan }>('PUT', `${ibase(id)}/plan`, { slices }),
+  approvePlan: (id: InitiativeId) => request<{ commit: string }>('POST', `${ibase(id)}/plan/approve`),
+  proposeSlice: (id: InitiativeId, sliceId: string, body: { notes: string; change?: string }) =>
+    request<{ run: RunRecord }>('POST', `${ibase(id)}/slices/${sliceId}/propose`, body),
+  stopRun: (id: InitiativeId, runId: string) => request<Ok>('POST', `${ibase(id)}/runs/${runId}/stop`),
+  resumeRun: (id: InitiativeId, runId: string) => request<Ok>('POST', `${ibase(id)}/runs/${runId}/resume`),
+  initiativeRunLog: (id: InitiativeId, runId: string) => request<{ run: RunRecord; text: string }>('GET', `${ibase(id)}/runs/${runId}/log`),
+  initiativeRunEventsUrl: (id: InitiativeId, runId: string) => `${ibase(id)}/runs/${runId}/events`,
+
 }
+
+// The decision actions of sub-project A, for a change or for an initiative (spec B §9).
+export interface DecisionClient {
+  add: (body: NewDecisionBody) => Promise<{ id: string }>
+  decide: (decisionId: string, body: { option: string | null; note: string }) => Promise<DecideResponse>
+  dismiss: (decisionId: string, reason: string) => Promise<Ok>
+  reattach: ((decisionId: string, to: string) => Promise<Ok>) | null
+}
+
+export const changeDecisions = (id: ChangeId): DecisionClient => ({
+  add: (body) => api.addDecision(id, body),
+  decide: (decisionId, body) => api.decide(id, decisionId, body),
+  dismiss: (decisionId, reason) => api.dismissDecision(id, decisionId, reason),
+  reattach: (decisionId, to) => api.reattachDecision(id, decisionId, to),
+})
+
+export const initiativeDecisions = (id: InitiativeId): DecisionClient => ({
+  add: (body) => request<{ id: string }>('POST', `${ibase(id)}/decisions`, { question: body.question, blocking: body.blocking, options: body.options }),
+  decide: (decisionId, body) => request<DecideResponse>('POST', `${ibase(id)}/decisions/${decisionId}/decide`, body),
+  dismiss: (decisionId, reason) => request<Ok>('POST', `${ibase(id)}/decisions/${decisionId}/dismiss`, { reason }),
+  reattach: null,
+})

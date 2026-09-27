@@ -27,5 +27,8 @@ export function useInvalidation(): void {
       for (const key of ['change', 'changes', 'corpus']) void client.invalidateQueries({ queryKey: [key] })
     }
     if (message.topic === 'runner') void client.invalidateQueries({ queryKey: ['runner'] })
+    if (message.topic === 'initiative' || message.topic === 'files') {
+      for (const key of ['initiative', 'initiatives', 'changes']) void client.invalidateQueries({ queryKey: [key] })
+    }
   })
 }

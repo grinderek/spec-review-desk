@@ -1,19 +1,17 @@
 import { useId, useState } from 'react'
-import type { ChangeView } from '../../server/change-view.ts'
-import { api, type ChangeId } from './api.ts'
+import type { DecisionClient } from './api.ts'
 import { optionIds, scenarioTitle } from './decision-view.ts'
 import { useAction } from './feedback.tsx'
 
 interface Draft { label: string; consequence: string }
 
-export function NewDecisionForm({ id, view, onClose }: { id: ChangeId; view: ChangeView; onClose: () => void }) {
+export function NewDecisionForm({ client, scenarioKeys: keys, onClose }: { client: DecisionClient; scenarioKeys: readonly string[]; onClose: () => void }) {
   const act = useAction()
   const uid = useId()
   const [question, setQuestion] = useState('')
   const [scope, setScope] = useState('')
   const [blocking, setBlocking] = useState(true)
   const [drafts, setDrafts] = useState<Draft[]>([])
-  const keys = view.features.flatMap((f) => f.scenarios.map((s) => s.key))
   const filled = drafts.filter((o) => o.label.trim())
   const valid = question.trim() !== '' && (filled.length === 0 || (filled.length >= 2 && filled.every((o) => o.consequence.trim())))
   const update = (index: number, change: Partial<Draft>) =>
@@ -21,7 +19,7 @@ export function NewDecisionForm({ id, view, onClose }: { id: ChangeId; view: Cha
   const submit = () => {
     const ids = optionIds(filled.map((o) => o.label))
     return act(async () => {
-      await api.addDecision(id, {
+      await client.add({
         question: question.trim(),
         scope: scope ? { kind: 'scenario', key: scope } : { kind: 'change' },
         blocking,

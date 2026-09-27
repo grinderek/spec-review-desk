@@ -1,18 +1,18 @@
 import { useId, useState } from 'react'
 import type { DecisionView } from '../../server/change-view.ts'
-import { api, type ChangeId } from './api.ts'
+import type { DecisionClient } from './api.ts'
 import { isActive, outcomeLine, scenarioTitle, scopeLabel, sourceLabel } from './decision-view.ts'
 import { useAction } from './feedback.tsx'
 
 export interface DecisionCardProps {
-  id: ChangeId
+  client: DecisionClient
   decision: DecisionView
   archived: boolean
   scenarioKeys: readonly string[]
   onThread?: (threadId: string) => void
 }
 
-export function DecisionCard({ id, decision: d, archived, scenarioKeys, onThread }: DecisionCardProps) {
+export function DecisionCard({ client, decision: d, archived, scenarioKeys, onThread }: DecisionCardProps) {
   const act = useAction()
   const uid = useId()
   const [option, setOption] = useState<string | null>(d.recommended)
@@ -24,11 +24,11 @@ export function DecisionCard({ id, decision: d, archived, scenarioKeys, onThread
   const canDecide = d.status === 'open' && !d.orphaned && !archived
   const decide = () =>
     act(async () => {
-      const result = await api.decide(id, d.id, { option, note: note.trim() })
+      const result = await client.decide(d.id, { option, note: note.trim() })
       if (result.status === 'decided') onThread?.(result.threadId)
     }, d.scope.kind === 'change' ? 'Decision recorded in decisions.md' : 'Decision sent to the agent for its patch')
   const dismiss = (text: string) =>
-    act(() => api.dismissDecision(id, d.id, text), 'Decision dismissed').then((ok) => {
+    act(() => client.dismiss(d.id, text), 'Decision dismissed').then((ok) => {
       if (ok) setReason(null)
     })
   return (
@@ -65,13 +65,13 @@ export function DecisionCard({ id, decision: d, archived, scenarioKeys, onThread
         </form>
       ) : null}
       {outcome ? <div className="doutcome">{outcome}</div> : null}
-      {d.orphaned && isActive(d) && !archived ? (
+      {d.orphaned && isActive(d) && !archived && client.reattach ? (
         <div className="row">
           <span className="hash">The scenario of this decision no longer exists.</span>
           <select aria-label="Re-attach to" value={to} onChange={(e) => setTo(e.target.value)}>
             {scenarioKeys.map((k) => <option key={k} value={k}>{scenarioTitle(k)}</option>)}
           </select>
-          <button className="btn" disabled={!to} onClick={() => void act(() => api.reattachDecision(id, d.id, to), 'Decision re-attached')}>Re-attach</button>
+          <button className="btn" disabled={!to} onClick={() => void act(() => client.reattach!(d.id, to), 'Decision re-attached')}>Re-attach</button>
         </div>
       ) : null}
       {!canDecide && isActive(d) && !archived && reason === null ? (
