@@ -107,6 +107,45 @@ describe('commitChangeDecision', () => {
     expect(findDecision(await readReview(dir), flag.id).status).toBe('open')
   })
 
+  // Final review Minor 3 / ledger T5: the earlier rollback test only covered the no-prior-md
+  // branch (decisions.md did not exist yet). Here it already holds a real entry from a prior,
+  // successful commit, and the restore after a second, failing commit must put that content back
+  // byte-for-byte — never partially, and never masking the original commit error.
+  it('restores a decisions.md that already had content, byte-for-byte, when a second commit fails', async () => {
+    const { repo, dir, input } = await setup()
+    await commitChangeDecision(input())
+    const naming = ownerDecision(
+      {
+        question: 'Rename the pillar?',
+        scope: { kind: 'change' },
+        blocking: false,
+        options: [
+          { id: 'yes', label: 'Rename it', consequence: 'A migration is needed.' },
+          { id: 'no', label: 'Keep the name', consequence: 'No migration.' },
+        ],
+      },
+      AT,
+      () => 'd_0000bbbb',
+    )
+    await updateReview(dir, (d) => addDecisions(d, [naming]))
+    const mdBefore = await readFile(path.join(dir, 'decisions.md'), 'utf8')
+    const reviewBefore = await readFile(path.join(dir, 'review.yaml'), 'utf8')
+    await writeFile(path.join(repo, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+
+    await expect(
+      commitChangeDecision(input({ decisionId: naming.id, choice: { option: 'yes', note: 'Later.' } })),
+    ).rejects.toThrow(/git commit/)
+
+    expect(await readFile(path.join(dir, 'decisions.md'), 'utf8')).toBe(mdBefore)
+    expect(await readFile(path.join(dir, 'review.yaml'), 'utf8')).toBe(reviewBefore)
+    // Nothing is left staged, and decisions.md is back to its (already-committed) content — the
+    // only remaining diff from HEAD is review.yaml's pre-existing, legitimate uncommitted state
+    // (the first commit's sha write-back plus the `naming` decision added above this test's hook).
+    expect((await git(repo, ['diff', '--cached', '--name-only'])).trim()).toBe('')
+    expect((await git(repo, ['status', '--porcelain'])).trim()).toBe(`M ${REL}/review.yaml`)
+    expect(findDecision(await readReview(dir), naming.id).status).toBe('open')
+  })
+
   it('writes nothing for an invalid choice', async () => {
     const { repo, input } = await setup()
     await expect(commitChangeDecision(input({ choice: { option: 'sometimes', note: '' } }))).rejects.toMatchObject({ code: 'unknown_option' })

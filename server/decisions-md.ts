@@ -108,9 +108,12 @@ export function commitChangeDecision(input: ChangeDecisionInput): Promise<{ comm
       await writeReview(input.changeDir, recordDecision(decided, input.decisionId, { how: 'decisions_md', commit: null }))
       commit = await commitFiles(input.cwd, files, decisionCommitMessage(input.changeName, record.question, input.trailer))
     } catch (error) {
+      // Final review Minor 3 (ledger T5): each restore is guarded on its own so a failure restoring
+      // one file can neither mask the original commit error nor skip restoring the OTHER file —
+      // both restores are always attempted, and the original error is always what's thrown.
       await resetStaged(input.cwd, files).catch(() => undefined)
-      await restore(mdFile, beforeMd)
-      await restore(reviewFile, beforeReview)
+      await restore(mdFile, beforeMd).catch((restoreError: unknown) => console.error(`Failed to restore ${mdFile}:`, restoreError))
+      await restore(reviewFile, beforeReview).catch((restoreError: unknown) => console.error(`Failed to restore ${reviewFile}:`, restoreError))
       throw error
     }
     await writeReview(input.changeDir, setRecordedCommit(await readReview(input.changeDir), input.decisionId, commit))
