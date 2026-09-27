@@ -1,4 +1,4 @@
-import type { InitiativeSummary } from '../../server/initiatives.ts'
+import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
 import type { Plan } from '../../server/initiative-store.ts'
 import type { SliceEdit, SliceStatus } from '../../server/slice-plan.ts'
 
@@ -52,4 +52,17 @@ export function createPreview(f: PreviewFields): string[] {
     `write openspec/initiatives/${f.name}/{initiative.yaml,brief.md,inputs/}`,
     `git commit -m "docs(openspec): ${f.name} — initiative"`,
   ]
+}
+
+export type SliceCard = { kind: 'ready' } | { kind: 'waiting'; text: string } | { kind: 'proposing'; runId: string | null } | { kind: 'done' }
+
+export function sliceCard(view: InitiativeView, sliceId: string): SliceCard {
+  const status = view.statuses[sliceId] ?? 'planned'
+  if (status === 'proposing') {
+    const running = view.doc.runs.find((r) => r.kind === 'author' && r.slice === sliceId && r.outcome === 'running')
+    return { kind: 'proposing', runId: running?.id ?? null }
+  }
+  if (status !== 'planned') return { kind: 'done' }
+  const blocker = view.blockers[sliceId]
+  return blocker ? { kind: 'waiting', text: blocker } : { kind: 'ready' }
 }

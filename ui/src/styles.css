@@ -209,3 +209,20 @@ h4.inline { margin: 0 6px 0 0; font-size: 13px; color: var(--ink); }
 .preview .k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); }
 .preview code { font-size: 12px; overflow-wrap: anywhere; }
 .errtext { color: var(--bad); }
+
+.slicecard { border: 1px solid var(--line); border-left: 4px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; margin-bottom: 8px; display: grid; gap: 6px; background: var(--panel); }
+.slicecard.st-proposing { border-left-color: var(--accent); } .slicecard.st-proposed { border-left-color: var(--warn); }
+.slicecard.st-approved { border-left-color: var(--decision); } .slicecard.st-applied { border-left-color: var(--ok); }
+.slicecard .shead { padding: 0; }
+.slicecard .shead input { flex: 1 1 220px; }
+.scope { white-space: pre-wrap; font-size: 13px; }
+.deps { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); align-items: center; }
+.deps label { display: flex; gap: 4px; align-items: center; }
+.deps input { width: auto; }
+.editor { display: grid; gap: 4px; }
+.panelform { display: grid; gap: 6px; }
+.stream { display: grid; gap: 4px; }
+.p-planned { background: var(--sunk); color: var(--muted); } .p-proposing { background: var(--accent-soft); color: var(--accent); }
+.p-running { background: var(--accent-soft); color: var(--accent); } .p-needs_owner { background: var(--warn-soft); color: var(--warn); }
+.p-done { background: var(--ok-soft); color: var(--ok); } .p-failed { background: var(--bad-soft); color: var(--bad); } .p-stopped { background: var(--sunk); color: var(--muted); }
+.p-draft { background: var(--decision-soft); color: var(--decision); }

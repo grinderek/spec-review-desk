@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { InitiativeSummary } from '../../server/initiatives.ts'
-import { addEdit, createPreview, editsChanged, moveEdit, progressLabel, removeEdit, statusSegments, toEdits, toggleDependency } from './initiative-view.ts'
+import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
+import type { RunRecord } from '../../server/initiative-store.ts'
+import { addEdit, createPreview, editsChanged, moveEdit, progressLabel, removeEdit, sliceCard, statusSegments, toEdits, toggleDependency } from './initiative-view.ts'
 
 const plan = {
   status: 'draft' as const,
@@ -60,5 +61,26 @@ describe('the New feature preview', () => {
       'use the existing worktree /hub/api/wt',
     )
     expect(createPreview({ name: '', repoPath: '/hub/api', where: 'new', base: 'staging', worktreePath: null })).toEqual([])
+  })
+})
+
+const run = (over: Partial<RunRecord>): RunRecord => ({
+  id: 'r_1', kind: 'author', slice: 's1', topic: null, session: 's', container: 'c', log: 'l', started_at: 'a', ended_at: null, outcome: 'running', notes: null, ...over,
+})
+const viewOf = (over: Partial<InitiativeView>): InitiativeView => ({
+  doc: { runs: [], plan: { status: 'approved', approved_at: 'a', slices: plan.slices } },
+  statuses: { s1: 'planned', s2: 'planned' },
+  blockers: { s1: null, s2: 'waiting for s1' },
+  decisions: [],
+  ...over,
+}) as unknown as InitiativeView
+
+describe('slice cards', () => {
+  it('tells ready, waiting, proposing and done apart', () => {
+    expect(sliceCard(viewOf({}), 's1')).toEqual({ kind: 'ready' })
+    expect(sliceCard(viewOf({}), 's2')).toEqual({ kind: 'waiting', text: 'waiting for s1' })
+    const proposing = viewOf({ statuses: { s1: 'proposing', s2: 'planned' }, doc: { ...viewOf({}).doc, runs: [run({})] } as InitiativeView['doc'] })
+    expect(sliceCard(proposing, 's1')).toEqual({ kind: 'proposing', runId: 'r_1' })
+    expect(sliceCard(viewOf({ statuses: { s1: 'proposed', s2: 'planned' } }), 's1')).toEqual({ kind: 'done' })
   })
 })
