@@ -8,6 +8,7 @@ import { EventBus } from './events.ts'
 import { git } from './git.ts'
 import { type InitiativeDoc, readInitiative, updateInitiative, upsertRun } from './initiative-store.ts'
 import { readReview, updateReview } from './review-store.ts'
+import { sliceStatuses } from './initiatives.ts'
 import { FINISHERS } from './run-kinds.ts'
 import { InitiativeRunService, runPaths } from './run-service.ts'
 import { FAKE_OPENSPEC, resetFakeClaude } from './testing/fake-claude-path.ts'
@@ -186,6 +187,23 @@ describe('author runs', () => {
     await vi.waitFor(() => expect(s.sandbox.runs).toHaveLength(2))
     await s.service.stop(s.target, other.id)
     await s.service.settled(other.id)
+  })
+
+  it('keeps a waiting author\'s slice proposing until Stop abandons the wait (final review I2)', async () => {
+    const s = await setup()
+    const run = await waitingAuthor(s)
+    await expect(startAuthor(s.service, s.target, 's1', {})).rejects.toMatchObject({ code: 'slice_not_ready', message: 's1 cannot be proposed: s1 is proposing' })
+    expect((await sliceStatuses(s.wt, await readInitiative(s.dir))).s1).toBe('proposing')
+    const paths = runPaths(s.wt, run)
+    expect((await stat(paths.sessions)).isDirectory()).toBe(true)
+
+    await s.service.stop(s.target, run.id)
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'stopped', notes: expect.stringContaining('Stopped by the owner') })
+    expect(s.sandbox.cleaned).toEqual([run.id])
+    await expect(stat(paths.runDir)).rejects.toMatchObject({ code: 'ENOENT' })
+    expect((await sliceStatuses(s.wt, await readInitiative(s.dir))).s1).toBe('planned')
+    await expect(resumeAuthor(s.service, s.target, run.id)).rejects.toMatchObject({ code: 'run_not_waiting' })
+    await expect(s.service.stop(s.target, run.id)).rejects.toMatchObject({ code: 'run_not_running' })
   })
 
   it('refuses a slice that is not ready, a second author, a bad or taken change name', async () => {

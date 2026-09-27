@@ -182,10 +182,25 @@ export class InitiativeRunService {
     this.#changed(target)
   }
 
+  // Stop kills a running attempt; for a run waiting for the owner it abandons the wait — the run is
+  // marked stopped and its room, output and session store are cleaned up (final review I2). It takes
+  // the run's resume key, so it never races a resume of the same run.
   async stop(target: RunTarget, runId: string): Promise<void> {
     const run = findRun(await readInitiative(target.ini.dir), runId)
+    if (run.outcome === 'needs_owner') {
+      const busy = new HttpError(409, 'run_not_waiting', `Run ${runId} is being resumed`)
+      return this.exclusive(`${target.ini.dir}#run:${runId}`, busy, () => this.#abandon(target, run))
+    }
     if (run.outcome !== 'running') throw new HttpError(409, 'run_not_running', `Run ${runId} is ${run.outcome}`)
     await this.deps.sandbox.stop(runId)
+  }
+
+  async #abandon(target: RunTarget, run: RunRecord): Promise<void> {
+    await this.#final(target, run, 'stopped', 'Stopped by the owner while it waited for decisions.', undefined, (d) => {
+      const current = findRun(d, run.id)
+      if (current.outcome !== 'needs_owner') throw new HttpError(409, 'run_not_running', `Run ${run.id} is ${current.outcome}`)
+      return d
+    })
   }
 
   // Ruling 7: after a Desk restart, a run still marked running is marked failed.
@@ -432,8 +447,11 @@ export class InitiativeRunService {
     this.#changed(target)
   }
 
-  async #final(target: RunTarget, run: RunRecord, outcome: RunRecord['outcome'], notes: string | null, problems?: string[]): Promise<void> {
-    await this.#record(target, run, outcome, notes, problems)
+  async #final(
+    target: RunTarget, run: RunRecord, outcome: RunRecord['outcome'], notes: string | null, problems?: string[],
+    mutate?: (doc: InitiativeDoc) => InitiativeDoc,
+  ): Promise<void> {
+    await this.#record(target, run, outcome, notes, problems, mutate)
     await this.#settle(target, run)
   }
 }

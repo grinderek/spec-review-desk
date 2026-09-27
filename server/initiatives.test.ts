@@ -3,7 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { addDecisions, ownerDecision } from './decision-model.ts'
 import { discover, listWorktrees, Registry, worktreeId } from './discovery.ts'
-import { emptyInitiative, type InitiativeDoc, writeInitiative } from './initiative-store.ts'
+import { emptyInitiative, type InitiativeDoc, readInitiative, writeInitiative } from './initiative-store.ts'
 import { findInitiative, initiativeTags, listInitiatives, loadInitiativeView, summarizeInitiative } from './initiatives.ts'
 import { recordApproval, updateReview, upsertApplyRun } from './review-store.ts'
 import { FEATURE } from './testing/fixtures.ts'
@@ -72,6 +72,14 @@ describe('loadInitiativeView', () => {
     await writeFile(path.join(repo, 'features/thread_state.feature'), FEATURE.replace('| 100 |', '| 99 |'))
     expect((await loadInitiativeView(wt, await findInitiative(wt, 'hs'))).statuses.s1).toBe('approved')
     expect(dir).toContain('hs')
+  })
+
+  it('keeps a slice proposing while its author waits for the owner (final review I2)', async () => {
+    const { wt, dir } = await setup()
+    await writeInitiative(dir, { ...(await readInitiative(dir)), runs: (await readInitiative(dir)).runs.map((r) => ({ ...r, outcome: 'needs_owner' as const })) })
+    const view = await loadInitiativeView(wt, await findInitiative(wt, 'hs'))
+    expect(view.statuses.s2).toBe('proposing')
+    expect(view.blockers.s2).toBe('s2 is proposing')
   })
 
   it('serves the initiative inbox and counts its blocking decisions', async () => {

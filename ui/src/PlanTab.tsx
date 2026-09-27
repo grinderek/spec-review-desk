@@ -83,7 +83,9 @@ function ApprovedPlan({ id, view, sandbox }: TabProps) {
             {card.kind === 'waiting' ? <div className="hash">{card.text}</div> : null}
             {card.kind === 'proposing' && card.runId ? (
               <>
-                <RunStream id={id} runId={card.runId} />
+                {card.waiting
+                  ? <div className="hash">The author is waiting for your decisions: decide them in the inbox, then Resume it under Runs — or Stop to abandon it.</div>
+                  : <RunStream id={id} runId={card.runId} />}
                 <div className="row"><button className="btn bad" onClick={() => void act(() => api.stopRun(id, card.runId!), 'Stopping…')}>Stop</button></div>
               </>
             ) : null}

@@ -87,7 +87,9 @@ async function appliedChange(wt: WorktreeInfo, ref: ChangeRef): Promise<boolean>
 }
 
 async function sliceFacts(wt: WorktreeInfo, doc: InitiativeDoc, changes: readonly ChangeRef[], slice: Slice) {
-  const authorRunning = doc.runs.some((r) => r.kind === 'author' && r.slice === slice.id && r.outcome === 'running')
+  // An author waiting for the owner still holds its slice (final review I2): the slice stays
+  // proposing, so it cannot be proposed, edited or removed again until the run ends or is stopped.
+  const authorRunning = doc.runs.some((r) => r.kind === 'author' && r.slice === slice.id && (r.outcome === 'running' || r.outcome === 'needs_owner'))
   const active = slice.change ? changes.find((c) => !c.archived && c.name === slice.change) : undefined
   // An archived change was applied before it was archived.
   const archived = slice.change ? changes.some((c) => c.archived && c.name.endsWith(`-${slice.change}`)) : false

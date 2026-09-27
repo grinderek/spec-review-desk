@@ -82,7 +82,10 @@ describe('slice cards', () => {
     expect(sliceCard(viewOf({}), 's1')).toEqual({ kind: 'ready' })
     expect(sliceCard(viewOf({}), 's2')).toEqual({ kind: 'waiting', text: 'waiting for s1' })
     const proposing = viewOf({ statuses: { s1: 'proposing', s2: 'planned' }, doc: { ...viewOf({}).doc, runs: [run({})] } as InitiativeView['doc'] })
-    expect(sliceCard(proposing, 's1')).toEqual({ kind: 'proposing', runId: 'r_1' })
+    expect(sliceCard(proposing, 's1')).toEqual({ kind: 'proposing', runId: 'r_1', waiting: false })
+    // Final review I2: an author waiting for the owner keeps its slice proposing, with that run.
+    const waiting = viewOf({ statuses: { s1: 'proposing', s2: 'planned' }, doc: { ...viewOf({}).doc, runs: [run({ outcome: 'needs_owner' })] } as InitiativeView['doc'] })
+    expect(sliceCard(waiting, 's1')).toEqual({ kind: 'proposing', runId: 'r_1', waiting: true })
     expect(sliceCard(viewOf({ statuses: { s1: 'proposed', s2: 'planned' } }), 's1')).toEqual({ kind: 'done' })
   })
 })

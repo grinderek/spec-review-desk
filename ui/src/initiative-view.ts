@@ -54,13 +54,18 @@ export function createPreview(f: PreviewFields): string[] {
   ]
 }
 
-export type SliceCard = { kind: 'ready' } | { kind: 'waiting'; text: string } | { kind: 'proposing'; runId: string | null } | { kind: 'done' }
+export type SliceCard =
+  | { kind: 'ready' }
+  | { kind: 'waiting'; text: string }
+  | { kind: 'proposing'; runId: string | null; waiting: boolean }
+  | { kind: 'done' }
 
 export function sliceCard(view: InitiativeView, sliceId: string): SliceCard {
   const status = view.statuses[sliceId] ?? 'planned'
   if (status === 'proposing') {
-    const running = view.doc.runs.find((r) => r.kind === 'author' && r.slice === sliceId && r.outcome === 'running')
-    return { kind: 'proposing', runId: running?.id ?? null }
+    // A running author, or one waiting for the owner (final review I2).
+    const run = view.doc.runs.find((r) => r.kind === 'author' && r.slice === sliceId && (r.outcome === 'running' || r.outcome === 'needs_owner'))
+    return { kind: 'proposing', runId: run?.id ?? null, waiting: run?.outcome === 'needs_owner' }
   }
   if (status !== 'planned') return { kind: 'done' }
   const blocker = view.blockers[sliceId]

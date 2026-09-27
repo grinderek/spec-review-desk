@@ -157,7 +157,7 @@ function RunCard({ id, view, run }: { id: TabProps['id']; view: InitiativeView; 
       {run.problems?.length ? <div className="fail">{run.problems.map((p, i) => <div key={i}>{p}</div>)}</div> : null}
       {run.outcome === 'running' ? <RunStream id={id} runId={run.id} /> : null}
       <div className="row">
-        {run.outcome === 'running' ? <button className="btn bad" onClick={() => void act(() => api.stopRun(id, run.id), 'Stopping…')}>Stop</button> : null}
+        {run.outcome === 'running' || run.outcome === 'needs_owner' ? <button className="btn bad" onClick={() => void act(() => api.stopRun(id, run.id), 'Stopping…')}>Stop</button> : null}
         {run.outcome === 'needs_owner' ? (
           <button className="btn pri" disabled={!resumable || resuming} title={resumable ? '' : "Decide or dismiss the run's blocking decisions first"} onClick={resume}>Resume</button>
         ) : null}
