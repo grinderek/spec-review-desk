@@ -1,7 +1,12 @@
 # Spec Review Desk agent sandbox (spec B §5): the claude CLI and nothing else — no version control, no extra
 # shell tools. Built by `npm run agent:build`; the tag carries the pinned CLI version.
+# The one package: poppler-utils, which the CLI's Read tool calls to render PDF pages (without it a PDF
+# input — e.g. the score spec — cannot be read). Agents have no Bash, so they cannot call it themselves.
 FROM node:22-slim
 ARG CLAUDE_CODE_VERSION=2.1.280
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends poppler-utils \
+ && rm -rf /var/lib/apt/lists/*
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
  && npm cache clean --force \
  && groupadd --gid 10001 agent \

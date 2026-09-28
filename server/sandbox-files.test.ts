@@ -12,7 +12,10 @@ describe('sandbox images (spec B §5)', () => {
     expect(dockerfile).toContain('@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}')
     expect(dockerfile).toContain('--uid 10001')
     expect(dockerfile).toContain('USER agent')
-    expect(dockerfile).not.toMatch(/apt-get|apk add|\bgit\b/)
+    expect(dockerfile).not.toMatch(/apk add|\bgit\b/)
+    // The only system package: poppler-utils, which the CLI's Read tool needs to render PDF inputs.
+    const packages = [...dockerfile.matchAll(/apt-get install -y --no-install-recommends ([^\\\n]+)/g)].map((m) => m[1]!.trim())
+    expect(packages).toEqual(['poppler-utils'])
   })
 
   it('denies every host the filter does not list', async () => {
