@@ -236,4 +236,18 @@ describe('author runs', () => {
     expect(await defaultChangeName(s.wt, 'hs', 'Email inputs')).toBe('add-hs-email-inputs')
     expect(await defaultChangeName(s.wt, 'thread', 'State')).toBe('add-thread-state-2')
   })
+
+  // Desk fixes item 5: the pilot's default was cut mid-word ("…-nameless-quickbo").
+  it('shortens a long default name at a word boundary, never mid-word', async () => {
+    const s = await setup()
+    const title = 'Financial pillar from a nameless QuickBooks invoice mirror'
+    expect(slugify(title)).toBe('financial-pillar-from-a-nameless')
+    const name = await defaultChangeName(s.wt, 'health-score', title)
+    expect(name).toBe('add-health-score-financial-pillar-from-a-nameless')
+    const long = await defaultChangeName(s.wt, 'business-health-score-v2', 'Delivery states for the founder home card and sheet')
+    expect(long.length).toBeLessThanOrEqual(60)
+    expect(long).toBe('add-business-health-score-v2-delivery-states-for-the-founder')
+    // One word longer than the limit has no boundary: it is cut, as before.
+    expect(slugify('a'.repeat(50))).toBe('a'.repeat(40))
+  })
 })

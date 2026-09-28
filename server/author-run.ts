@@ -16,8 +16,18 @@ import { moveChange, vetAuthorOutput } from './vet-output.ts'
 // Spec B §4.4: a clean-room author writes one slice as a behavior-driven change.
 export { CHANGE_NAME } from './initiative-store.ts'
 
+// Shortens a slug to `max` characters at a word (hyphen) boundary; only a single word longer than
+// `max` is cut inside the word (Desk fixes item 5: "…-nameless-quickbo").
+export function cutAtWord(slug: string, max: number): string {
+  if (slug.length <= max) return slug
+  const head = slug.slice(0, max)
+  if (slug[max] === '-') return head.replace(/-+$/, '')
+  const boundary = head.lastIndexOf('-')
+  return (boundary > 0 ? head.slice(0, boundary) : head).replace(/-+$/, '')
+}
+
 export const slugify = (text: string): string =>
-  text.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40).replace(/-+$/, '')
+  cutAtWord(text.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''), 40)
 
 async function changeNames(wt: WorktreeInfo): Promise<string[]> {
   const root = path.join(wt.path, 'openspec', 'changes')
@@ -29,7 +39,7 @@ async function changeNames(wt: WorktreeInfo): Promise<string[]> {
 // add-<initiative>-<slice title slug>, unique in the worktree (-2, -3, … on a clash).
 export async function defaultChangeName(wt: WorktreeInfo, initiative: string, title: string): Promise<string> {
   const taken = new Set(await changeNames(wt))
-  const base = `add-${initiative}-${slugify(title) || 'slice'}`.slice(0, 60).replace(/-+$/, '')
+  const base = cutAtWord(`add-${initiative}-${slugify(title) || 'slice'}`, 60)
   if (!taken.has(base)) return base
   let n = 2
   while (taken.has(`${base}-${n}`)) n += 1
