@@ -378,6 +378,25 @@ describe('initiative routes', () => {
     expect((await (await rawGet(app, `${url}/inputs/shot.png`)).json()).error.code).toBe('input_missing')
   })
 
+  // Review fix 2: inputs/ itself must be the initiative's own directory — a symlinked inputs/
+  // (git carries symlinks) would otherwise serve any listed name from wherever it points.
+  it('refuses to serve inputs through a symlinked inputs directory', async () => {
+    const { app, repo } = await setup()
+    const { json } = await create(app)
+    const url = `/api/initiatives/${json.worktreeId}/health-score`
+    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    const outside = path.join(tmp, 'outside')
+    await mkdir(outside, { recursive: true })
+    await writeFile(path.join(outside, 'spec.md'), 'OUTSIDE SECRET\n')
+    await rm(path.join(dir, 'inputs'), { recursive: true })
+    await symlink(outside, path.join(dir, 'inputs'))
+    const res = await rawGet(app, `${url}/inputs/spec.md`)
+    expect(res.status).toBe(409)
+    const body = await res.text()
+    expect(body).not.toContain('OUTSIDE SECRET')
+    expect(JSON.parse(body).error.code).toBe('unsafe_path')
+  })
+
   // Desk fixes item 2: the brief is editable after creation.
   it('edits the brief: writes brief.md and commits it like the other initiative commits', async () => {
     const { app, repo, bus } = await setup()

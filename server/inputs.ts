@@ -115,15 +115,19 @@ export async function readInput(target: RunTarget, file: string): Promise<Served
   if (!contentType) throw new HttpError(415, 'unsupported_type', `${entry.file} is not a type the Desk shows`)
   const dir = path.join(ini.dir, 'inputs')
   const unsafe = new HttpError(409, 'unsafe_path', `${entry.file} is not a regular file inside the inputs of ${ini.name}`)
+  // inputs/ itself must be the initiative's own directory, not a symlink to elsewhere (review fix
+  // 2) — the same containment writeInputs checks before it writes.
+  const root = path.join(await realpath(ini.dir), 'inputs')
   let real: string
   try {
+    if ((await realpath(dir)) !== root) throw unsafe
     if ((await lstat(path.join(dir, entry.file))).isSymbolicLink()) throw unsafe
     real = await realpath(path.join(dir, entry.file))
   } catch (error) {
     if (error === unsafe) throw error
     throw new HttpError(404, 'input_missing', `${entry.file} is listed but its file is missing`)
   }
-  if (path.dirname(real) !== (await realpath(dir)) || !(await lstat(real)).isFile()) throw unsafe
+  if (path.dirname(real) !== root || !(await lstat(real)).isFile()) throw unsafe
   return { file: entry.file, bytes: new Uint8Array(await readFile(real)), contentType, inline: !TEXT_INPUTS.has(ext) }
 }
 
