@@ -65,18 +65,20 @@ on its own waits for the owner (needs owner, "… npm run agent:build, then Resu
 **Research browser.** WebFetch returns pages that render with JavaScript empty ("Content truncated"),
 so the research read phase (after the owner approved domains) also gets a headless browser:
 `sr-browser-<run>`, the Playwright MCP server (`@playwright/mcp` 0.0.80 in the official Playwright
-1.63.0 image, Chromium, as `pwuser`) on the run's `--internal` network with every page request through
-the same egress proxy — it reaches only the approved hosts (a blocked host fails with
-`net::ERR_TUNNEL_CONNECTION_FAILED`). Read-only root with tmpfs `/tmp` and `/home/pwuser`, no
-capabilities, `no-new-privileges`, pids/memory/cpu limits, no host mounts, no token. The agent gets it
-as its one MCP server (`--mcp-config` with `--strict-mcp-config`, `NO_PROXY=sr-browser-<run>`) and a
-minimal tool set: navigate, navigate back, snapshot, click, wait for, network requests; script
-evaluation, file upload, screenshots and form input stay denied. The search phase, the planner and the
-author never get it. The browser is removed with the agent, the proxy and the network — also on stop,
-timeout and failure. A JavaScript page usually loads its scripts from other hosts (the Intuit docs need
-`uxfabric.intuitcdn.net`, `plugin.intuitcdn.net` and `static.developer.intuit.com` besides
-`developer.intuit.com`): the agent lists the failed requests and asks for those hosts with another
-fetch-domains decision.
+1.63.0 image, Chromium, as `pwuser`) on its own `--internal` network (`sr-bnet-<run>`) with every page
+request through its own tinyproxy (`sr-bproxy-<run>`, same image and hardening as the agent's) whose
+filter lists only the approved research domains — never `api.anthropic.com`. It shares no network with
+the agent's proxy; a blocked host fails with `net::ERR_TUNNEL_CONNECTION_FAILED`. Read-only root with
+tmpfs `/tmp` and `/home/pwuser`, no capabilities, `no-new-privileges`, pids/memory/cpu limits, no host
+mounts, no token. The agent joins both networks and gets the browser as its one MCP server
+(`--mcp-config` with `--strict-mcp-config`, `NO_PROXY=sr-browser-<run>`) and a minimal tool set:
+navigate, navigate back, snapshot, click, wait for, network requests; script evaluation, file upload,
+screenshots and form input stay denied. The search phase, the planner and the author never get it.
+The browser, its proxy and its network are removed with the agent, the agent's proxy and the run
+network — also on stop, timeout and failure. A JavaScript page usually loads its scripts from other
+hosts (the Intuit docs need `uxfabric.intuitcdn.net`, `plugin.intuitcdn.net` and
+`static.developer.intuit.com` besides `developer.intuit.com`): the agent lists the failed requests and
+asks for those hosts with another fetch-domains decision.
 
 Every sandboxed reply (planner/author/research) is requested with `claude --json-schema`; the real
 CLI rejects a schema that carries a top-level `$schema` key (zod's `toJSONSchema` emits one), so

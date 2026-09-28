@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeRunSpec } from './claude.ts'
 import type { SandboxConfig } from './config.ts'
 import { DockerSandbox, readOAuthToken, type SandboxRun } from './sandbox.ts'
-import { browserRunArgs } from './sandbox-args.ts'
+import { browserNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs } from './sandbox-args.ts'
 import { FAKE_DOCKER } from './testing/fake-claude-path.ts'
 
 let tmp = ''
@@ -30,6 +30,7 @@ async function runSpec(): Promise<SandboxRun> {
   for (const d of ['room', 'out', 'sessions']) await mkdir(path.join(runDir, d), { recursive: true })
   return { runId: 'r_0000abcd', runDir, room: path.join(runDir, 'room'), out: path.join(runDir, 'out'), sessions: path.join(runDir, 'sessions'), domains: ['docs.stripe.com'], claude }
 }
+const TEARDOWN = ['sr-r_0000abcd', 'sr-browser-r_0000abcd', 'sr-bproxy-r_0000abcd', 'sr-egress-r_0000abcd', 'sr-bnet-r_0000abcd', 'sr-net-r_0000abcd']
 const calls = async (): Promise<{ args: string[]; stdin?: string }[]> =>
   (await readFile(dockerLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; stdin?: string })
 
@@ -39,7 +40,7 @@ beforeEach(async () => {
   await chmod(FAKE_DOCKER, 0o755)
   process.env.FAKE_DOCKER_LOG = dockerLog
   process.env.FAKE_DOCKER_STATE = path.join(tmp, 'state')
-  for (const v of ['FAKE_DOCKER_DOWN', 'FAKE_DOCKER_MISSING', 'FAKE_DOCKER_EGRESS_FAIL', 'FAKE_DOCKER_BROWSER_FAIL', 'FAKE_DOCKER_BROWSER_SILENT', 'FAKE_DOCKER_HANG']) {
+  for (const v of ['FAKE_DOCKER_DOWN', 'FAKE_DOCKER_MISSING', 'FAKE_DOCKER_EGRESS_FAIL', 'FAKE_DOCKER_BROWSER_FAIL', 'FAKE_DOCKER_BPROXY_FAIL', 'FAKE_DOCKER_BROWSER_SILENT', 'FAKE_DOCKER_HANG']) {
     delete process.env[v]
   }
   await writeFile(path.join(tmp, '.env'), `# comment\nOTHER=1\nexport CLAUDE_CODE_OAUTH_TOKEN="${TOKEN}"\n`)
@@ -92,33 +93,55 @@ describe('DockerSandbox.run', () => {
     expect(lines.map((l) => (JSON.parse(l) as { type: string }).type)).toEqual(['system', 'result'])
     const all = await calls()
     expect(all.map((c) => c.args.slice(0, 2).join(' '))).toEqual([
-      'network create', 'run -d', 'network connect', 'run --rm', 'rm -f', 'rm -f', 'rm -f', 'network rm',
+      'network create', 'run -d', 'network connect', 'run --rm', 'rm -f', 'rm -f', 'rm -f', 'rm -f', 'network rm', 'network rm',
     ])
     const agent = all[3]!
     expect(agent.stdin).toBe('Plan the slices.')
     expect(agent.args).toEqual(expect.arrayContaining(['--network', 'sr-net-r_0000abcd', '--env-file', path.join(spec.runDir, 'agent.env')]))
     expect(agent.args.slice(-2)).toEqual(['--add-dir', '/work/out'])
     expect(agent.args.join(' ')).not.toMatch(/--mcp-config|NO_PROXY/)
-    expect(all.slice(4).map((c) => c.args.at(-1))).toEqual(['sr-r_0000abcd', 'sr-browser-r_0000abcd', 'sr-egress-r_0000abcd', 'sr-net-r_0000abcd'])
+    expect(all.slice(4).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
+    await expect(stat(path.join(spec.runDir, 'browser.filter'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(agent.args.join(' ')).not.toContain(TOKEN)
     expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^api\\.anthropic\\.com$\n^docs\\.stripe\\.com$\n')
     await expect(stat(path.join(spec.runDir, 'agent.env'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
-  it('starts the research browser behind the proxy, waits until it listens, points the agent at it, and removes it', async () => {
+  it('starts the research browser behind its own proxy, waits until it listens, points the agent at it, and removes it', async () => {
     const spec = await runSpec()
     const sandbox = new DockerSandbox(config(), { browserReadyMs: 2000, pollMs: 10 })
     const outcome = await sandbox.run({ ...spec, browser: true }, { timeoutMs: 10_000, onLine: () => undefined })
     expect(outcome).toEqual({ code: 0, timedOut: false, stopped: false, error: null })
     const all = await calls()
     expect(all.map((c) => c.args.slice(0, 2).join(' '))).toEqual([
-      'network create', 'run -d', 'network connect', 'run -d', 'logs sr-browser-r_0000abcd', 'run --rm', 'rm -f', 'rm -f', 'rm -f', 'network rm',
+      'network create', 'run -d', 'network connect',
+      'network create', 'run -d', 'network connect', 'run -d', 'logs sr-browser-r_0000abcd',
+      'run --rm', 'rm -f', 'rm -f', 'rm -f', 'rm -f', 'network rm', 'network rm',
     ])
-    expect(all[3]!.args).toEqual(browserRunArgs('r_0000abcd', 'spec-review-browser:test'))
-    const agent = all[5]!
+    const browserFilter = path.join(spec.runDir, 'browser.filter')
+    expect(all.slice(3, 7).map((c) => c.args)).toEqual([
+      browserNetworkCreateArgs('r_0000abcd'),
+      browserProxyRunArgs('r_0000abcd', 'spec-review-egress:test', browserFilter),
+      browserProxyConnectArgs('r_0000abcd'),
+      browserRunArgs('r_0000abcd', 'spec-review-browser:test'),
+    ])
+    // Controller ruling 2: the agent's proxy allows the Anthropic API, the browser's proxy never does.
+    expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^api\\.anthropic\\.com$\n^docs\\.stripe\\.com$\n')
+    expect(await readFile(browserFilter, 'utf8')).toBe('^docs\\.stripe\\.com$\n')
+    const agent = all[8]!
     expect(agent.args).toContain('NO_PROXY=sr-browser-r_0000abcd')
+    expect(agent.args).toEqual(expect.arrayContaining(['--network', 'sr-net-r_0000abcd', '--network', 'sr-bnet-r_0000abcd']))
     expect(agent.args.at(-1)).toBe('--mcp-config={"mcpServers":{"browser":{"type":"http","url":"http://sr-browser-r_0000abcd:8931/mcp"}}}')
-    expect(all.slice(6).map((c) => c.args.at(-1))).toEqual(['sr-r_0000abcd', 'sr-browser-r_0000abcd', 'sr-egress-r_0000abcd', 'sr-net-r_0000abcd'])
+    expect(all.slice(9).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
+  })
+
+  it('fails the run without starting the browser or the agent when the browser proxy cannot start', async () => {
+    process.env.FAKE_DOCKER_BPROXY_FAIL = '1'
+    const outcome = await new DockerSandbox(config(), { browserReadyMs: 2000, pollMs: 10 }).run({ ...(await runSpec()), browser: true }, { timeoutMs: 10_000, onLine: () => undefined })
+    expect(outcome.error).toMatch(/research browser could not start/)
+    const all = await calls()
+    expect(all.some((c) => c.args.includes('-i') || (c.args[0] === 'run' && c.args.includes('sr-browser-r_0000abcd')))).toBe(false)
+    expect(all.slice(-6).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
   })
 
   it('fails the run without starting the agent when the browser cannot start, and tears everything down', async () => {
@@ -127,7 +150,7 @@ describe('DockerSandbox.run', () => {
     expect(outcome).toMatchObject({ code: null, error: expect.stringMatching(/research browser could not start/) })
     const all = await calls()
     expect(all.some((c) => c.args.includes('-i'))).toBe(false)
-    expect(all.slice(-4).map((c) => c.args.join(' '))).toEqual(['rm -f sr-r_0000abcd', 'rm -f sr-browser-r_0000abcd', 'rm -f sr-egress-r_0000abcd', 'network rm sr-net-r_0000abcd'])
+    expect(all.slice(-6).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
   })
 
   it('fails the run when the browser never listens', async () => {
@@ -136,7 +159,7 @@ describe('DockerSandbox.run', () => {
     expect(outcome.error).toMatch(/research browser could not start: it did not listen within 0\.15 s/)
     const all = await calls()
     expect(all.some((c) => c.args.includes('-i'))).toBe(false)
-    expect(all.at(-3)!.args).toEqual(['rm', '-f', 'sr-browser-r_0000abcd'])
+    expect(all.slice(-6).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
   })
 
   it('never starts the agent when the run is stopped while the browser comes up', async () => {
@@ -148,7 +171,7 @@ describe('DockerSandbox.run', () => {
     expect(await running).toEqual({ code: null, timedOut: false, stopped: true, error: null })
     const all = await calls()
     expect(all.some((c) => c.args.includes('-i'))).toBe(false)
-    expect(all.at(-3)!.args).toEqual(['rm', '-f', 'sr-browser-r_0000abcd'])
+    expect(all.slice(-6).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
   })
 
   it('fails the run without starting the agent when the proxy cannot start', async () => {

@@ -25,7 +25,13 @@ export const containerName = (runId: string): string => `sr-${runId}`
 export const egressName = (runId: string): string => `sr-egress-${runId}`
 export const networkName = (runId: string): string => `sr-net-${runId}`
 export const browserName = (runId: string): string => `sr-browser-${runId}`
+// Controller ruling 2: the browser's own proxy and network. The browser shares no network with the
+// agent's proxy (the only one that reaches api.anthropic.com) — not even code running in the browser
+// container (Chromium runs --no-sandbox) can use it.
+export const browserProxyName = (runId: string): string => `sr-bproxy-${runId}`
+export const browserNetworkName = (runId: string): string => `sr-bnet-${runId}`
 export const PROXY_URL = (runId: string): string => `http://${egressName(runId)}:${EGRESS_PORT}`
+export const BROWSER_PROXY_URL = (runId: string): string => `http://${browserProxyName(runId)}:${EGRESS_PORT}`
 export const BROWSER_MCP_URL = (runId: string): string => `http://${browserName(runId)}:${BROWSER_PORT}/mcp`
 
 // The one MCP server a research agent ever gets (read phase only); --strict-mcp-config keeps every
@@ -41,8 +47,9 @@ export interface AgentContainer {
   out: string
   sessions: string
   claudeArgs: readonly string[]
-  // The research read phase: the agent talks to sr-browser-<run> directly (NO_PROXY — through the
-  // proxy the CLI's MCP requests are refused) and loads it as its MCP server.
+  // The research read phase: the agent also joins the browser network, talks to sr-browser-<run>
+  // directly (NO_PROXY — through the proxy the CLI's MCP requests are refused) and loads it as its
+  // MCP server.
   browser?: boolean
 }
 
@@ -50,6 +57,7 @@ export function agentRunArgs(c: AgentContainer): string[] {
   return [
     'run', '--rm', '-i', '--name', containerName(c.runId),
     '--network', networkName(c.runId),
+    ...(c.browser ? ['--network', browserNetworkName(c.runId)] : []),
     '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/home/agent:uid=10001,gid=10001',
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     '--pids-limit', '256', '--memory', '2g', '--cpus', '2',
@@ -71,35 +79,47 @@ export function agentRunArgs(c: AgentContainer): string[] {
   ]
 }
 
-// The research browser: on the run's --internal network only (no route out but the proxy), every
-// page request through the run's egress filter, read-only root, no capabilities, no host mounts, no
-// token. Chromium's own sandbox is off (--no-sandbox): it needs capabilities the container drops, and
+// The research browser: on the --internal browser network only (no route out but its own proxy),
+// every page request through the browser filter (approved domains only), read-only root, no
+// capabilities, no host mounts, no token. Chromium's own sandbox is off (--no-sandbox): it needs capabilities the container drops, and
 // the container is the sandbox. --allowed-hosts: the MCP server answers only requests addressed to
 // sr-browser-<run>:8931 — one to localhost:8931 (a page's script, say) gets 403 (spike 2026-09-28).
 export const browserRunArgs = (runId: string, image: string): string[] => [
-  'run', '-d', '--rm', '--name', browserName(runId), '--network', networkName(runId),
+  'run', '-d', '--rm', '--name', browserName(runId), '--network', browserNetworkName(runId),
   '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/home/pwuser:uid=1001,gid=1001', '--shm-size', '256m',
   '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '2g', '--cpus', '2',
   '--user', BROWSER_USER,
   image,
   '--headless', '--browser', 'chromium', '--no-sandbox', '--isolated',
   '--host', '0.0.0.0', '--port', String(BROWSER_PORT), '--allowed-hosts', `${browserName(runId)}:${BROWSER_PORT}`,
-  '--proxy-server', PROXY_URL(runId),
+  '--proxy-server', BROWSER_PROXY_URL(runId),
 ]
 
 export const networkCreateArgs = (runId: string): string[] => ['network', 'create', '--internal', networkName(runId)]
 
-export const egressRunArgs = (runId: string, image: string, filterFile: string): string[] => [
-  'run', '-d', '--rm', '--name', egressName(runId), '--network', 'bridge', '--read-only', '--cap-drop', 'ALL',
+// A tinyproxy on the bridge (its way out), joined to one internal network afterwards.
+const proxyRunArgs = (name: string, image: string, filterFile: string): string[] => [
+  'run', '-d', '--rm', '--name', name, '--network', 'bridge', '--read-only', '--cap-drop', 'ALL',
   '--security-opt', 'no-new-privileges', '-v', `${filterFile}:/etc/tinyproxy/filter:ro`, image,
 ]
 
+export const egressRunArgs = (runId: string, image: string, filterFile: string): string[] => proxyRunArgs(egressName(runId), image, filterFile)
+
 export const networkConnectArgs = (runId: string): string[] => ['network', 'connect', networkName(runId), egressName(runId)]
+
+export const browserNetworkCreateArgs = (runId: string): string[] => ['network', 'create', '--internal', browserNetworkName(runId)]
+
+export const browserProxyRunArgs = (runId: string, image: string, filterFile: string): string[] =>
+  proxyRunArgs(browserProxyName(runId), image, filterFile)
+
+export const browserProxyConnectArgs = (runId: string): string[] => ['network', 'connect', browserNetworkName(runId), browserProxyName(runId)]
 
 export const teardownArgs = (runId: string): string[][] => [
   ['rm', '-f', containerName(runId)],
   ['rm', '-f', browserName(runId)],
+  ['rm', '-f', browserProxyName(runId)],
   ['rm', '-f', egressName(runId)],
+  ['network', 'rm', browserNetworkName(runId)],
   ['network', 'rm', networkName(runId)],
 ]
 

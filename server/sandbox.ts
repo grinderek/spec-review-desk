@@ -3,10 +3,11 @@ import { readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { claudeArgs, type ClaudeRunSpec } from './claude.ts'
 import type { SandboxConfig } from './config.ts'
-import { egressFilter } from './egress.ts'
+import { browserFilter, egressFilter } from './egress.ts'
 import { run } from './git.ts'
 import {
-  agentRunArgs, browserName, browserRunArgs, cleanupArgs, containerName, egressRunArgs, networkConnectArgs, networkCreateArgs, teardownArgs,
+  agentRunArgs, browserName, browserNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs, cleanupArgs, containerName,
+  egressRunArgs, networkConnectArgs, networkCreateArgs, teardownArgs,
 } from './sandbox-args.ts'
 
 // Spec B §5: one docker container per agent attempt, behind a per-run egress proxy (ruling 1).
@@ -19,8 +20,8 @@ export interface SandboxRun {
   domains: readonly string[]
   claude: ClaudeRunSpec
   extraArgs?: readonly string[]
-  // The research read phase: a headless browser (Playwright MCP) next to the agent, behind the same
-  // egress filter, loaded as the agent's one MCP server.
+  // The research read phase: a headless browser (Playwright MCP) next to the agent, behind its own
+  // proxy (approved domains only), loaded as the agent's one MCP server.
   browser?: boolean
 }
 export interface SandboxOutcome { code: number | null; timedOut: boolean; stopped: boolean; error: string | null }
@@ -141,7 +142,7 @@ export class DockerSandbox implements Sandbox {
       // of starting the agent (it would otherwise run until it finished or timed out).
       if (this.#stopped.delete(spec.runId)) return STOPPED
       if (spec.browser) {
-        const problem = await this.#startBrowser(spec.runId)
+        const problem = await this.#startBrowser(spec)
         if (problem) return { code: null, timedOut: false, stopped: false, error: `the research browser could not start: ${problem}` }
         // The same for a stop while the browser came up: the agent never starts.
         if (this.#stopped.delete(spec.runId)) return STOPPED
@@ -163,9 +164,16 @@ export class DockerSandbox implements Sandbox {
     }
   }
 
-  // Starts sr-browser-<run> and waits until its MCP endpoint listens; the problem, or null when ready.
-  async #startBrowser(runId: string): Promise<string | null> {
+  // Starts the browser network, its proxy and sr-browser-<run>, then waits until the MCP endpoint
+  // listens; the problem, or null when ready.
+  async #startBrowser(spec: SandboxRun): Promise<string | null> {
+    const { runId } = spec
+    const filterFile = path.join(spec.runDir, 'browser.filter')
     try {
+      await writeFile(filterFile, browserFilter(spec.domains), { mode: 0o644 })
+      await this.#docker(browserNetworkCreateArgs(runId))
+      await this.#docker(browserProxyRunArgs(runId, this.config.egressImage, filterFile))
+      await this.#docker(browserProxyConnectArgs(runId))
       await this.#docker(browserRunArgs(runId, this.config.browserImage))
     } catch (error) {
       return (error as Error).message

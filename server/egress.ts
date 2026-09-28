@@ -14,14 +14,25 @@ export function normalizeDomain(raw: string): string | null {
 
 const escape = (host: string): string => host.replace(/[.]/g, '\\.')
 
-export function egressFilter(domains: readonly string[]): string {
-  const hosts = domains.map((d) => {
+function plainHosts(domains: readonly string[]): string[] {
+  return domains.map((d) => {
     const host = normalizeDomain(d)
     if (!host) throw new Error(`egress: "${d}" is not a plain hostname`)
     return host
   })
-  const unique = [...new Set([ANTHROPIC_API, ...hosts])]
-  return unique.map((h) => `^${escape(h)}$\n`).join('')
+}
+
+const filterLines = (hosts: readonly string[]): string => [...new Set(hosts)].map((h) => `^${escape(h)}$\n`).join('')
+
+// The agent's proxy: the Anthropic API plus the approved research domains (WebFetch).
+export function egressFilter(domains: readonly string[]): string {
+  return filterLines([ANTHROPIC_API, ...plainHosts(domains)])
+}
+
+// The research browser's own proxy (controller ruling 2): only the approved research domains — never
+// the Anthropic API, so a page's script cannot send anything there.
+export function browserFilter(domains: readonly string[]): string {
+  return filterLines(plainHosts(domains).filter((h) => h !== ANTHROPIC_API))
 }
 
 export function domainsFromText(text: string): string[] {

@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  AGENT_IMAGE, agentRunArgs, agentTools, BROWSER_IMAGE, BROWSER_MCP_URL, BROWSER_TOOLS, browserMcpConfig, browserName, browserRunArgs,
-  CLAUDE_CODE_VERSION, cleanupArgs, containerName, egressName, egressRunArgs, networkName, PLAYWRIGHT_MCP_VERSION, PROXY_URL, teardownArgs,
+  AGENT_IMAGE, agentRunArgs, agentTools, BROWSER_IMAGE, BROWSER_MCP_URL, BROWSER_PROXY_URL, BROWSER_TOOLS, browserMcpConfig, browserName,
+  browserNetworkCreateArgs, browserNetworkName, browserProxyConnectArgs, browserProxyName, browserProxyRunArgs, browserRunArgs, CLAUDE_CODE_VERSION,
+  cleanupArgs, containerName, egressName, egressRunArgs, networkConnectArgs, networkCreateArgs, networkName, PLAYWRIGHT_MCP_VERSION, PROXY_URL,
+  teardownArgs,
 } from './sandbox-args.ts'
 
 const container = {
@@ -28,6 +30,9 @@ describe('names', () => {
     expect(BROWSER_IMAGE).toBe('spec-review-browser:0.0.80')
     expect(browserName('r_1')).toBe('sr-browser-r_1')
     expect(BROWSER_MCP_URL('r_1')).toBe('http://sr-browser-r_1:8931/mcp')
+    // Controller ruling 2: the browser has its own proxy on its own internal network.
+    expect([browserProxyName('r_1'), browserNetworkName('r_1')]).toEqual(['sr-bproxy-r_1', 'sr-bnet-r_1'])
+    expect(BROWSER_PROXY_URL('r_1')).toBe('http://sr-bproxy-r_1:8888')
     expect(JSON.parse(browserMcpConfig('r_1'))).toEqual({ mcpServers: { browser: { type: 'http', url: 'http://sr-browser-r_1:8931/mcp' } } })
   })
 })
@@ -78,6 +83,8 @@ describe('agentRunArgs', () => {
 
   it('with the research browser: reaches it directly (NO_PROXY) and loads it as the one MCP server', () => {
     const withBrowser = agentRunArgs({ ...container, browser: true })
+    // On the run network (its proxy) and the browser network (the MCP server) — the browser is not on the first.
+    expect(pairs(withBrowser, '--network')).toEqual(['sr-net-r_0000abcd', 'sr-bnet-r_0000abcd'])
     expect(pairs(withBrowser, '-e')).toEqual([
       'HTTPS_PROXY=http://sr-egress-r_0000abcd:8888',
       'HTTP_PROXY=http://sr-egress-r_0000abcd:8888',
@@ -98,18 +105,30 @@ describe('agentRunArgs', () => {
 describe('browserRunArgs', () => {
   const args = browserRunArgs('r_1', BROWSER_IMAGE)
 
-  it('runs the Playwright MCP server on the run network only, locked down, without the token or host mounts', () => {
+  it('runs the Playwright MCP server on the browser network only, behind its own proxy, locked down, without the token or host mounts', () => {
     expect(args).toEqual([
-      'run', '-d', '--rm', '--name', 'sr-browser-r_1', '--network', 'sr-net-r_1',
+      'run', '-d', '--rm', '--name', 'sr-browser-r_1', '--network', 'sr-bnet-r_1',
       '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/home/pwuser:uid=1001,gid=1001', '--shm-size', '256m',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '2g', '--cpus', '2',
       '--user', '1001:1001',
       BROWSER_IMAGE,
       '--headless', '--browser', 'chromium', '--no-sandbox', '--isolated',
       '--host', '0.0.0.0', '--port', '8931', '--allowed-hosts', 'sr-browser-r_1:8931',
-      '--proxy-server', 'http://sr-egress-r_1:8888',
+      '--proxy-server', 'http://sr-bproxy-r_1:8888',
     ])
-    expect(args.join(' ')).not.toMatch(/--env-file|CLAUDE_CODE_OAUTH_TOKEN|-v |--volume|bridge|--network host/)
+    expect(args.join(' ')).not.toMatch(/--env-file|CLAUDE_CODE_OAUTH_TOKEN|-v |--volume|bridge|--network host|sr-egress|sr-net-/)
+  })
+
+  it('gives the browser its own hardened proxy, reachable only from the browser network (controller ruling 2)', () => {
+    expect(browserNetworkCreateArgs('r_1')).toEqual(['network', 'create', '--internal', 'sr-bnet-r_1'])
+    expect(browserProxyRunArgs('r_1', 'spec-review-egress:1', '/w/runs/r_1/browser.filter')).toEqual([
+      'run', '-d', '--rm', '--name', 'sr-bproxy-r_1', '--network', 'bridge', '--read-only', '--cap-drop', 'ALL',
+      '--security-opt', 'no-new-privileges', '-v', '/w/runs/r_1/browser.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:1',
+    ])
+    expect(browserProxyConnectArgs('r_1')).toEqual(['network', 'connect', 'sr-bnet-r_1', 'sr-bproxy-r_1'])
+    // The agent's proxy stays on the run network only.
+    expect(networkCreateArgs('r_1')).toEqual(['network', 'create', '--internal', 'sr-net-r_1'])
+    expect(networkConnectArgs('r_1')).toEqual(['network', 'connect', 'sr-net-r_1', 'sr-egress-r_1'])
   })
 })
 
@@ -122,11 +141,13 @@ describe('the egress proxy and teardown', () => {
     ])
   })
 
-  it('removes the agent, the browser, the proxy and the network', () => {
+  it('removes the agent, the browser, both proxies and both networks', () => {
     expect(teardownArgs('r_1')).toEqual([
       ['rm', '-f', 'sr-r_1'],
       ['rm', '-f', 'sr-browser-r_1'],
+      ['rm', '-f', 'sr-bproxy-r_1'],
       ['rm', '-f', 'sr-egress-r_1'],
+      ['network', 'rm', 'sr-bnet-r_1'],
       ['network', 'rm', 'sr-net-r_1'],
     ])
   })

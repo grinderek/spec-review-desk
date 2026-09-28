@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { approvedDomains, domainsFromText, egressFilter, FETCH_DOMAINS, normalizeDomain } from './egress.ts'
+import { approvedDomains, browserFilter, domainsFromText, egressFilter, FETCH_DOMAINS, normalizeDomain } from './egress.ts'
 
 describe('normalizeDomain', () => {
   it('accepts plain hostnames, lower-cased, without a trailing dot', () => {
@@ -24,6 +24,16 @@ describe('egressFilter', () => {
 
   it('refuses a domain that is not a plain hostname', () => {
     expect(() => egressFilter(['evil.com$|.*'])).toThrow(/not a plain hostname/)
+  })
+})
+
+describe('browserFilter (controller ruling 2)', () => {
+  it('lists only the approved research domains — never the Anthropic API', () => {
+    expect(browserFilter(['developer.intuit.com', 'uxfabric.intuitcdn.net', 'developer.intuit.com', 'API.Anthropic.com'])).toBe(
+      '^developer\\.intuit\\.com$\n^uxfabric\\.intuitcdn\\.net$\n',
+    )
+    expect(browserFilter([])).toBe('')
+    expect(() => browserFilter(['evil.com$|.*'])).toThrow(/not a plain hostname/)
   })
 })
 
