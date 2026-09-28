@@ -6,6 +6,13 @@ import type { RunKind } from './initiative-store.ts'
 export const CLAUDE_CODE_VERSION = '2.1.280'
 export const AGENT_IMAGE = `spec-review-agent:${CLAUDE_CODE_VERSION}`
 export const EGRESS_IMAGE = 'spec-review-egress:1'
+// The research browser (spike 2026-09-28): the Playwright MCP server over HTTP in the official
+// Playwright image of the repo's Playwright version (1.63.0). 0.0.80 is the last @playwright/mcp built
+// on Playwright 1.63 — 0.0.81+ want Chromium 1246 (Playwright 1.64), which that image does not carry.
+export const PLAYWRIGHT_MCP_VERSION = '0.0.80'
+export const BROWSER_IMAGE = `spec-review-browser:${PLAYWRIGHT_MCP_VERSION}`
+export const BROWSER_USER = '1001:1001'
+export const BROWSER_PORT = 8931
 export const AGENT_USER = '10001:10001'
 export const EGRESS_PORT = 8888
 export const WORK_IN = '/work/in'
@@ -17,7 +24,14 @@ export const SESSION_STORE = '/home/agent/.claude'
 export const containerName = (runId: string): string => `sr-${runId}`
 export const egressName = (runId: string): string => `sr-egress-${runId}`
 export const networkName = (runId: string): string => `sr-net-${runId}`
+export const browserName = (runId: string): string => `sr-browser-${runId}`
 export const PROXY_URL = (runId: string): string => `http://${egressName(runId)}:${EGRESS_PORT}`
+export const BROWSER_MCP_URL = (runId: string): string => `http://${browserName(runId)}:${BROWSER_PORT}/mcp`
+
+// The one MCP server a research agent ever gets (read phase only); --strict-mcp-config keeps every
+// other MCP configuration out.
+export const browserMcpConfig = (runId: string): string =>
+  JSON.stringify({ mcpServers: { browser: { type: 'http', url: BROWSER_MCP_URL(runId) } } })
 
 export interface AgentContainer {
   runId: string
@@ -27,6 +41,9 @@ export interface AgentContainer {
   out: string
   sessions: string
   claudeArgs: readonly string[]
+  // The research read phase: the agent talks to sr-browser-<run> directly (NO_PROXY — through the
+  // proxy the CLI's MCP requests are refused) and loads it as its MCP server.
+  browser?: boolean
 }
 
 export function agentRunArgs(c: AgentContainer): string[] {
@@ -40,6 +57,7 @@ export function agentRunArgs(c: AgentContainer): string[] {
     '--env-file', c.envFile,
     '-e', `HTTPS_PROXY=${PROXY_URL(c.runId)}`,
     '-e', `HTTP_PROXY=${PROXY_URL(c.runId)}`,
+    ...(c.browser ? ['-e', `NO_PROXY=${browserName(c.runId)}`] : []),
     '-e', 'DISABLE_TELEMETRY=1',
     '-e', 'DISABLE_ERROR_REPORTING=1',
     '-e', 'DISABLE_AUTOUPDATER=1',
@@ -49,8 +67,25 @@ export function agentRunArgs(c: AgentContainer): string[] {
     '-v', `${c.sessions}:${SESSION_STORE}:rw`,
     '-w', WORK_IN,
     c.image, 'claude', ...c.claudeArgs,
+    ...(c.browser ? [`--mcp-config=${browserMcpConfig(c.runId)}`] : []),
   ]
 }
+
+// The research browser: on the run's --internal network only (no route out but the proxy), every
+// page request through the run's egress filter, read-only root, no capabilities, no host mounts, no
+// token. Chromium's own sandbox is off (--no-sandbox): it needs capabilities the container drops, and
+// the container is the sandbox. --allowed-hosts: the MCP server answers only requests addressed to
+// sr-browser-<run>:8931 — one to localhost:8931 (a page's script, say) gets 403 (spike 2026-09-28).
+export const browserRunArgs = (runId: string, image: string): string[] => [
+  'run', '-d', '--rm', '--name', browserName(runId), '--network', networkName(runId),
+  '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/home/pwuser:uid=1001,gid=1001', '--shm-size', '256m',
+  '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '2g', '--cpus', '2',
+  '--user', BROWSER_USER,
+  image,
+  '--headless', '--browser', 'chromium', '--no-sandbox', '--isolated',
+  '--host', '0.0.0.0', '--port', String(BROWSER_PORT), '--allowed-hosts', `${browserName(runId)}:${BROWSER_PORT}`,
+  '--proxy-server', PROXY_URL(runId),
+]
 
 export const networkCreateArgs = (runId: string): string[] => ['network', 'create', '--internal', networkName(runId)]
 
@@ -63,6 +98,7 @@ export const networkConnectArgs = (runId: string): string[] => ['network', 'conn
 
 export const teardownArgs = (runId: string): string[][] => [
   ['rm', '-f', containerName(runId)],
+  ['rm', '-f', browserName(runId)],
   ['rm', '-f', egressName(runId)],
   ['network', 'rm', networkName(runId)],
 ]
@@ -87,6 +123,17 @@ const PROC_DENY = ['Read(//proc/**)', 'Read(//sys/**)', 'Grep(//proc/**)', 'Grep
 
 export interface AgentTools { allowed: string[]; disallowed: string[]; permissionMode: 'default' | 'acceptEdits' }
 
+const browserTool = (name: string): string => `mcp__browser__browser_${name}`
+// The minimal browser set of the research read phase: open, read (the accessibility snapshot), follow
+// links, wait for a page to render, and list its requests (to see which hosts the proxy blocked).
+export const BROWSER_TOOLS = ['navigate', 'navigate_back', 'snapshot', 'click', 'wait_for', 'network_requests'].map(browserTool)
+// Every other tool of @playwright/mcp 0.0.80 is denied by name, so the model never sees it: no script
+// evaluation, no file upload or screenshots to disk, no typing into forms.
+const BROWSER_DENIED = [
+  'evaluate', 'run_code_unsafe', 'file_upload', 'take_screenshot', 'fill_form', 'type', 'press_key', 'select_option', 'drag', 'drop',
+  'hover', 'handle_dialog', 'tabs', 'resize', 'close', 'console_messages', 'network_request', 'find',
+].map(browserTool)
+
 export function agentTools(kind: RunKind, webFetch: boolean): AgentTools {
   if (kind === 'author') {
     return {
@@ -102,9 +149,10 @@ export function agentTools(kind: RunKind, webFetch: boolean): AgentTools {
       permissionMode: 'default',
     }
   }
+  // The read phase (approved domains): WebFetch and the browser, both behind the run's egress filter.
   return {
-    allowed: ['Read', 'Grep', 'Glob', 'WebSearch', ...(webFetch ? ['WebFetch'] : [])],
-    disallowed: ['Bash', 'Write', 'Edit', 'NotebookEdit', ...(webFetch ? [] : ['WebFetch']), ...PROC_DENY],
+    allowed: ['Read', 'Grep', 'Glob', 'WebSearch', ...(webFetch ? ['WebFetch', ...BROWSER_TOOLS] : [])],
+    disallowed: ['Bash', 'Write', 'Edit', 'NotebookEdit', ...(webFetch ? [] : ['WebFetch']), ...PROC_DENY, ...(webFetch ? BROWSER_DENIED : [])],
     permissionMode: 'default',
   }
 }

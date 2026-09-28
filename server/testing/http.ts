@@ -22,6 +22,7 @@ export function testConfig(repoPath: string, overrides: Partial<Config> = {}): C
     sandbox: {
       image: 'spec-review-agent:test',
       egressImage: 'spec-review-egress:test',
+      browserImage: 'spec-review-browser:test',
       envFile: path.join(repoPath, '.sandbox.env'),
       timeoutMs: 20_000,
       dockerBin: 'docker',

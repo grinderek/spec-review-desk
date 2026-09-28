@@ -75,7 +75,7 @@ describe('planner runs', () => {
     ])
 
     const [spec] = s.sandbox.runs
-    expect(spec).toMatchObject({ runId: run.id, domains: [], extraArgs: [] })
+    expect(spec).toMatchObject({ runId: run.id, domains: [], extraArgs: [], browser: false })
     expect(spec!.claude).toMatchObject({ cwd: '/work/in', model: 'opus', allowedTools: ['Read', 'Grep', 'Glob'], permissionMode: 'default', jsonSchema: REPLY_SCHEMA_ARGS.planner })
     const [call] = await calls()
     expect(call!.prompt).toContain('Initiative: hs — Health score (repository api).')

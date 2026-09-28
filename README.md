@@ -49,7 +49,7 @@ Restarting the server issues a new token.
 
 ## Sandbox (research, planner, author)
 
-    npm run agent:build   # builds spec-review-agent:2.1.280 and spec-review-egress:1
+    npm run agent:build   # builds spec-review-agent:2.1.280, spec-review-egress:1 and spec-review-browser:0.0.80
     claude setup-token    # then put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env (gitignored)
 
 Each run gets its own `--internal` network (`sr-net-<run>`) and tinyproxy (`sr-egress-<run>`) that
@@ -57,6 +57,23 @@ lets CONNECT through only to `api.anthropic.com` (plus approved research domains
 container is read-only, without capabilities, as uid 10001, and sees only its room (read-only), its
 output directory and its session store under `<worktree>/.spec-review/runs/<run>/`. The token is
 passed through a per-run env file, never logged or served; every run's output is scanned for it.
+The Desk reports the sandbox not ready (Build the sandbox images) until all three images exist.
+
+**Research browser.** WebFetch returns pages that render with JavaScript empty ("Content truncated"),
+so the research read phase (after the owner approved domains) also gets a headless browser:
+`sr-browser-<run>`, the Playwright MCP server (`@playwright/mcp` 0.0.80 in the official Playwright
+1.63.0 image, Chromium, as `pwuser`) on the run's `--internal` network with every page request through
+the same egress proxy — it reaches only the approved hosts (a blocked host fails with
+`net::ERR_TUNNEL_CONNECTION_FAILED`). Read-only root with tmpfs `/tmp` and `/home/pwuser`, no
+capabilities, `no-new-privileges`, pids/memory/cpu limits, no host mounts, no token. The agent gets it
+as its one MCP server (`--mcp-config` with `--strict-mcp-config`, `NO_PROXY=sr-browser-<run>`) and a
+minimal tool set: navigate, navigate back, snapshot, click, wait for, network requests; script
+evaluation, file upload, screenshots and form input stay denied. The search phase, the planner and the
+author never get it. The browser is removed with the agent, the proxy and the network — also on stop,
+timeout and failure. A JavaScript page usually loads its scripts from other hosts (the Intuit docs need
+`uxfabric.intuitcdn.net`, `plugin.intuitcdn.net` and `static.developer.intuit.com` besides
+`developer.intuit.com`): the agent lists the failed requests and asks for those hosts with another
+fetch-domains decision.
 
 Every sandboxed reply (planner/author/research) is requested with `claude --json-schema`; the real
 CLI rejects a schema that carries a top-level `$schema` key (zod's `toJSONSchema` emits one), so

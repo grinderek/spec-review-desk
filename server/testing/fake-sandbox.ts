@@ -11,7 +11,7 @@ export const FAKE_TOKEN = 'sk-ant-oat01-fake-sandbox-token-0123456789'
 export class FakeSandbox implements Sandbox {
   readonly runs: SandboxRun[] = []
   readonly cleaned: string[] = []
-  statusValue: SandboxStatus = { docker: true, image: true, egressImage: true, token: true, ready: true, fixes: [] }
+  statusValue: SandboxStatus = { docker: true, image: true, egressImage: true, browserImage: true, token: true, ready: true, fixes: [] }
   tokenValue: string | null = FAKE_TOKEN
   #children = new Map<string, ChildProcess>()
   #stopped = new Set<string>()

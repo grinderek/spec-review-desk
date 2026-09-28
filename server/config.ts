@@ -2,7 +2,7 @@ import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse } from 'yaml'
 import { z } from 'zod'
-import { AGENT_IMAGE, EGRESS_IMAGE } from './sandbox-args.ts'
+import { AGENT_IMAGE, BROWSER_IMAGE, EGRESS_IMAGE } from './sandbox-args.ts'
 
 const RunnerSchema = z.object({
   worktree: z.string().min(1),
@@ -31,16 +31,17 @@ const ConfigSchema = z.object({
     .object({
       image: z.string().min(1).default(AGENT_IMAGE),
       egressImage: z.string().min(1).default(EGRESS_IMAGE),
+      browserImage: z.string().min(1).default(BROWSER_IMAGE),
       envFile: z.string().min(1).default('.env'),
       timeoutMinutes: z.number().positive().default(30),
       dockerBin: z.string().min(1).default('docker'),
     })
-    .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, envFile: '.env', timeoutMinutes: 30, dockerBin: 'docker' }),
+    .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, browserImage: BROWSER_IMAGE, envFile: '.env', timeoutMinutes: 30, dockerBin: 'docker' }),
   openspecBin: z.string().min(1).default('openspec'),
   initiativeBase: z.string().min(1).default('staging'),
 })
 
-export interface SandboxConfig { image: string; egressImage: string; envFile: string; timeoutMs: number; dockerBin: string }
+export interface SandboxConfig { image: string; egressImage: string; browserImage: string; envFile: string; timeoutMs: number; dockerBin: string }
 
 export interface RunnerProfile {
   name: string
@@ -97,6 +98,7 @@ export async function loadConfig(file: string): Promise<Config> {
     sandbox: {
       image: c.sandbox.image,
       egressImage: c.sandbox.egressImage,
+      browserImage: c.sandbox.browserImage,
       // The token file lives next to config.yaml (tools/spec-review/.env, gitignored).
       envFile: path.resolve(configDir, c.sandbox.envFile),
       timeoutMs: c.sandbox.timeoutMinutes * 60_000,

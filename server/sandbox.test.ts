@@ -1,10 +1,11 @@
 import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ClaudeRunSpec } from './claude.ts'
 import type { SandboxConfig } from './config.ts'
 import { DockerSandbox, readOAuthToken, type SandboxRun } from './sandbox.ts'
+import { browserRunArgs } from './sandbox-args.ts'
 import { FAKE_DOCKER } from './testing/fake-claude-path.ts'
 
 let tmp = ''
@@ -14,6 +15,7 @@ const TOKEN = 'sk-ant-oat01-test-token-value-1234567890'
 const config = (over: Partial<SandboxConfig> = {}): SandboxConfig => ({
   image: 'spec-review-agent:test',
   egressImage: 'spec-review-egress:test',
+  browserImage: 'spec-review-browser:test',
   envFile: path.join(tmp, '.env'),
   timeoutMs: 10_000,
   dockerBin: FAKE_DOCKER,
@@ -37,7 +39,9 @@ beforeEach(async () => {
   await chmod(FAKE_DOCKER, 0o755)
   process.env.FAKE_DOCKER_LOG = dockerLog
   process.env.FAKE_DOCKER_STATE = path.join(tmp, 'state')
-  for (const v of ['FAKE_DOCKER_DOWN', 'FAKE_DOCKER_MISSING', 'FAKE_DOCKER_EGRESS_FAIL', 'FAKE_DOCKER_HANG']) delete process.env[v]
+  for (const v of ['FAKE_DOCKER_DOWN', 'FAKE_DOCKER_MISSING', 'FAKE_DOCKER_EGRESS_FAIL', 'FAKE_DOCKER_BROWSER_FAIL', 'FAKE_DOCKER_BROWSER_SILENT', 'FAKE_DOCKER_HANG']) {
+    delete process.env[v]
+  }
   await writeFile(path.join(tmp, '.env'), `# comment\nOTHER=1\nexport CLAUDE_CODE_OAUTH_TOKEN="${TOKEN}"\n`)
 })
 
@@ -53,17 +57,24 @@ describe('readOAuthToken', () => {
 })
 
 describe('DockerSandbox.status', () => {
-  it('reports docker, both images and the token by presence only, with the exact fixes', async () => {
-    expect(await new DockerSandbox(config()).status()).toEqual({ docker: true, image: true, egressImage: true, token: true, ready: true, fixes: [] })
+  it('reports docker, the three images and the token by presence only, with the exact fixes', async () => {
+    expect(await new DockerSandbox(config()).status()).toEqual({ docker: true, image: true, egressImage: true, browserImage: true, token: true, ready: true, fixes: [] })
     process.env.FAKE_DOCKER_MISSING = 'spec-review-agent:test'
     const missing = await new DockerSandbox(config({ envFile: path.join(tmp, 'none.env') })).status()
-    expect(missing).toMatchObject({ docker: true, image: false, egressImage: true, token: false, ready: false })
+    expect(missing).toMatchObject({ docker: true, image: false, egressImage: true, browserImage: true, token: false, ready: false })
     expect(missing.fixes).toEqual([
       'Build the sandbox images: npm run agent:build',
       'Create a token with `claude setup-token` and put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env',
     ])
     process.env.FAKE_DOCKER_DOWN = '1'
     expect((await new DockerSandbox(config()).status()).fixes[0]).toBe('Install Docker and make sure `docker version` works')
+  })
+
+  it('is not ready without the research browser image', async () => {
+    process.env.FAKE_DOCKER_MISSING = 'spec-review-browser:test'
+    const status = await new DockerSandbox(config()).status()
+    expect(status).toMatchObject({ image: true, egressImage: true, browserImage: false, ready: false })
+    expect(status.fixes).toEqual(['Build the sandbox images: npm run agent:build'])
   })
 })
 
@@ -76,15 +87,63 @@ describe('DockerSandbox.run', () => {
     expect(lines.map((l) => (JSON.parse(l) as { type: string }).type)).toEqual(['system', 'result'])
     const all = await calls()
     expect(all.map((c) => c.args.slice(0, 2).join(' '))).toEqual([
-      'network create', 'run -d', 'network connect', 'run --rm', 'rm -f', 'rm -f', 'network rm',
+      'network create', 'run -d', 'network connect', 'run --rm', 'rm -f', 'rm -f', 'rm -f', 'network rm',
     ])
     const agent = all[3]!
     expect(agent.stdin).toBe('Plan the slices.')
     expect(agent.args).toEqual(expect.arrayContaining(['--network', 'sr-net-r_0000abcd', '--env-file', path.join(spec.runDir, 'agent.env')]))
     expect(agent.args.slice(-2)).toEqual(['--add-dir', '/work/out'])
+    expect(agent.args.join(' ')).not.toMatch(/--mcp-config|NO_PROXY/)
+    expect(all.slice(4).map((c) => c.args.at(-1))).toEqual(['sr-r_0000abcd', 'sr-browser-r_0000abcd', 'sr-egress-r_0000abcd', 'sr-net-r_0000abcd'])
     expect(agent.args.join(' ')).not.toContain(TOKEN)
     expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^api\\.anthropic\\.com$\n^docs\\.stripe\\.com$\n')
     await expect(stat(path.join(spec.runDir, 'agent.env'))).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+
+  it('starts the research browser behind the proxy, waits until it listens, points the agent at it, and removes it', async () => {
+    const spec = await runSpec()
+    const sandbox = new DockerSandbox(config(), { browserReadyMs: 2000, pollMs: 10 })
+    const outcome = await sandbox.run({ ...spec, browser: true }, { timeoutMs: 10_000, onLine: () => undefined })
+    expect(outcome).toEqual({ code: 0, timedOut: false, stopped: false, error: null })
+    const all = await calls()
+    expect(all.map((c) => c.args.slice(0, 2).join(' '))).toEqual([
+      'network create', 'run -d', 'network connect', 'run -d', 'logs sr-browser-r_0000abcd', 'run --rm', 'rm -f', 'rm -f', 'rm -f', 'network rm',
+    ])
+    expect(all[3]!.args).toEqual(browserRunArgs('r_0000abcd', 'spec-review-browser:test'))
+    const agent = all[5]!
+    expect(agent.args).toContain('NO_PROXY=sr-browser-r_0000abcd')
+    expect(agent.args.at(-1)).toBe('--mcp-config={"mcpServers":{"browser":{"type":"http","url":"http://sr-browser-r_0000abcd:8931/mcp"}}}')
+    expect(all.slice(6).map((c) => c.args.at(-1))).toEqual(['sr-r_0000abcd', 'sr-browser-r_0000abcd', 'sr-egress-r_0000abcd', 'sr-net-r_0000abcd'])
+  })
+
+  it('fails the run without starting the agent when the browser cannot start, and tears everything down', async () => {
+    process.env.FAKE_DOCKER_BROWSER_FAIL = '1'
+    const outcome = await new DockerSandbox(config(), { browserReadyMs: 2000, pollMs: 10 }).run({ ...(await runSpec()), browser: true }, { timeoutMs: 10_000, onLine: () => undefined })
+    expect(outcome).toMatchObject({ code: null, error: expect.stringMatching(/research browser could not start/) })
+    const all = await calls()
+    expect(all.some((c) => c.args.includes('-i'))).toBe(false)
+    expect(all.slice(-4).map((c) => c.args.join(' '))).toEqual(['rm -f sr-r_0000abcd', 'rm -f sr-browser-r_0000abcd', 'rm -f sr-egress-r_0000abcd', 'network rm sr-net-r_0000abcd'])
+  })
+
+  it('fails the run when the browser never listens', async () => {
+    process.env.FAKE_DOCKER_BROWSER_SILENT = '1'
+    const outcome = await new DockerSandbox(config(), { browserReadyMs: 150, pollMs: 10 }).run({ ...(await runSpec()), browser: true }, { timeoutMs: 10_000, onLine: () => undefined })
+    expect(outcome.error).toMatch(/research browser could not start: it did not listen within 0\.15 s/)
+    const all = await calls()
+    expect(all.some((c) => c.args.includes('-i'))).toBe(false)
+    expect(all.at(-3)!.args).toEqual(['rm', '-f', 'sr-browser-r_0000abcd'])
+  })
+
+  it('never starts the agent when the run is stopped while the browser comes up', async () => {
+    process.env.FAKE_DOCKER_BROWSER_SILENT = '1'
+    const sandbox = new DockerSandbox(config(), { browserReadyMs: 10_000, pollMs: 10 })
+    const running = sandbox.run({ ...(await runSpec()), browser: true }, { timeoutMs: 10_000, onLine: () => undefined })
+    await vi.waitFor(async () => expect((await calls()).some((c) => c.args[0] === 'logs')).toBe(true))
+    await sandbox.stop('r_0000abcd')
+    expect(await running).toEqual({ code: null, timedOut: false, stopped: true, error: null })
+    const all = await calls()
+    expect(all.some((c) => c.args.includes('-i'))).toBe(false)
+    expect(all.at(-3)!.args).toEqual(['rm', '-f', 'sr-browser-r_0000abcd'])
   })
 
   it('fails the run without starting the agent when the proxy cannot start', async () => {
@@ -124,6 +183,17 @@ describe('DockerSandbox.run', () => {
     expect((await calls()).some((c) => c.args[0] === 'run' && c.args.includes('sr-r_0000abcd'))).toBe(false)
   })
 
+  it('removes the browser when a browser run is stopped', async () => {
+    process.env.FAKE_DOCKER_HANG = '1'
+    const sandbox = new DockerSandbox(config(), { browserReadyMs: 2000, pollMs: 10 })
+    const running = sandbox.run({ ...(await runSpec()), browser: true }, { timeoutMs: 10_000, onLine: () => undefined })
+    await vi.waitFor(async () => expect((await calls()).some((c) => c.args.includes('-i'))).toBe(true))
+    await sandbox.stop('r_0000abcd')
+    expect(await running).toMatchObject({ stopped: true })
+    const all = (await calls()).map((c) => c.args.join(' '))
+    expect(all.indexOf('rm -f sr-browser-r_0000abcd')).toBeGreaterThan(all.indexOf('kill sr-r_0000abcd'))
+  })
+
   it('does not carry a stop mark from an earlier out-of-band stop into a later attempt of the same run id', async () => {
     const sandbox = new DockerSandbox(config())
     await sandbox.stop('r_0000abcd') // no attempt in flight yet — the mark must not linger
@@ -137,6 +207,7 @@ describe('DockerSandbox.cleanup', () => {
     const spec = await runSpec()
     await writeFile(path.join(spec.out, 'x.md'), 'x')
     await new DockerSandbox(config()).cleanup(spec.runId, spec.runDir)
+    expect((await calls()).map((c) => c.args.join(' '))).toContain('rm -f sr-browser-r_0000abcd')
     const cleanup = (await calls()).find((c) => c.args.includes('none'))!
     expect(cleanup.args).toEqual(expect.arrayContaining(['--user', '10001:10001', `${spec.out}:/clean/0`, `${spec.sessions}:/clean/1`]))
     await expect(stat(spec.runDir)).rejects.toMatchObject({ code: 'ENOENT' })

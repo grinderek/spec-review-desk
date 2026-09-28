@@ -10,6 +10,7 @@ import { researchFileName, resumeResearch, startResearch } from './research-run.
 import { readReview } from './review-store.ts'
 import { FINISHERS } from './run-kinds.ts'
 import { InitiativeRunService } from './run-service.ts'
+import { BROWSER_TOOLS } from './sandbox-args.ts'
 import { resetFakeClaude } from './testing/fake-claude-path.ts'
 import { FakeSandbox } from './testing/fake-sandbox.ts'
 import { testConfig } from './testing/http.ts'
@@ -64,6 +65,7 @@ describe('research runs', () => {
     expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'needs_owner', phase: 'search', web_fetch: false })
     const first = s.sandbox.runs[0]!
     expect(first.domains).toEqual([])
+    expect(first.browser).toBe(false)
     expect(first.claude.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'WebSearch'])
     const [decision] = (await readReview(s.dir)).decisions
     expect(decision).toMatchObject({ agent_id: 'fetch-domains', requested_domains: ['developer.intuit.com', 'docs.stripe.com'], blocking: true })
@@ -80,8 +82,10 @@ describe('research runs', () => {
     await s.service.settled(run.id)
     const second = s.sandbox.runs[1]!
     expect(second.domains).toEqual(['developer.intuit.com'])
-    expect(second.claude).toMatchObject({ resume: true, allowedTools: ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch'] })
+    expect(second.browser).toBe(true)
+    expect(second.claude).toMatchObject({ resume: true, allowedTools: ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', ...BROWSER_TOOLS] })
     expect(second.claude.prompt).toContain('WebFetch is now enabled for: developer.intuit.com.')
+    expect(second.claude.prompt).toContain('The browser (the mcp__browser__ tools) reaches the same hosts')
     const doc = await readInitiative(s.dir)
     expect(doc.runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: true })
     expect(doc.inputs.at(-1)).toMatchObject({
@@ -118,7 +122,32 @@ describe('research runs', () => {
     await s.service.settled(run.id)
     expect(s.sandbox.runs[1]!.claude.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'WebSearch'])
     expect(s.sandbox.runs[1]!.domains).toEqual([])
+    expect(s.sandbox.runs[1]!.browser).toBe(false)
     expect((await readInitiative(s.dir)).inputs.at(-1)).toMatchObject({ draft: true, source: { domains: [] } })
+  })
+
+  it('asks again for the hosts a JavaScript page loads from, and reads on with the browser once they are approved', async () => {
+    const s = await setup(['developer.intuit.com'])
+    await replies([
+      { match: 'The owner answered', reply: done },
+      { match: 'already allowed', reply: fetchDomains(['uxfabric.intuitcdn.net', 'developer.intuit.com']) },
+      { match: 'Topic: Intuit reports', reply: fetchDomains(['developer.intuit.com']) },
+    ])
+    const run = await startResearch(s.service, s.target, { topic: 'Intuit reports', questions: 'Q?' })
+    await s.service.settled(run.id)
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'needs_owner', phase: 'read', web_fetch: true })
+    const [decision] = (await readReview(s.dir)).decisions
+    expect(decision).toMatchObject({ agent_id: 'fetch-domains', requested_domains: ['uxfabric.intuitcdn.net', 'developer.intuit.com'] })
+    await decideInitiativeDecision(s.target, decision!.id, { option: 'allow_all', note: '' }, '')
+    await resumeResearch(s.service, s.target, run.id)
+    await s.service.settled(run.id)
+    expect(s.sandbox.runs.map((r) => [r.browser, r.domains])).toEqual([
+      [false, []],
+      [true, ['developer.intuit.com']],
+      [true, ['developer.intuit.com', 'uxfabric.intuitcdn.net']],
+    ])
+    expect(s.sandbox.runs[2]!.claude.prompt).toContain('WebFetch is now enabled for: developer.intuit.com, uxfabric.intuitcdn.net.')
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: true })
   })
 
   it('names research files after the topic without clobbering', () => {

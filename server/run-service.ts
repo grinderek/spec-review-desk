@@ -233,6 +233,8 @@ export class InitiativeRunService {
       spec: {
         runId: run.id, runDir: paths.runDir, room: paths.room, out: paths.out, sessions: paths.sessions,
         domains: webFetch ? doc.research.domains : [], claude, extraArgs: run.kind === 'author' ? ['--add-dir', WORK_OUT] : [],
+        // The research read phase reads JavaScript-rendered pages with a sandboxed browser (spike 2026-09-28).
+        browser: webFetch,
       },
     })
     await this.#finish(target, run, paths, resultEvent, outcome, token, sawSecret)

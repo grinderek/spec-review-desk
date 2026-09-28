@@ -81,7 +81,7 @@ describe('author runs', () => {
     expect(committed).toContain(`openspec/changes/${CHANGE}/review.yaml`)
     expect(committed).toContain('openspec/initiatives/hs/initiative.yaml')
     expect((await git(s.repo, ['status', '--porcelain'])).trim()).toBe('')
-    expect(s.sandbox.runs[0]).toMatchObject({ extraArgs: ['--add-dir', '/work/out'] })
+    expect(s.sandbox.runs[0]).toMatchObject({ extraArgs: ['--add-dir', '/work/out'], domains: [], browser: false })
     expect(s.sandbox.runs[0]!.claude).toMatchObject({ allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'], permissionMode: 'acceptEdits' })
     expect(s.sandbox.runs[0]!.claude.prompt).toContain('Owner notes: Keep it small.')
   })

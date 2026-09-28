@@ -43,12 +43,13 @@ runners:
 })
 
 describe('sandbox settings (spec B §5)', () => {
-  it('defaults to the pinned agent image, the egress image, a 30-minute timeout and the .env next to the config', async () => {
+  it('defaults to the pinned agent image, the egress and browser images, a 30-minute timeout and the .env next to the config', async () => {
     const file = await writeConfig('repos: [{ name: api, path: api }]')
     const config = await loadConfig(file)
     expect(config.sandbox).toEqual({
       image: 'spec-review-agent:2.1.280',
       egressImage: 'spec-review-egress:1',
+      browserImage: 'spec-review-browser:0.0.80',
       envFile: path.join(path.dirname(file), '.env'),
       timeoutMs: 30 * 60_000,
       dockerBin: 'docker',

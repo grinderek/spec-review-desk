@@ -6,7 +6,7 @@ import type { SandboxConfig } from './config.ts'
 import { egressFilter } from './egress.ts'
 import { run } from './git.ts'
 import {
-  agentRunArgs, cleanupArgs, containerName, egressRunArgs, networkConnectArgs, networkCreateArgs, teardownArgs,
+  agentRunArgs, browserName, browserRunArgs, cleanupArgs, containerName, egressRunArgs, networkConnectArgs, networkCreateArgs, teardownArgs,
 } from './sandbox-args.ts'
 
 // Spec B §5: one docker container per agent attempt, behind a per-run egress proxy (ruling 1).
@@ -19,9 +19,21 @@ export interface SandboxRun {
   domains: readonly string[]
   claude: ClaudeRunSpec
   extraArgs?: readonly string[]
+  // The research read phase: a headless browser (Playwright MCP) next to the agent, behind the same
+  // egress filter, loaded as the agent's one MCP server.
+  browser?: boolean
 }
 export interface SandboxOutcome { code: number | null; timedOut: boolean; stopped: boolean; error: string | null }
-export interface SandboxStatus { docker: boolean; image: boolean; egressImage: boolean; token: boolean; ready: boolean; fixes: string[] }
+export interface SandboxStatus {
+  docker: boolean
+  image: boolean
+  egressImage: boolean
+  browserImage: boolean
+  token: boolean
+  ready: boolean
+  fixes: string[]
+}
+export interface DockerSandboxOptions { browserReadyMs?: number; pollMs?: number }
 export interface RunOptions { timeoutMs: number; onLine: (line: string) => void }
 
 export interface Sandbox {
@@ -39,6 +51,10 @@ export const FIXES = {
 } as const
 
 const TOKEN_LINE = /^\s*(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN\s*=\s*(.*)$/
+// The Playwright MCP server's first line (on stderr) once its HTTP endpoint accepts connections. The
+// CLI connects to its MCP servers once, at startup: the agent must not start before this.
+const BROWSER_LISTENING = 'Listening on '
+const STOPPED: SandboxOutcome = { code: null, timedOut: false, stopped: true, error: null }
 
 // Reads only the token line of the gitignored .env; the value is never logged or served.
 export async function readOAuthToken(envFile: string): Promise<string | null> {
@@ -64,8 +80,13 @@ async function exists(file: string): Promise<boolean> {
 
 export class DockerSandbox implements Sandbox {
   #stopped = new Set<string>()
+  readonly #browserReadyMs: number
+  readonly #pollMs: number
 
-  constructor(private readonly config: SandboxConfig) {}
+  constructor(private readonly config: SandboxConfig, opts: DockerSandboxOptions = {}) {
+    this.#browserReadyMs = opts.browserReadyMs ?? 30_000
+    this.#pollMs = opts.pollMs ?? 250
+  }
 
   #docker(args: readonly string[], allowFailure = false) {
     return run(this.config.dockerBin, args, { cwd: process.cwd(), timeoutMs: 60_000, allowFailure })
@@ -87,9 +108,11 @@ export class DockerSandbox implements Sandbox {
     const docker = await this.#ok(['version', '--format', '{{.Client.Version}}'])
     const image = docker && (await this.#ok(['image', 'inspect', this.config.image]))
     const egressImage = docker && (await this.#ok(['image', 'inspect', this.config.egressImage]))
+    const browserImage = docker && (await this.#ok(['image', 'inspect', this.config.browserImage]))
     const token = (await this.token()) !== null
-    const fixes = [...(docker ? [] : [FIXES.docker]), ...(docker && !(image && egressImage) ? [FIXES.image] : []), ...(token ? [] : [FIXES.token])]
-    return { docker, image, egressImage, token, ready: fixes.length === 0, fixes }
+    const images = image && egressImage && browserImage
+    const fixes = [...(docker ? [] : [FIXES.docker]), ...(docker && !images ? [FIXES.image] : []), ...(token ? [] : [FIXES.token])]
+    return { docker, image, egressImage, browserImage, token, ready: fixes.length === 0, fixes }
   }
 
   async run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
@@ -112,7 +135,13 @@ export class DockerSandbox implements Sandbox {
       }
       // A stop() during the setup above found no agent container to kill: honour it here instead
       // of starting the agent (it would otherwise run until it finished or timed out).
-      if (this.#stopped.delete(spec.runId)) return { code: null, timedOut: false, stopped: true, error: null }
+      if (this.#stopped.delete(spec.runId)) return STOPPED
+      if (spec.browser) {
+        const problem = await this.#startBrowser(spec.runId)
+        if (problem) return { code: null, timedOut: false, stopped: false, error: `the research browser could not start: ${problem}` }
+        // The same for a stop while the browser came up: the agent never starts.
+        if (this.#stopped.delete(spec.runId)) return STOPPED
+      }
       const args = agentRunArgs({
         runId: spec.runId,
         image: this.config.image,
@@ -121,11 +150,29 @@ export class DockerSandbox implements Sandbox {
         out: spec.out,
         sessions: spec.sessions,
         claudeArgs: [...claudeArgs(spec.claude), ...(spec.extraArgs ?? [])],
+        browser: spec.browser === true,
       })
       return await this.#attach(spec, args, opts)
     } finally {
       await rm(envFile, { force: true })
       for (const args of teardownArgs(spec.runId)) await this.#ok(args)
+    }
+  }
+
+  // Starts sr-browser-<run> and waits until its MCP endpoint listens; the problem, or null when ready.
+  async #startBrowser(runId: string): Promise<string | null> {
+    try {
+      await this.#docker(browserRunArgs(runId, this.config.browserImage))
+    } catch (error) {
+      return (error as Error).message
+    }
+    const deadline = Date.now() + this.#browserReadyMs
+    for (;;) {
+      const logs = await this.#docker(['logs', browserName(runId)], true).catch(() => null)
+      if (logs && `${logs.stdout}${logs.stderr}`.includes(BROWSER_LISTENING)) return null
+      if (this.#stopped.has(runId)) return null
+      if (Date.now() >= deadline) return `it did not listen within ${this.#browserReadyMs / 1000} s`
+      await new Promise((resolve) => setTimeout(resolve, this.#pollMs))
     }
   }
 

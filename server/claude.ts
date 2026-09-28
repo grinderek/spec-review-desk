@@ -52,7 +52,8 @@ export function claudeArgs(spec: ClaudeRunSpec): string[] {
     '--output-format', 'stream-json',
     '--verbose',
     '--include-partial-messages',
-    // No MCP servers, ever: the owner's user/project MCP config never reaches a spawned agent.
+    // The owner's user/project MCP config never reaches a spawned agent: the only MCP server an agent
+    // ever gets is the research browser, which the sandbox adds with --mcp-config (sandbox-args.ts).
     '--strict-mcp-config',
     '--model', spec.model,
     ...(spec.resume ? ['--resume', spec.sessionId] : ['--session-id', spec.sessionId]),

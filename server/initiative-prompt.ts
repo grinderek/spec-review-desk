@@ -60,13 +60,14 @@ export function researchPrompt(doc: InitiativeDoc, topic: string, questions: str
     '## Questions',
     questions.trim(),
     '',
-    `Already allowed for WebFetch: ${doc.research.domains.join(', ') || 'none'}`,
+    `Already allowed for WebFetch and the browser: ${doc.research.domains.join(', ') || 'none'}`,
     'You have WebSearch only. When you need to read pages, reply needs_owner with the fetch-domains decision.',
   ].join('\n')
 }
 
 export function researchResumeClosing(domains: readonly string[]): string {
   return domains.length
-    ? `WebFetch is now enabled for: ${domains.join(', ')}. Read the pages you need and reply with the finished document.`
+    ? `WebFetch is now enabled for: ${domains.join(', ')}. The browser (the mcp__browser__ tools) reaches the same hosts: use it for ` +
+      'pages that WebFetch returns empty. Read the pages you need and reply with the finished document.'
     : 'WebFetch stays disabled (search only). Write the document from the search results and reply with it.'
 }
