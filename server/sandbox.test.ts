@@ -112,6 +112,18 @@ describe('DockerSandbox.run', () => {
     expect((await calls()).filter((c) => c.args[0] === 'kill').map((c) => c.args[1])).toEqual(['sr-r_0000abcd', 'sr-r_0000abcd'])
   })
 
+  // A Stop while the network and the egress proxy are still being set up must not be lost: the
+  // agent container is never started and the attempt ends stopped (it used to run on until done or
+  // timed out — also the cause of a flake of the test above on a loaded machine).
+  it('ends an attempt stopped during its setup without starting the agent container', async () => {
+    process.env.FAKE_DOCKER_HANG = '1'
+    const sandbox = new DockerSandbox(config())
+    const running = sandbox.run(await runSpec(), { timeoutMs: 10_000, onLine: () => undefined })
+    await sandbox.stop('r_0000abcd')
+    expect(await running).toMatchObject({ timedOut: false, stopped: true, error: null })
+    expect((await calls()).some((c) => c.args[0] === 'run' && c.args.includes('sr-r_0000abcd'))).toBe(false)
+  })
+
   it('does not carry a stop mark from an earlier out-of-band stop into a later attempt of the same run id', async () => {
     const sandbox = new DockerSandbox(config())
     await sandbox.stop('r_0000abcd') // no attempt in flight yet — the mark must not linger

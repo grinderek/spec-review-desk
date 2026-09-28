@@ -110,6 +110,9 @@ export class DockerSandbox implements Sandbox {
       } catch (error) {
         return { code: null, timedOut: false, stopped: false, error: `the egress proxy could not start: ${(error as Error).message}` }
       }
+      // A stop() during the setup above found no agent container to kill: honour it here instead
+      // of starting the agent (it would otherwise run until it finished or timed out).
+      if (this.#stopped.delete(spec.runId)) return { code: null, timedOut: false, stopped: true, error: null }
       const args = agentRunArgs({
         runId: spec.runId,
         image: this.config.image,
