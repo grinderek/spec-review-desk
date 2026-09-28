@@ -5,7 +5,8 @@ import type { RunKind } from './initiative-store.ts'
 // tinyproxy on an --internal network, read-only root with tmpfs /tmp and /home/agent.
 export const CLAUDE_CODE_VERSION = '2.1.280'
 export const AGENT_IMAGE = `spec-review-agent:${CLAUDE_CODE_VERSION}`
-export const EGRESS_IMAGE = 'spec-review-egress:1'
+// :2 — the HTTPS-only proxy config (FilterURLs On, host:443 filter lines; review fix 1).
+export const EGRESS_IMAGE = 'spec-review-egress:2'
 // The research browser (spike 2026-09-28): the Playwright MCP server over HTTP in the official
 // Playwright image of the repo's Playwright version (1.63.0). 0.0.80 is the last @playwright/mcp built
 // on Playwright 1.63 — 0.0.81+ want Chromium 1246 (Playwright 1.64), which that image does not carry.
@@ -24,6 +25,10 @@ export const SESSION_STORE = '/home/agent/.claude'
 export const containerName = (runId: string): string => `sr-${runId}`
 export const egressName = (runId: string): string => `sr-egress-${runId}`
 export const networkName = (runId: string): string => `sr-net-${runId}`
+// Review fix 1: each proxy's way out is its own per-run bridge, never the shared default bridge, so a
+// proxy cannot reach other containers.
+export const outNetworkName = (runId: string): string => `sr-out-${runId}`
+export const browserOutNetworkName = (runId: string): string => `sr-bout-${runId}`
 export const browserName = (runId: string): string => `sr-browser-${runId}`
 // Controller ruling 2: the browser's own proxy and network. The browser shares no network with the
 // agent's proxy (the only one that reaches api.anthropic.com) — not even code running in the browser
@@ -97,20 +102,25 @@ export const browserRunArgs = (runId: string, image: string): string[] => [
 
 export const networkCreateArgs = (runId: string): string[] => ['network', 'create', '--internal', networkName(runId)]
 
-// A tinyproxy on the bridge (its way out), joined to one internal network afterwards.
-const proxyRunArgs = (name: string, image: string, filterFile: string): string[] => [
-  'run', '-d', '--rm', '--name', name, '--network', 'bridge', '--read-only', '--cap-drop', 'ALL',
+// A tinyproxy on its own per-run bridge (its way out), joined to one internal network afterwards.
+const proxyRunArgs = (name: string, outNetwork: string, image: string, filterFile: string): string[] => [
+  'run', '-d', '--rm', '--name', name, '--network', outNetwork, '--read-only', '--cap-drop', 'ALL',
   '--security-opt', 'no-new-privileges', '-v', `${filterFile}:/etc/tinyproxy/filter:ro`, image,
 ]
 
-export const egressRunArgs = (runId: string, image: string, filterFile: string): string[] => proxyRunArgs(egressName(runId), image, filterFile)
+export const outNetworkCreateArgs = (runId: string): string[] => ['network', 'create', outNetworkName(runId)]
+
+export const egressRunArgs = (runId: string, image: string, filterFile: string): string[] =>
+  proxyRunArgs(egressName(runId), outNetworkName(runId), image, filterFile)
 
 export const networkConnectArgs = (runId: string): string[] => ['network', 'connect', networkName(runId), egressName(runId)]
 
 export const browserNetworkCreateArgs = (runId: string): string[] => ['network', 'create', '--internal', browserNetworkName(runId)]
 
+export const browserOutNetworkCreateArgs = (runId: string): string[] => ['network', 'create', browserOutNetworkName(runId)]
+
 export const browserProxyRunArgs = (runId: string, image: string, filterFile: string): string[] =>
-  proxyRunArgs(browserProxyName(runId), image, filterFile)
+  proxyRunArgs(browserProxyName(runId), browserOutNetworkName(runId), image, filterFile)
 
 export const browserProxyConnectArgs = (runId: string): string[] => ['network', 'connect', browserNetworkName(runId), browserProxyName(runId)]
 
@@ -120,7 +130,9 @@ export const teardownArgs = (runId: string): string[][] => [
   ['rm', '-f', browserProxyName(runId)],
   ['rm', '-f', egressName(runId)],
   ['network', 'rm', browserNetworkName(runId)],
+  ['network', 'rm', browserOutNetworkName(runId)],
   ['network', 'rm', networkName(runId)],
+  ['network', 'rm', outNetworkName(runId)],
 ]
 
 // Ruling 6: files the agent wrote belong to uid 10001, so a container running as that user empties

@@ -48,7 +48,7 @@ describe('sandbox settings (spec B §5)', () => {
     const config = await loadConfig(file)
     expect(config.sandbox).toEqual({
       image: 'spec-review-agent:2.1.280',
-      egressImage: 'spec-review-egress:1',
+      egressImage: 'spec-review-egress:2',
       browserImage: 'spec-review-browser:0.0.80',
       envFile: path.join(path.dirname(file), '.env'),
       timeoutMs: 30 * 60_000,

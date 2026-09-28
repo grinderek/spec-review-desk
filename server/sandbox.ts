@@ -6,8 +6,8 @@ import type { SandboxConfig } from './config.ts'
 import { browserFilter, egressFilter } from './egress.ts'
 import { run } from './git.ts'
 import {
-  agentRunArgs, browserName, browserNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs, cleanupArgs, containerName,
-  egressRunArgs, networkConnectArgs, networkCreateArgs, teardownArgs,
+  agentRunArgs, browserName, browserNetworkCreateArgs, browserOutNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs,
+  cleanupArgs, containerName, egressRunArgs, networkConnectArgs, networkCreateArgs, outNetworkCreateArgs, teardownArgs,
 } from './sandbox-args.ts'
 
 // Spec B §5: one docker container per agent attempt, behind a per-run egress proxy (ruling 1).
@@ -133,6 +133,7 @@ export class DockerSandbox implements Sandbox {
     try {
       try {
         await this.#docker(networkCreateArgs(spec.runId))
+        await this.#docker(outNetworkCreateArgs(spec.runId))
         await this.#docker(egressRunArgs(spec.runId, this.config.egressImage, filterFile))
         await this.#docker(networkConnectArgs(spec.runId))
       } catch (error) {
@@ -172,6 +173,7 @@ export class DockerSandbox implements Sandbox {
     try {
       await writeFile(filterFile, browserFilter(spec.domains), { mode: 0o644 })
       await this.#docker(browserNetworkCreateArgs(runId))
+      await this.#docker(browserOutNetworkCreateArgs(runId))
       await this.#docker(browserProxyRunArgs(runId, this.config.egressImage, filterFile))
       await this.#docker(browserProxyConnectArgs(runId))
       await this.#docker(browserRunArgs(runId, this.config.browserImage))

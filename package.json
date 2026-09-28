@@ -10,7 +10,7 @@
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "e2e": "vite build --config ui/vite.config.ts && playwright test",
-    "agent:build": "docker build -t spec-review-agent:2.1.280 --build-arg CLAUDE_CODE_VERSION=2.1.280 sandbox/agent && docker build -t spec-review-egress:1 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser"
+    "agent:build": "docker build -t spec-review-agent:2.1.280 --build-arg CLAUDE_CODE_VERSION=2.1.280 sandbox/agent && docker build -t spec-review-egress:2 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser"
   },
   "dependencies": {
     "@cucumber/cucumber-expressions": "^20.1.0",

@@ -18,9 +18,9 @@ describe('sandbox images (spec B §5)', () => {
     expect(packages).toEqual(['poppler-utils'])
   })
 
-  it('denies every host the filter does not list', async () => {
+  it('denies every host the filter does not list, and everything but HTTPS to port 443 (review fix 1)', async () => {
     const conf = await read('sandbox/egress/tinyproxy.conf')
-    for (const line of ['Port 8888', 'ConnectPort 443', 'Filter "/etc/tinyproxy/filter"', 'FilterType ere', 'FilterURLs Off', 'FilterDefaultDeny Yes']) {
+    for (const line of ['Port 8888', 'ConnectPort 443', 'Filter "/etc/tinyproxy/filter"', 'FilterType ere', 'FilterURLs On', 'FilterDefaultDeny Yes']) {
       expect(conf.split('\n')).toContain(line)
     }
     expect(await read('sandbox/egress/Dockerfile')).toContain('USER 65534:65534')

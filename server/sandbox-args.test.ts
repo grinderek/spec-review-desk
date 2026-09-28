@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest'
 import {
   AGENT_IMAGE, agentRunArgs, agentTools, BROWSER_IMAGE, BROWSER_MCP_URL, BROWSER_PROXY_URL, BROWSER_TOOLS, browserMcpConfig, browserName,
   browserNetworkCreateArgs, browserNetworkName, browserProxyConnectArgs, browserProxyName, browserProxyRunArgs, browserRunArgs, CLAUDE_CODE_VERSION,
-  cleanupArgs, containerName, egressName, egressRunArgs, networkConnectArgs, networkCreateArgs, networkName, PLAYWRIGHT_MCP_VERSION, PROXY_URL,
-  teardownArgs,
+  browserOutNetworkCreateArgs, browserOutNetworkName, cleanupArgs, containerName, EGRESS_IMAGE, egressName, egressRunArgs, networkConnectArgs,
+  networkCreateArgs, networkName, outNetworkCreateArgs, outNetworkName, PLAYWRIGHT_MCP_VERSION, PROXY_URL, teardownArgs,
 } from './sandbox-args.ts'
 
 const container = {
@@ -23,6 +23,10 @@ describe('names', () => {
     expect(AGENT_IMAGE).toBe('spec-review-agent:2.1.280')
     expect([containerName('r_1'), egressName('r_1'), networkName('r_1')]).toEqual(['sr-r_1', 'sr-egress-r_1', 'sr-net-r_1'])
     expect(PROXY_URL('r_1')).toBe('http://sr-egress-r_1:8888')
+    // Review fix 1: each proxy's way out is its own per-run bridge, never the shared default bridge.
+    expect([outNetworkName('r_1'), browserOutNetworkName('r_1')]).toEqual(['sr-out-r_1', 'sr-bout-r_1'])
+    // The tag moved with the HTTPS-only proxy config (FilterURLs On): an old :1 image would deny everything.
+    expect(EGRESS_IMAGE).toBe('spec-review-egress:2')
   })
 
   it('names the research browser per run and tags its image with the pinned Playwright MCP version', () => {
@@ -121,34 +125,39 @@ describe('browserRunArgs', () => {
 
   it('gives the browser its own hardened proxy, reachable only from the browser network (controller ruling 2)', () => {
     expect(browserNetworkCreateArgs('r_1')).toEqual(['network', 'create', '--internal', 'sr-bnet-r_1'])
-    expect(browserProxyRunArgs('r_1', 'spec-review-egress:1', '/w/runs/r_1/browser.filter')).toEqual([
-      'run', '-d', '--rm', '--name', 'sr-bproxy-r_1', '--network', 'bridge', '--read-only', '--cap-drop', 'ALL',
-      '--security-opt', 'no-new-privileges', '-v', '/w/runs/r_1/browser.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:1',
+    expect(browserOutNetworkCreateArgs('r_1')).toEqual(['network', 'create', 'sr-bout-r_1'])
+    expect(browserProxyRunArgs('r_1', 'spec-review-egress:2', '/w/runs/r_1/browser.filter')).toEqual([
+      'run', '-d', '--rm', '--name', 'sr-bproxy-r_1', '--network', 'sr-bout-r_1', '--read-only', '--cap-drop', 'ALL',
+      '--security-opt', 'no-new-privileges', '-v', '/w/runs/r_1/browser.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:2',
     ])
     expect(browserProxyConnectArgs('r_1')).toEqual(['network', 'connect', 'sr-bnet-r_1', 'sr-bproxy-r_1'])
     // The agent's proxy stays on the run network only.
     expect(networkCreateArgs('r_1')).toEqual(['network', 'create', '--internal', 'sr-net-r_1'])
+    expect(outNetworkCreateArgs('r_1')).toEqual(['network', 'create', 'sr-out-r_1'])
     expect(networkConnectArgs('r_1')).toEqual(['network', 'connect', 'sr-net-r_1', 'sr-egress-r_1'])
   })
 })
 
 describe('the egress proxy and teardown', () => {
-  it('starts the proxy on the bridge with the run filter mounted read-only', () => {
-    const args = egressRunArgs('r_1', 'spec-review-egress:1', '/w/runs/r_1/egress.filter')
+  it('starts the proxy on its own per-run bridge with the run filter mounted read-only', () => {
+    const args = egressRunArgs('r_1', 'spec-review-egress:2', '/w/runs/r_1/egress.filter')
     expect(args).toEqual([
-      'run', '-d', '--rm', '--name', 'sr-egress-r_1', '--network', 'bridge', '--read-only', '--cap-drop', 'ALL',
-      '--security-opt', 'no-new-privileges', '-v', '/w/runs/r_1/egress.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:1',
+      'run', '-d', '--rm', '--name', 'sr-egress-r_1', '--network', 'sr-out-r_1', '--read-only', '--cap-drop', 'ALL',
+      '--security-opt', 'no-new-privileges', '-v', '/w/runs/r_1/egress.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:2',
     ])
+    expect(args).not.toContain('bridge')
   })
 
-  it('removes the agent, the browser, both proxies and both networks', () => {
+  it('removes the agent, the browser, both proxies and all four networks', () => {
     expect(teardownArgs('r_1')).toEqual([
       ['rm', '-f', 'sr-r_1'],
       ['rm', '-f', 'sr-browser-r_1'],
       ['rm', '-f', 'sr-bproxy-r_1'],
       ['rm', '-f', 'sr-egress-r_1'],
       ['network', 'rm', 'sr-bnet-r_1'],
+      ['network', 'rm', 'sr-bout-r_1'],
       ['network', 'rm', 'sr-net-r_1'],
+      ['network', 'rm', 'sr-out-r_1'],
     ])
   })
 

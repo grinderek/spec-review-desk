@@ -49,11 +49,14 @@ Restarting the server issues a new token.
 
 ## Sandbox (research, planner, author)
 
-    npm run agent:build   # builds spec-review-agent:2.1.280, spec-review-egress:1 and spec-review-browser:0.0.80
+    npm run agent:build   # builds spec-review-agent:2.1.280, spec-review-egress:2 and spec-review-browser:0.0.80
     claude setup-token    # then put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env (gitignored)
 
 Each run gets its own `--internal` network (`sr-net-<run>`) and tinyproxy (`sr-egress-<run>`) that
-lets CONNECT through only to `api.anthropic.com` (plus approved research domains). The agent
+lets only HTTPS through — CONNECT to port 443 of `api.anthropic.com` (plus approved research domains);
+plain HTTP and every other port are refused (`FilterURLs On`, `^host:443$` filter lines). Each proxy
+reaches out through its own per-run bridge (`sr-out-<run>`, `sr-bout-<run>`), never the shared default
+bridge, so it cannot reach other containers. The agent
 container is read-only, without capabilities, as uid 10001, and sees only its room (read-only), its
 output directory and its session store under `<worktree>/.spec-review/runs/<run>/`. The token is
 passed through a per-run env file, never logged or served; every run's output is scanned for it.

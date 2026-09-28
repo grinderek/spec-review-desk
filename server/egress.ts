@@ -1,5 +1,6 @@
 // Spec B §4.5/§5: the per-run egress allowlist of the tinyproxy companion (ruling 1). One anchored
-// line per host; the Anthropic API is always the first line.
+// `host:443` line per host (tinyproxy runs with FilterURLs On, so HTTPS to port 443 is all that passes —
+// review fix 1); the Anthropic API is always the first line of the agent's filter.
 export const ANTHROPIC_API = 'api.anthropic.com'
 const HOSTNAME = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/
 const HOST_IN_TEXT = /(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}/gi
@@ -22,7 +23,7 @@ function plainHosts(domains: readonly string[]): string[] {
   })
 }
 
-const filterLines = (hosts: readonly string[]): string => [...new Set(hosts)].map((h) => `^${escape(h)}$\n`).join('')
+const filterLines = (hosts: readonly string[]): string => [...new Set(hosts)].map((h) => `^${escape(h)}:443$\n`).join('')
 
 // The agent's proxy: the Anthropic API plus the approved research domains (WebFetch).
 export function egressFilter(domains: readonly string[]): string {

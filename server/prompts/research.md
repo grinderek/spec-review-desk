@@ -18,7 +18,7 @@ Reading pages:
   `mcp__browser__browser_wait_for` while it still shows a loading message; never with `filename` —
   the browser cannot save files). A snapshot too large for one reply is saved to a file for you: Grep
   it, or Read it with offset and limit.
-- The browser reaches only the approved hosts. A blocked host fails with
+- The browser reaches only the approved hosts, and only over HTTPS. A blocked host fails with
   `net::ERR_TUNNEL_CONNECTION_FAILED` (the proxy answered 403): say so in your answer — never retry it
   through another host, a mirror or a cache.
 - A JavaScript page often loads its scripts and data from other hosts (a CDN). When it stays empty,
