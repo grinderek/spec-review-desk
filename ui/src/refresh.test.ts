@@ -57,6 +57,20 @@ describe('refreshAfterAction', () => {
     s.unsubscribe()
   })
 
+  // Review fix 5: a stalled or slow refetch never holds the action's report back for long.
+  it('gives up waiting after its time limit; the data still lands later', async () => {
+    const s = setup('initiatives')
+    await expect.poll(s.data).toBe(0)
+    s.bump()
+    s.slow(600)
+    const started = Date.now()
+    await refreshAfterAction(s.client, 100)
+    expect(Date.now() - started).toBeLessThan(400)
+    expect(s.data()).toBe(0)
+    await expect.poll(s.data, { timeout: 2_000 }).toBe(1)
+    s.unsubscribe()
+  })
+
   it('leaves queries of other screens alone', async () => {
     const s = setup('sandbox')
     await expect.poll(s.data).toBe(0)

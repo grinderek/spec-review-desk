@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { createContext, type ReactNode, useCallback, useContext, useState } from 'react'
+import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from 'react'
 import { refreshAfterAction } from './refresh.ts'
 
 type Tone = 'ok' | 'bad'
@@ -15,8 +15,10 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     window.setTimeout(() => setToast((current) => (current?.text === text ? null : current)), 4000)
   }, [])
   const busy = useCallback((delta: 1 | -1) => setPending((n) => Math.max(0, n + delta)), [])
+  // A stable value: a toast or a pending change never re-renders every action consumer.
+  const value = useMemo(() => ({ show, busy }), [show, busy])
   return (
-    <ToastContext.Provider value={{ show, busy }}>
+    <ToastContext.Provider value={value}>
       {children}
       {toast ? (
         <div className={`toast ${toast.tone}`} role="status">
