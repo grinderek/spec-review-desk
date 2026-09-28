@@ -5,7 +5,7 @@ import { history, inbox, type InboxFilter } from './decision-view.ts'
 import { useAction } from './feedback.tsx'
 import type { TabProps } from './InitiativeScreen.tsx'
 import { DraftActions, InputViewer } from './InputViewer.tsx'
-import { canResume, runTitle } from './initiative-view.ts'
+import { canResume, researchBrowserHint, runTitle } from './initiative-view.ts'
 import { NewDecisionForm } from './NewDecisionForm.tsx'
 import { RunStream } from './RunStream.tsx'
 
@@ -111,8 +111,10 @@ export function ResearchTab({ id, view, sandbox }: TabProps) {
   const research = view.doc.runs.filter((r) => r.kind === 'research')
   const drafts = view.inputs.filter((i) => i.draft)
   const domainText = domains ?? view.doc.research.domains.join('\n')
+  const browserHint = researchBrowserHint(sandbox)
   return (
     <>
+      {browserHint ? <div className="banner warn" role="alert">{browserHint}</div> : null}
       <form className="panelform" onSubmit={(e) => { e.preventDefault(); void act(async () => { await api.startResearch(id, { topic: topic.trim(), questions: questions.trim() }); setTopic(''); setQuestions('') }, 'Research started') }}>
         <h4>Research…</h4>
         <input aria-label="Research topic" placeholder="Topic" value={topic} onChange={(e) => setTopic(e.target.value)} />

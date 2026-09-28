@@ -58,7 +58,9 @@ describe('readOAuthToken', () => {
 
 describe('DockerSandbox.status', () => {
   it('reports docker, the three images and the token by presence only, with the exact fixes', async () => {
-    expect(await new DockerSandbox(config()).status()).toEqual({ docker: true, image: true, egressImage: true, browserImage: true, token: true, ready: true, fixes: [] })
+    expect(await new DockerSandbox(config()).status()).toEqual({
+      docker: true, image: true, egressImage: true, browserImage: true, browserFix: null, token: true, ready: true, fixes: [],
+    })
     process.env.FAKE_DOCKER_MISSING = 'spec-review-agent:test'
     const missing = await new DockerSandbox(config({ envFile: path.join(tmp, 'none.env') })).status()
     expect(missing).toMatchObject({ docker: true, image: false, egressImage: true, browserImage: true, token: false, ready: false })
@@ -70,11 +72,14 @@ describe('DockerSandbox.status', () => {
     expect((await new DockerSandbox(config()).status()).fixes[0]).toBe('Install Docker and make sure `docker version` works')
   })
 
-  it('is not ready without the research browser image', async () => {
+  it('stays ready without the research browser image and reports it on its own (controller ruling 1)', async () => {
     process.env.FAKE_DOCKER_MISSING = 'spec-review-browser:test'
-    const status = await new DockerSandbox(config()).status()
-    expect(status).toMatchObject({ image: true, egressImage: true, browserImage: false, ready: false })
-    expect(status.fixes).toEqual(['Build the sandbox images: npm run agent:build'])
+    expect(await new DockerSandbox(config()).status()).toEqual({
+      docker: true, image: true, egressImage: true, browserImage: false, browserFix: 'Build the research browser image: npm run agent:build',
+      token: true, ready: true, fixes: [],
+    })
+    process.env.FAKE_DOCKER_DOWN = '1'
+    expect(await new DockerSandbox(config()).status()).toMatchObject({ browserImage: false, browserFix: null, ready: false })
   })
 })
 

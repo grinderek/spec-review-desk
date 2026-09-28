@@ -28,7 +28,10 @@ export interface SandboxStatus {
   docker: boolean
   image: boolean
   egressImage: boolean
+  // The research browser only serves the research read phase: it is reported on its own and never
+  // makes the sandbox unready (controller ruling 1). browserFix: its build hint, or null.
   browserImage: boolean
+  browserFix: string | null
   token: boolean
   ready: boolean
   fixes: string[]
@@ -47,6 +50,7 @@ export interface Sandbox {
 export const FIXES = {
   docker: 'Install Docker and make sure `docker version` works',
   image: 'Build the sandbox images: npm run agent:build',
+  browser: 'Build the research browser image: npm run agent:build',
   token: 'Create a token with `claude setup-token` and put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env',
 } as const
 
@@ -110,9 +114,9 @@ export class DockerSandbox implements Sandbox {
     const egressImage = docker && (await this.#ok(['image', 'inspect', this.config.egressImage]))
     const browserImage = docker && (await this.#ok(['image', 'inspect', this.config.browserImage]))
     const token = (await this.token()) !== null
-    const images = image && egressImage && browserImage
-    const fixes = [...(docker ? [] : [FIXES.docker]), ...(docker && !images ? [FIXES.image] : []), ...(token ? [] : [FIXES.token])]
-    return { docker, image, egressImage, browserImage, token, ready: fixes.length === 0, fixes }
+    const fixes = [...(docker ? [] : [FIXES.docker]), ...(docker && !(image && egressImage) ? [FIXES.image] : []), ...(token ? [] : [FIXES.token])]
+    const browserFix = docker && !browserImage ? FIXES.browser : null
+    return { docker, image, egressImage, browserImage, browserFix, token, ready: fixes.length === 0, fixes }
   }
 
   async run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {

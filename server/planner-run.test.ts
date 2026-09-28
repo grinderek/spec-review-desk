@@ -299,6 +299,16 @@ describe('planner runs', () => {
     await expect(s.service.stop(s.target, run.id)).rejects.toMatchObject({ code: 'run_not_running' })
   })
 
+  it('starts without the research browser image (controller ruling 1)', async () => {
+    const s = await setup()
+    s.sandbox.statusValue = { ...s.sandbox.statusValue, browserImage: false, browserFix: 'Build the research browser image: npm run agent:build' }
+    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply())
+    const run = await startPlanner(s.service, s.target)
+    await s.service.settled(run.id)
+    expect(s.sandbox.runs).toHaveLength(1)
+    expect(s.sandbox.runs[0]!.browser).toBe(false)
+  })
+
   it('refuses without a ready sandbox, after approval and while a planner runs', async () => {
     const s = await setup()
     s.sandbox.statusValue = { ...s.sandbox.statusValue, image: false, ready: false, fixes: ['Build the sandbox images: npm run agent:build'] }

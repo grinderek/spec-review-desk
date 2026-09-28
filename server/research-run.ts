@@ -4,7 +4,7 @@ import { slugify } from './author-run.ts'
 import { addDecisions, decisionsFromReply, runDecisions } from './decision-model.ts'
 import { FETCH_DOMAINS, normalizeDomain } from './egress.ts'
 import { researchPrompt, researchResumeClosing } from './initiative-prompt.ts'
-import { type InputEntry, readInitiative, type RunRecord } from './initiative-store.ts'
+import { findRun, type InputEntry, readInitiative, type RunRecord } from './initiative-store.ts'
 import { buildResumePrompt } from './prompt.ts'
 import { readReview, updateReview } from './review-store.ts'
 import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts'
@@ -21,12 +21,20 @@ export async function startResearch(service: InitiativeRunService, target: RunTa
   )
 }
 
+const ALREADY_ALLOWED = 'All the domains you asked for are already allowed.'
+
+// A run already in a reading phase keeps reading: it waits either for a second fetch-domains decision
+// (asset hosts) or — with every domain already allowed — for the browser image (controller ruling 1).
 export async function resumeResearch(service: InitiativeRunService, target: RunTarget, runId: string): Promise<void> {
   const fetch = runDecisions(await readReview(target.ini.dir), runId).find((d) => d.requested_domains)
   const doc = await readInitiative(target.ini.dir)
-  const webFetch = fetch?.status === 'recorded' && fetch.choice?.option !== 'search_only' && doc.research.domains.length > 0
+  const run = findRun(doc, runId)
+  const approved = fetch?.status === 'recorded' && fetch.choice?.option !== 'search_only'
+  const webFetch = (approved || (run.phase === 'read' && run.web_fetch === true)) && doc.research.domains.length > 0
   const closing = researchResumeClosing(webFetch ? doc.research.domains : [])
-  await service.resumeRun(target, runId, { phase: 'read', web_fetch: webFetch }, (decisions) => buildResumePrompt(decisions, closing))
+  const prompt = (decisions: Parameters<typeof buildResumePrompt>[0]): string =>
+    decisions.length ? buildResumePrompt(decisions, closing) : `${ALREADY_ALLOWED} ${closing}`
+  await service.resumeRun(target, runId, { phase: 'read', web_fetch: webFetch }, prompt)
 }
 
 // research-<topic>.md, with -2, -3, … when an input of that name exists.
@@ -49,7 +57,7 @@ export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
     const allowed = new Set(doc.research.domains)
     if (requested.every((h) => allowed.has(h))) {
       // Ruling 2: every requested domain is already approved — continue without asking.
-      return ctx.relaunch({ phase: 'read', web_fetch: true, validation_retry: false }, `All the domains you asked for are already allowed. ${researchResumeClosing(doc.research.domains)}`)
+      return ctx.relaunch({ phase: 'read', web_fetch: true, validation_retry: false }, `${ALREADY_ALLOWED} ${researchResumeClosing(doc.research.domains)}`)
     }
     const [record] = decisionsFromReply([decision], { kind: 'run', run: ctx.run.id, agent: 'research' }, ctx.at)
     await updateReview(ini.dir, (d) => addDecisions(d, [{ ...record!, requested_domains: requested }]))

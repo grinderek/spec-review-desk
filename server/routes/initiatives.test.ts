@@ -181,7 +181,7 @@ describe('initiative routes', () => {
   it('serves the sandbox status by presence only and refuses runs while it is not ready', async () => {
     const { app, sandbox } = await setup()
     const { json } = await create(app)
-    sandbox.statusValue = { docker: true, image: false, egressImage: true, browserImage: true, token: false, ready: false, fixes: ['Build the sandbox images: npm run agent:build'] }
+    sandbox.statusValue = { docker: true, image: false, egressImage: true, browserImage: true, browserFix: null, token: false, ready: false, fixes: ['Build the sandbox images: npm run agent:build'] }
     const status = await call(app, 'GET', '/api/sandbox/status')
     expect(status.json).toEqual(sandbox.statusValue)
     expect(JSON.stringify(status.json)).not.toContain('sk-ant')

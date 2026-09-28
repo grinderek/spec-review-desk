@@ -15,7 +15,7 @@ import { parseJsonObject, retryPrompt } from './protocol.ts'
 import { newId, nowIso, readReview } from './review-store.ts'
 import { assembleRoom, type RoomInput } from './room.ts'
 import { logText, streamAttempt } from './run-stream.ts'
-import type { Sandbox } from './sandbox.ts'
+import { FIXES, type Sandbox } from './sandbox.ts'
 import { agentTools, containerName, WORK_IN, WORK_OUT } from './sandbox-args.ts'
 import { maskDeep, redactSecrets, ROTATE_HINT, SecretDetector } from './secret-scan.ts'
 
@@ -45,6 +45,13 @@ const RULES: Record<RunKind, URL> = {
   author: new URL('./prompts/author.md', import.meta.url),
   research: new URL('./prompts/research.md', import.meta.url),
 }
+
+// The research read phase with approved domains reads the web: WebFetch and the sandboxed browser.
+export const readsWeb = (run: Pick<RunRecord, 'kind' | 'phase' | 'web_fetch'>): boolean =>
+  run.kind === 'research' && run.phase === 'read' && run.web_fetch === true
+
+// Controller ruling 1: without the browser image a reading attempt never starts; the run waits instead.
+const BROWSER_MISSING = `The research browser image is missing. ${FIXES.browser}, then Resume.`
 
 export function runPaths(wt: WorktreeInfo, run: Pick<RunRecord, 'id' | 'log'>): RunPaths {
   const runDir = path.join(wt.path, '.spec-review', 'runs', run.id)
@@ -86,6 +93,12 @@ export class InitiativeRunService {
   async requireReady(): Promise<void> {
     const status = await this.deps.sandbox.status()
     if (!status.ready) throw new HttpError(409, 'sandbox_unavailable', `The sandbox is not ready: ${status.fixes.join(' · ')}`)
+  }
+
+  async requireBrowser(): Promise<void> {
+    if (!(await this.deps.sandbox.status()).browserImage) {
+      throw new HttpError(409, 'browser_unavailable', `The research browser is not ready: ${FIXES.browser}`)
+    }
   }
 
   // Creates the run record, its directories and its room, then launches the first attempt.
@@ -136,11 +149,12 @@ export class InitiativeRunService {
       check?.(doc)
       return run
     }
-    waiting(await readInitiative(target.ini.dir))
+    const current = waiting(await readInitiative(target.ini.dir))
     const decisions = runDecisions(await readReview(target.ini.dir), runId)
     const pending = pendingBlocking(decisions)
     if (pending.length) throw new HttpError(409, 'decisions_pending', `${pending.length} blocking decision(s) of this run are still open`)
     await this.requireReady()
+    if (readsWeb({ ...current, ...patch })) await this.requireBrowser()
     let next: RunRecord | null = null
     await updateInitiative(target.ini.dir, (d) => {
       next = { ...waiting(d), ...patch, outcome: 'running', ended_at: null, validation_retry: false }
@@ -217,7 +231,7 @@ export class InitiativeRunService {
   async #attempt(target: RunTarget, run: RunRecord, prompt: string, resume: boolean): Promise<void> {
     const { config, sandbox, bus } = this.deps
     const doc = await readInitiative(target.ini.dir)
-    const webFetch = run.kind === 'research' && run.phase === 'read' && run.web_fetch === true
+    const webFetch = readsWeb(run)
     const tools = agentTools(run.kind, webFetch)
     const token = await sandbox.token()
     const claude: ClaudeRunSpec = {
@@ -256,7 +270,10 @@ export class InitiativeRunService {
     const issues = parsed.reply ? validateRunReply(run.kind, parsed.reply, { change: run.change }) : parsed.issues
     const ctx = this.#context(target, run, paths, token)
     if (issues.length) {
-      if (!run.validation_retry) return ctx.relaunch({ validation_retry: true }, retryPrompt(issues))
+      if (!run.validation_retry) {
+        await ctx.relaunch({ validation_retry: true }, retryPrompt(issues))
+        return this.#settle(target, run)
+      }
       return this.#final(target, run, 'failed', 'The reply did not pass validation twice.', issues)
     }
     const finisher = this.deps.finishers[run.kind] as Finisher<typeof run.kind> | undefined
@@ -271,6 +288,9 @@ export class InitiativeRunService {
       record: (outcome, notes, problems, mutate) => this.#record(target, run, outcome, notes, problems, mutate),
       relaunch: async (patch, prompt) => {
         const next: RunRecord = { ...run, ...patch }
+        if (readsWeb(next) && !(await this.deps.sandbox.status()).browserImage) {
+          return this.#record(target, next, 'needs_owner', BROWSER_MISSING, undefined, (d) => upsertRun(d, next))
+        }
         await updateInitiative(target.ini.dir, (d) => upsertRun(d, next))
         this.#launch(target, next, prompt, true)
       },

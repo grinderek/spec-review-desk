@@ -57,7 +57,10 @@ lets CONNECT through only to `api.anthropic.com` (plus approved research domains
 container is read-only, without capabilities, as uid 10001, and sees only its room (read-only), its
 output directory and its session store under `<worktree>/.spec-review/runs/<run>/`. The token is
 passed through a per-run env file, never logged or served; every run's output is scanned for it.
-The Desk reports the sandbox not ready (Build the sandbox images) until all three images exist.
+The sandbox is ready with the agent and egress images and the token; the browser image is reported on
+its own (the Research tab shows its build hint). Without it research still searches, but a reading
+phase never starts: Resume answers 409 `browser_unavailable`, and a run that would continue into it
+on its own waits for the owner (needs owner, "… npm run agent:build, then Resume").
 
 **Research browser.** WebFetch returns pages that render with JavaScript empty ("Content truncated"),
 so the research read phase (after the owner approved domains) also gets a headless browser:

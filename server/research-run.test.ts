@@ -150,6 +150,75 @@ describe('research runs', () => {
     expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: true })
   })
 
+  // Controller ruling 1: the browser image gates only a read phase that reads the web.
+  const NO_BROWSER = { browserImage: false, browserFix: 'Build the research browser image: npm run agent:build' }
+
+  it('searches without the browser image but refuses Resume into a reading phase until it is built', async () => {
+    const s = await setup()
+    s.sandbox.statusValue = { ...s.sandbox.statusValue, ...NO_BROWSER }
+    await replies([
+      { match: 'WebFetch is now enabled', reply: done },
+      { match: 'Topic: Intuit reports', reply: fetchDomains(['developer.intuit.com']) },
+    ])
+    const run = await startResearch(s.service, s.target, { topic: 'Intuit reports', questions: 'Q?' })
+    await s.service.settled(run.id)
+    const [decision] = (await readReview(s.dir)).decisions
+    await decideInitiativeDecision(s.target, decision!.id, { option: 'allow_all', note: '' }, '')
+    await expect(resumeResearch(s.service, s.target, run.id)).rejects.toMatchObject({
+      status: 409, code: 'browser_unavailable', message: expect.stringContaining('npm run agent:build'),
+    })
+    expect(s.sandbox.runs).toHaveLength(1)
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'needs_owner', phase: 'search' })
+
+    s.sandbox.statusValue = { ...s.sandbox.statusValue, browserImage: true, browserFix: null }
+    await resumeResearch(s.service, s.target, run.id)
+    await s.service.settled(run.id)
+    expect(s.sandbox.runs.map((r) => r.browser)).toEqual([false, true])
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: true })
+  })
+
+  it('resumes search-only without the browser image', async () => {
+    const s = await setup()
+    s.sandbox.statusValue = { ...s.sandbox.statusValue, ...NO_BROWSER }
+    await replies([
+      { match: 'WebFetch stays disabled', reply: done },
+      { match: 'Topic: Intuit reports', reply: fetchDomains(['developer.intuit.com']) },
+    ])
+    const run = await startResearch(s.service, s.target, { topic: 'Intuit reports', questions: 'Q?' })
+    await s.service.settled(run.id)
+    const [decision] = (await readReview(s.dir)).decisions
+    await decideInitiativeDecision(s.target, decision!.id, { option: 'search_only', note: '' }, '')
+    await resumeResearch(s.service, s.target, run.id)
+    await s.service.settled(run.id)
+    expect(s.sandbox.runs.map((r) => r.browser)).toEqual([false, false])
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', web_fetch: false })
+  })
+
+  it('does not continue into the read phase on its own without the browser image: the run waits for the owner', async () => {
+    const s = await setup(['developer.intuit.com'])
+    s.sandbox.statusValue = { ...s.sandbox.statusValue, ...NO_BROWSER }
+    await replies([
+      { match: 'already allowed', reply: done },
+      { match: 'Topic: Intuit reports', reply: fetchDomains(['developer.intuit.com']) },
+    ])
+    const run = await startResearch(s.service, s.target, { topic: 'Intuit reports', questions: 'Q?' })
+    await s.service.settled(run.id)
+    expect(s.sandbox.runs).toHaveLength(1)
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({
+      outcome: 'needs_owner', phase: 'read', web_fetch: true, notes: expect.stringContaining('npm run agent:build'),
+    })
+    await expect(resumeResearch(s.service, s.target, run.id)).rejects.toMatchObject({ code: 'browser_unavailable' })
+
+    s.sandbox.statusValue = { ...s.sandbox.statusValue, browserImage: true, browserFix: null }
+    await resumeResearch(s.service, s.target, run.id)
+    await s.service.settled(run.id)
+    const second = s.sandbox.runs[1]!
+    expect(second).toMatchObject({ browser: true, domains: ['developer.intuit.com'] })
+    expect(second.claude).toMatchObject({ resume: true, allowedTools: ['Read', 'Grep', 'Glob', 'WebSearch', 'WebFetch', ...BROWSER_TOOLS] })
+    expect(second.claude.prompt).toContain('All the domains you asked for are already allowed. WebFetch is now enabled for: developer.intuit.com.')
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: true })
+  })
+
   it('names research files after the topic without clobbering', () => {
     expect(researchFileName('Intuit reports', [])).toBe('research-intuit-reports.md')
     expect(researchFileName('Intuit reports', ['research-intuit-reports.md', 'research-intuit-reports-2.md'])).toBe('research-intuit-reports-3.md')

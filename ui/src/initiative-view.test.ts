@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest'
 import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
 import type { RunRecord } from '../../server/initiative-store.ts'
 import {
-  addEdit, canResume, createPreview, editsChanged, inputKind, moveEdit, progressLabel, removeEdit, runTitle, sliceCard, statusSegments, toEdits, toggleDependency,
+  addEdit, canResume, createPreview, editsChanged, inputKind, moveEdit, progressLabel, removeEdit, researchBrowserHint, runTitle, sliceCard, statusSegments,
+  toEdits, toggleDependency,
 } from './initiative-view.ts'
 
 const plan = {
@@ -114,5 +115,17 @@ describe('inputKind', () => {
     expect(inputKind('Spec.PDF')).toBe('pdf')
     expect(['shot.png', 'photo.jpg', 'photo.JPEG'].map(inputKind)).toEqual(['image', 'image', 'image'])
     expect(inputKind('archive.zip')).toBe(null)
+  })
+})
+
+describe('the research browser hint (controller ruling 1)', () => {
+  const ready = { docker: true, image: true, egressImage: true, browserImage: true, browserFix: null, token: true, ready: true, fixes: [] }
+
+  it('names the fix on the Research tab only when the browser image is missing', () => {
+    expect(researchBrowserHint(undefined)).toBeNull()
+    expect(researchBrowserHint(ready)).toBeNull()
+    expect(researchBrowserHint({ ...ready, browserImage: false, browserFix: 'Build the research browser image: npm run agent:build' })).toBe(
+      'Research can search, but reading pages needs the research browser. Build the research browser image: npm run agent:build',
+    )
   })
 })

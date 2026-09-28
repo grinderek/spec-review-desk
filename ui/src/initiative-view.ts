@@ -1,5 +1,6 @@
 import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
 import type { Plan, RunRecord } from '../../server/initiative-store.ts'
+import type { SandboxStatus } from '../../server/sandbox.ts'
 import type { SliceEdit, SliceStatus } from '../../server/slice-plan.ts'
 
 // Pure helpers of the initiative screens (spec B §8).
@@ -94,4 +95,11 @@ export function inputKind(file: string): InputKind | null {
   if (['.txt', '.yaml', '.yml', '.json'].includes(ext)) return 'text'
   if (ext === '.pdf') return 'pdf'
   return ['.png', '.jpg', '.jpeg'].includes(ext) ? 'image' : null
+}
+
+// Controller ruling 1: a missing browser image only stops research from reading pages, so its hint
+// belongs on the Research tab, not in the initiative's "sandbox not ready" banner.
+export function researchBrowserHint(sandbox: SandboxStatus | undefined): string | null {
+  if (!sandbox?.browserFix) return null
+  return `Research can search, but reading pages needs the research browser. ${sandbox.browserFix}`
 }
