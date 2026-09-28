@@ -27,6 +27,7 @@ button:disabled { cursor: not-allowed; opacity: .5; }
 button:focus-visible, textarea:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 code, pre, .mono { font-family: var(--mono); }
 .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr) 400px; gap: 12px; align-items: start; }
+.layout.wide { grid-template-columns: 260px minmax(0, 1fr); }
 @media (max-width: 1180px) { .layout { grid-template-columns: 230px minmax(0, 1fr); } .thread { grid-column: 1 / -1; } }
 @media (max-width: 760px) { .layout { grid-template-columns: 1fr; } }
 .pane { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
@@ -215,7 +216,8 @@ h4.inline { margin: 0 6px 0 0; font-size: 13px; color: var(--ink); }
 .slicecard.st-approved { border-left-color: var(--decision); } .slicecard.st-applied { border-left-color: var(--ok); }
 .slicecard .shead { padding: 0; }
 .slicecard .shead input { flex: 1 1 220px; }
-.scope { white-space: pre-wrap; font-size: 13px; }
+.scope { white-space: pre-wrap; font-size: 14px; line-height: 1.55; }
+.editor textarea.scopeedit { font-size: 14px; line-height: 1.55; padding: 8px 10px; overflow: hidden; resize: vertical; }
 .deps { display: flex; gap: 10px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); align-items: center; }
 .deps label { display: flex; gap: 4px; align-items: center; }
 .deps input { width: auto; }

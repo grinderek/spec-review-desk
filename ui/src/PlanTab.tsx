@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api, type SliceEdit } from './api.ts'
+import { AutoGrowTextarea } from './AutoGrowTextarea.tsx'
 import { useAction } from './feedback.tsx'
 import type { TabProps } from './InitiativeScreen.tsx'
 import { addEdit, editsChanged, moveEdit, removeEdit, sliceCard, toEdits, toggleDependency } from './initiative-view.ts'
@@ -31,7 +32,7 @@ function SliceEditor({ edits, setEdits, locked, fixedOrder }: {
               )}
               {frozen ? null : <button type="button" className="btn bad" aria-label={`Remove slice ${i + 1}`} onClick={() => setEdits(removeEdit(edits, i))}>×</button>}
             </div>
-            <textarea aria-label={`Scope of slice ${i + 1}`} value={e.scope} disabled={frozen} onChange={(ev) => update(i, { scope: ev.target.value })} />
+            <AutoGrowTextarea className="scopeedit" aria-label={`Scope of slice ${i + 1}`} value={e.scope} disabled={frozen} onChange={(ev) => update(i, { scope: ev.target.value })} />
             <div className="deps">
               Depends on:
               {edits.filter((o) => o.id && o.id !== e.id).map((o) => (

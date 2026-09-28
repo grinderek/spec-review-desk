@@ -31,12 +31,14 @@ export function App({ sessionError }: { sessionError: string | null }) {
   const unauthorized = changes.error instanceof ApiError && changes.error.status === 401
   const go = (s: Selection) => { window.location.hash = hashOf(s) }
   const change = selected?.kind === 'change' ? selected.id : null
+  // Initiatives and the New feature form have no thread panel; they take its column.
+  const wide = selected?.kind === 'initiative' || selected?.kind === 'new'
 
   return (
     <>
       {sessionError || unauthorized ? <div className="banner bad">{sessionError ?? 'Not signed in — open the URL printed in the server console.'}</div> : null}
       {status.data && !status.data.capabilities.claude ? <div className="banner warn">claude is not on PATH — questions and Apply are disabled.</div> : null}
-      <div className="layout">
+      <div className={wide ? 'layout wide' : 'layout'}>
         <Sidebar data={changes.data} initiatives={initiatives.data?.initiatives} selected={selected} onSelect={go} />
         <main className="pane main">
           {selected?.kind === 'change' ? <ChangeScreen key={keyOf(selected)} id={selected.id} capabilities={status.data?.capabilities} setPanel={setPanel} /> : null}
@@ -44,13 +46,15 @@ export function App({ sessionError }: { sessionError: string | null }) {
           {selected?.kind === 'new' ? <NewFeature choices={initiatives.data} onCreated={(id) => go({ kind: 'initiative', id })} /> : null}
           {selected ? null : <p className="empty">Pick a change or an initiative on the left, or start a new feature.</p>}
         </main>
-        <aside className="pane thread" aria-label="Thread">
-          {change && panel ? (
-            <ThreadPanel key={panel.kind === 'thread' ? panel.id : `new:${panel.anchor}:${panel.ref}`} id={change} target={panel} onTarget={setPanel} />
-          ) : (
-            <p className="empty">{selected?.kind === 'initiative' ? 'Runs stream live in the Runs tab and on the slice cards.' : 'Select a scenario and ask a question, or open a thread.'}</p>
-          )}
-        </aside>
+        {wide ? null : (
+          <aside className="pane thread" aria-label="Thread">
+            {change && panel ? (
+              <ThreadPanel key={panel.kind === 'thread' ? panel.id : `new:${panel.anchor}:${panel.ref}`} id={change} target={panel} onTarget={setPanel} />
+            ) : (
+              <p className="empty">Select a scenario and ask a question, or open a thread.</p>
+            )}
+          </aside>
+        )}
       </div>
     </>
   )
