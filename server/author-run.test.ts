@@ -250,4 +250,15 @@ describe('author runs', () => {
     // One word longer than the limit has no boundary: it is cut, as before.
     expect(slugify('a'.repeat(50))).toBe('a'.repeat(40))
   })
+
+  // Review fix 5: a long initiative name must not cut the whole slice title out of the name
+  // (it gave add-<initiative> and then add-<initiative>-2 — no slice identity left).
+  it('keeps part of the slice title however long the initiative name is', async () => {
+    const s = await setup()
+    const initiative = `i${'q'.repeat(40)}`
+    const name = await defaultChangeName(s.wt, initiative, 'Internationalization of invoices')
+    expect(name).toBe(`add-${initiative}-internationali`)
+    expect(name.length).toBe(60)
+    expect(await defaultChangeName(s.wt, initiative, 'Tax and service fees')).toBe(`add-${initiative}-tax-and`)
+  })
 })

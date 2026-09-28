@@ -39,7 +39,10 @@ async function changeNames(wt: WorktreeInfo): Promise<string[]> {
 // add-<initiative>-<slice title slug>, unique in the worktree (-2, -3, … on a clash).
 export async function defaultChangeName(wt: WorktreeInfo, initiative: string, title: string): Promise<string> {
   const taken = new Set(await changeNames(wt))
-  const base = cutAtWord(`add-${initiative}-${slugify(title) || 'slice'}`, 60)
+  // The title gets what the prefix leaves of 60 characters (at least 14: an initiative name has at
+  // most 41), cut at a word — or inside a first word longer than that — never dropped whole.
+  const prefix = `add-${initiative}-`
+  const base = `${prefix}${cutAtWord(slugify(title) || 'slice', 60 - prefix.length)}`
   if (!taken.has(base)) return base
   let n = 2
   while (taken.has(`${base}-${n}`)) n += 1
