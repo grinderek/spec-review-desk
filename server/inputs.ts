@@ -4,7 +4,7 @@ import { normalizeDomain } from './egress.ts'
 import { HttpError } from './errors.ts'
 import { git } from './git.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
-import { INITIATIVE_FILE, type InitiativeDoc, type InputEntry, readInitiative, updateInitiative } from './initiative-store.ts'
+import { INITIATIVE_FILE, INPUT_FILE, type InitiativeDoc, type InputEntry, readInitiative, updateInitiative } from './initiative-store.ts'
 import type { RunTarget } from './run-service.ts'
 
 // Spec B §7: uploads and repo copies land in openspec/initiatives/<name>/inputs/, in git.
@@ -95,6 +95,36 @@ export async function uploadInputs(target: RunTarget, files: readonly IncomingFi
   await commitPaths(wt.path, [...names.map((n) => `${ini.relDir}/inputs/${n}`), `${ini.relDir}/${INITIATIVE_FILE}`],
     initiativeCommitMessage(`${ini.name} — inputs: ${names.join(', ')}`, trailer))
   return names
+}
+
+// Desk fixes item 4: the Desk shows an input (a research draft before Accept, any other input on
+// demand). Text is served as plain text — the UI renders it, the browser never interprets it —
+// and a PDF or an image inline with its own type.
+const TEXT_INPUTS = new Set(['.md', '.txt', '.yaml', '.yml', '.json'])
+const INLINE_INPUTS: Readonly<Record<string, string>> = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' }
+export interface ServedInput { file: string; bytes: Uint8Array<ArrayBuffer>; contentType: string; inline: boolean }
+
+// Only a listed input of this initiative, only a regular file directly inside its inputs/ — never
+// a symlink and never anything the name could reach outside (the name is also a sanitized basename).
+export async function readInput(target: RunTarget, file: string): Promise<ServedInput> {
+  const { ini } = target
+  const entry = INPUT_FILE.test(file) ? (await readInitiative(ini.dir)).inputs.find((i) => i.file === file) : undefined
+  if (!entry) throw new HttpError(404, 'unknown_input', `No input ${file}`)
+  const ext = path.extname(entry.file).toLowerCase()
+  const contentType = TEXT_INPUTS.has(ext) ? 'text/plain; charset=utf-8' : INLINE_INPUTS[ext]
+  if (!contentType) throw new HttpError(415, 'unsupported_type', `${entry.file} is not a type the Desk shows`)
+  const dir = path.join(ini.dir, 'inputs')
+  const unsafe = new HttpError(409, 'unsafe_path', `${entry.file} is not a regular file inside the inputs of ${ini.name}`)
+  let real: string
+  try {
+    if ((await lstat(path.join(dir, entry.file))).isSymbolicLink()) throw unsafe
+    real = await realpath(path.join(dir, entry.file))
+  } catch (error) {
+    if (error === unsafe) throw error
+    throw new HttpError(404, 'input_missing', `${entry.file} is listed but its file is missing`)
+  }
+  if (path.dirname(real) !== (await realpath(dir)) || !(await lstat(real)).isFile()) throw unsafe
+  return { file: entry.file, bytes: new Uint8Array(await readFile(real)), contentType, inline: !TEXT_INPUTS.has(ext) }
 }
 
 function draftOf(doc: InitiativeDoc, file: string): InputEntry {

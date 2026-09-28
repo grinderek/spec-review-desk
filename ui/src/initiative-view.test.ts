@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { InitiativeSummary, InitiativeView } from '../../server/initiatives.ts'
 import type { RunRecord } from '../../server/initiative-store.ts'
 import {
-  addEdit, canResume, createPreview, editsChanged, moveEdit, progressLabel, removeEdit, runTitle, sliceCard, statusSegments, toEdits, toggleDependency,
+  addEdit, canResume, createPreview, editsChanged, inputKind, moveEdit, progressLabel, removeEdit, runTitle, sliceCard, statusSegments, toEdits, toggleDependency,
 } from './initiative-view.ts'
 
 const plan = {
@@ -103,5 +103,16 @@ describe('runs', () => {
     expect(canResume(viewOf({ decisions: [decision] as InitiativeView['decisions'] }), waiting)).toBe(false)
     expect(canResume(viewOf({ decisions: [{ ...decision, status: 'recorded' }] as InitiativeView['decisions'] }), waiting)).toBe(true)
     expect(canResume(viewOf({}), run({ outcome: 'done' }))).toBe(false)
+  })
+})
+
+// Desk fixes item 4: how the viewer shows an input.
+describe('inputKind', () => {
+  it('renders Markdown, shows other text as is, frames a PDF and shows an image', () => {
+    expect(inputKind('research-ar-ageing.md')).toBe('markdown')
+    expect(['notes.txt', 'config.yaml', 'a.yml', 'data.json'].map(inputKind)).toEqual(['text', 'text', 'text', 'text'])
+    expect(inputKind('Spec.PDF')).toBe('pdf')
+    expect(['shot.png', 'photo.jpg', 'photo.JPEG'].map(inputKind)).toEqual(['image', 'image', 'image'])
+    expect(inputKind('archive.zip')).toBe(null)
   })
 })

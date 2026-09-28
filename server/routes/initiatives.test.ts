@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -50,6 +50,13 @@ async function oversizedPost(app: Awaited<ReturnType<typeof setup>>['app'], url:
   })
   const text = await res.text()
   return { status: res.status, json: text ? JSON.parse(text) : null }
+}
+
+// A GET whose raw Response is inspected (content type, disposition, bytes).
+function rawGet(app: Awaited<ReturnType<typeof setup>>['app'], url: string): Promise<Response> {
+  return Promise.resolve(app.request(`http://127.0.0.1:${TEST_PORT}${url}`, {
+    headers: { host: `127.0.0.1:${TEST_PORT}`, cookie: `sr_token=${TEST_TOKEN}` },
+  }))
 }
 
 async function create(app: Awaited<ReturnType<typeof setup>>['app']) {
@@ -317,6 +324,58 @@ describe('initiative routes', () => {
     expect(bad.status).toBe(422)
     expect(bad.json.error.code).toBe('invalid_body')
     expect((await git(repo, ['branch', '--list', 'plan/file-list'])).trim()).toBe('')
+  })
+
+  // Desk fixes item 4: the owner reads an input (or a research draft before Accept) in the Desk.
+  it('serves a listed input — text as text, a PDF or an image inline with its type — and nothing else', async () => {
+    const { app, repo } = await setup()
+    const { json } = await create(app)
+    const url = `/api/initiatives/${json.worktreeId}/health-score`
+    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0x00, 0xff])
+    const form = new FormData()
+    form.append('files', new File([pdf], 'score spec.pdf', { type: 'application/pdf' }))
+    form.append('files', new File([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], 'shot.png'))
+    form.append('files', new File(['{"a":1}'], 'data.json'))
+    expect((await callForm(app, `${url}/inputs`, form)).json.files).toEqual(['score-spec.pdf', 'shot.png', 'data.json'])
+
+    const md = await rawGet(app, `${url}/inputs/spec.md`)
+    expect(md.status).toBe(200)
+    expect(md.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(md.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(await md.text()).toBe('# Spec\n')
+    const data = await rawGet(app, `${url}/inputs/data.json`)
+    expect(data.headers.get('content-type')).toBe('text/plain; charset=utf-8')
+    expect(await data.text()).toBe('{"a":1}')
+
+    const served = await rawGet(app, `${url}/inputs/score-spec.pdf`)
+    expect(served.status).toBe(200)
+    expect(served.headers.get('content-type')).toBe('application/pdf')
+    expect(served.headers.get('content-disposition')).toBe('inline; filename="score-spec.pdf"')
+    expect(new Uint8Array(await served.arrayBuffer())).toEqual(pdf)
+    const png = await rawGet(app, `${url}/inputs/shot.png`)
+    expect(png.headers.get('content-type')).toBe('image/png')
+    expect(png.headers.get('content-disposition')).toBe('inline; filename="shot.png"')
+
+    const unknown = await rawGet(app, `${url}/inputs/nope.md`)
+    expect(unknown.status).toBe(404)
+    expect((await unknown.json()).error.code).toBe('unknown_input')
+    for (const evil of ['..%2Finitiative.yaml', '%2E%2E', '..%2F..%2F..%2F..%2Fconfig.yaml', 'initiative.yaml', '.hidden.md']) {
+      const refused = await rawGet(app, `${url}/inputs/${evil}`)
+      expect(refused.status, evil).toBeGreaterThanOrEqual(400)
+      expect(refused.status, evil).toBeLessThan(500)
+      expect(await refused.text(), evil).not.toContain('version: 1')
+    }
+
+    // A listed input that is a symlink out of inputs/ is refused, even when its name is valid.
+    await symlink(path.join(dir, 'initiative.yaml'), path.join(dir, 'inputs', 'leak.md'))
+    await updateInitiative(dir, (d) => ({ ...d, inputs: [...d.inputs, { file: 'leak.md', bytes: 1, source: { kind: 'upload' }, added_at: 'x', draft: false }] }))
+    const leak = await rawGet(app, `${url}/inputs/leak.md`)
+    expect(leak.status).toBe(409)
+    expect(await leak.text()).not.toContain('version: 1')
+    // A listed input whose file is gone answers 404 input_missing.
+    await rm(path.join(dir, 'inputs', 'shot.png'))
+    expect((await (await rawGet(app, `${url}/inputs/shot.png`)).json()).error.code).toBe('input_missing')
   })
 
   // Desk fixes item 2: the brief is editable after creation.

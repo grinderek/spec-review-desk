@@ -11,7 +11,7 @@ import { commitPaths, initiativeCommitMessage } from '../initiative-git.ts'
 import { type CreateInput, createInitiative } from '../initiative-create.ts'
 import { findRun, INITIATIVE_FILE, readInitiative, updateInitiative } from '../initiative-store.ts'
 import { listInitiatives, loadInitiativeView, sliceStatuses, summarizeInitiative } from '../initiatives.ts'
-import { acceptDraft, discardDraft, type IncomingFile, MAX_TOTAL_INPUT_BYTES, readRepoFile, setDomains, uploadInputs } from '../inputs.ts'
+import { acceptDraft, discardDraft, type IncomingFile, MAX_TOTAL_INPUT_BYTES, readInput, readRepoFile, setDomains, uploadInputs } from '../inputs.ts'
 import { startPlanner } from '../planner-run.ts'
 import { resumeResearch, startResearch } from '../research-run.ts'
 import { nowIso, readReview } from '../review-store.ts'
@@ -133,6 +133,15 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
     const names = await uploadInputs(t, files, trailer, nowIso())
     changed(t)
     return c.json({ files: names }, 201)
+  })
+
+  // Desk fixes item 4: read an input (a research draft before Accept) in the Desk.
+  app.get(`${base}/inputs/:file`, async (c) => {
+    const input = await readInput(await target(c), c.req.param('file'))
+    c.header('content-type', input.contentType)
+    c.header('x-content-type-options', 'nosniff')
+    if (input.inline) c.header('content-disposition', `inline; filename="${input.file}"`)
+    return c.body(input.bytes)
   })
 
   app.post(`${base}/inputs/:file/accept`, async (c) => {

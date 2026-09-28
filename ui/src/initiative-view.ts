@@ -85,3 +85,13 @@ export function canResume(view: Pick<InitiativeView, 'decisions'>, run: RunRecor
     .filter((d) => d.source.kind === 'run' && d.source.run === run.id && d.blocking)
     .every((d) => d.status === 'recorded' || d.status === 'dismissed')
 }
+
+// Desk fixes item 4: how the input viewer shows a file (the server serves the same four kinds).
+export type InputKind = 'markdown' | 'text' | 'pdf' | 'image'
+export function inputKind(file: string): InputKind | null {
+  const ext = /\.[^.]+$/.exec(file.toLowerCase())?.[0] ?? ''
+  if (ext === '.md') return 'markdown'
+  if (['.txt', '.yaml', '.yml', '.json'].includes(ext)) return 'text'
+  if (ext === '.pdf') return 'pdf'
+  return ['.png', '.jpg', '.jpeg'].includes(ext) ? 'image' : null
+}

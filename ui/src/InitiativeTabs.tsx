@@ -4,6 +4,7 @@ import { DecisionCard } from './DecisionCard.tsx'
 import { history, inbox, type InboxFilter } from './decision-view.ts'
 import { useAction } from './feedback.tsx'
 import type { TabProps } from './InitiativeScreen.tsx'
+import { DraftActions, InputViewer } from './InputViewer.tsx'
 import { canResume, runTitle } from './initiative-view.ts'
 import { NewDecisionForm } from './NewDecisionForm.tsx'
 import { RunStream } from './RunStream.tsx'
@@ -15,18 +16,15 @@ function sourceText(input: InitiativeView['inputs'][number]): string {
   return 'uploaded'
 }
 
-function DraftActions({ id, file }: { id: TabProps['id']; file: string }) {
-  const act = useAction()
-  return (
-    <>
-      <button className="btn ok" onClick={() => void act(() => api.acceptDraft(id, file), `${file} accepted and committed`)}>Accept</button>
-      <button className="btn bad" onClick={() => void act(() => api.discardDraft(id, file), `${file} discarded`)}>Discard</button>
-    </>
-  )
+// The input open in the viewer (by file name): gone from the view — discarded — closes it.
+function useViewer(view: InitiativeView) {
+  const [open, setOpen] = useState<string | null>(null)
+  return { shown: view.inputs.find((i) => i.file === open) ?? null, open: setOpen, close: () => setOpen(null) }
 }
 
 export function InputsTab({ id, view }: TabProps) {
   const act = useAction()
+  const viewer = useViewer(view)
   const [files, setFiles] = useState<File[]>([])
   const [from, setFrom] = useState('')
   const upload = () => {
@@ -36,6 +34,7 @@ export function InputsTab({ id, view }: TabProps) {
   }
   return (
     <>
+      {viewer.shown ? <InputViewer id={id} input={viewer.shown} onClose={viewer.close} /> : null}
       {view.inputs.length === 0 ? <p className="empty">No inputs yet.</p> : (
         <div className="tablewrap">
           <table className="list">
@@ -43,7 +42,10 @@ export function InputsTab({ id, view }: TabProps) {
             <tbody>
               {view.inputs.map((i) => (
                 <tr key={i.file} data-input={i.file}>
-                  <td className="mono">{i.file} {i.draft ? <span className="pill p-draft">draft</span> : null}{i.present ? null : <span className="pill p-failed">missing</span>}</td>
+                  <td className="mono">
+                    <button className="linkbtn mono" onClick={() => viewer.open(i.file)}>{i.file}</button>{' '}
+                    {i.draft ? <span className="pill p-draft">draft</span> : null}{i.present ? null : <span className="pill p-failed">missing</span>}
+                  </td>
                   <td>{i.bytes} B</td>
                   <td>{sourceText(i)}</td>
                   <td>{i.draft ? <DraftActions id={id} file={i.file} /> : null}</td>
@@ -105,6 +107,7 @@ export function ResearchTab({ id, view, sandbox }: TabProps) {
   const [topic, setTopic] = useState('')
   const [questions, setQuestions] = useState('')
   const [domains, setDomains] = useState<string | null>(null)
+  const viewer = useViewer(view)
   const research = view.doc.runs.filter((r) => r.kind === 'research')
   const drafts = view.inputs.filter((i) => i.draft)
   const domainText = domains ?? view.doc.research.domains.join('\n')
@@ -121,8 +124,12 @@ export function ResearchTab({ id, view, sandbox }: TabProps) {
         <div key={r.id} className="hash">{r.topic} · <span className={`pill p-${r.outcome}`}>{r.outcome}</span> · {r.phase ?? 'search'} phase</div>
       ))}
       <h4>Drafts</h4>
+      {viewer.shown ? <InputViewer id={id} input={viewer.shown} onClose={viewer.close} /> : null}
       {drafts.length === 0 ? <p className="empty">No research draft waiting.</p> : drafts.map((d) => (
-        <div key={d.file} className="row" style={{ justifyContent: 'flex-start' }}><span className="mono">{d.file}</span><DraftActions id={id} file={d.file} /></div>
+        <div key={d.file} className="row" style={{ justifyContent: 'flex-start' }}>
+          <button className="linkbtn mono" onClick={() => viewer.open(d.file)}>{d.file}</button>
+          <DraftActions id={id} file={d.file} />
+        </div>
       ))}
       <form className="panelform" onSubmit={(e) => {
         e.preventDefault()

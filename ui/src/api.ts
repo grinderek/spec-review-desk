@@ -29,6 +29,22 @@ async function request<T>(method: 'GET' | 'POST' | 'PUT', url: string, body?: un
   return json as T
 }
 
+// A text body (an input shown in the viewer); errors carry the same envelope as request().
+async function requestText(url: string): Promise<string> {
+  const res = await fetch(url)
+  const text = await res.text()
+  if (!res.ok) {
+    let error: { code?: string; message?: string } | undefined
+    try {
+      error = (JSON.parse(text) as { error?: { code?: string; message?: string } }).error
+    } catch {
+      error = undefined
+    }
+    throw new ApiError(error?.code ?? 'http_error', error?.message ?? res.statusText, res.status)
+  }
+  return text
+}
+
 export interface ChangeId { wt: string; name: string }
 export interface WorktreeSummary { id: string; path: string; branch: string | null; head: string; changes: (ChangeSummary & { initiative: string | null })[] }
 export interface ChangesResponse { repos: { repo: string; worktrees: WorktreeSummary[] }[] }
@@ -98,6 +114,8 @@ export const api = {
   saveBrief: (id: InitiativeId, brief: string) => request<{ brief: string; commit: string | null }>('PUT', `${ibase(id)}/brief`, { brief }),
   uploadInputs: (id: InitiativeId, form: FormData) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, form),
   addFromRepo: (id: InitiativeId, from: string) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, { from }),
+  inputUrl: (id: InitiativeId, file: string) => `${ibase(id)}/inputs/${encodeURIComponent(file)}`,
+  inputText: (id: InitiativeId, file: string) => requestText(`${ibase(id)}/inputs/${encodeURIComponent(file)}`),
   acceptDraft: (id: InitiativeId, file: string) => request<{ commit: string }>('POST', `${ibase(id)}/inputs/${encodeURIComponent(file)}/accept`),
   discardDraft: (id: InitiativeId, file: string) => request<Ok>('POST', `${ibase(id)}/inputs/${encodeURIComponent(file)}/discard`),
   startResearch: (id: InitiativeId, body: { topic: string; questions: string }) => request<{ run: RunRecord }>('POST', `${ibase(id)}/research`, body),

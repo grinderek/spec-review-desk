@@ -86,6 +86,11 @@ async function main(): Promise<void> {
       }),
     },
     { match: 'Why business hours?', reply: reply({ answer: 'Rows weigh by business-hour age, not calendar age.', patch: ageDiff }) },
+    // The input viewer e2e reads this research draft before accepting it.
+    {
+      match: 'Topic: AR ageing',
+      reply: reply({ answer: 'Found it.', status: 'done', document: '# AR ageing\n\nThe **aged receivables** report answers it.\n\n## Sources\n- https://developer.intuit.com/\n' }),
+    },
     // The live-refresh e2e watches its planner run while it runs: that one takes a few seconds.
     { match: 'Initiative: live-refresh', delayMs: 3_000, reply: plannerReply },
     // Spec B: the sandboxed planner and author (FakeSandbox runs the fake claude against the room).
