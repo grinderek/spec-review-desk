@@ -131,7 +131,8 @@ describe('browserRunArgs', () => {
 
   it('runs the Playwright MCP server on the browser network only, behind its own proxy, locked down, without the token or host mounts', () => {
     expect(args).toEqual([
-      'run', '-d', '--rm', '--name', 'sr-browser-r_1', '--network', 'sr-bnet-r_1',
+      // --init (review fix 4): docker-init is PID 1 and reaps orphaned Chromium helpers.
+      'run', '-d', '--rm', '--init', '--name', 'sr-browser-r_1', '--network', 'sr-bnet-r_1',
       '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/home/pwuser:uid=1001,gid=1001', '--shm-size', '256m',
       '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '2g', '--cpus', '2',
       '--user', '1001:1001',
@@ -148,7 +149,8 @@ describe('browserRunArgs', () => {
     expect(browserOutNetworkCreateArgs('r_1')).toEqual(['network', 'create', 'sr-bout-r_1'])
     expect(browserProxyRunArgs('r_1', 'spec-review-egress:2', '/w/runs/r_1/browser.filter')).toEqual([
       'run', '-d', '--rm', '--name', 'sr-bproxy-r_1', '--network', 'sr-bout-r_1', '--read-only', '--cap-drop', 'ALL',
-      '--security-opt', 'no-new-privileges', '-v', '/w/runs/r_1/browser.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:2',
+      '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '1',
+      '-v', '/w/runs/r_1/browser.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:2',
     ])
     expect(browserProxyConnectArgs('r_1')).toEqual(['network', 'connect', 'sr-bnet-r_1', 'sr-bproxy-r_1'])
     // The agent's proxy stays on the run network only.
@@ -163,7 +165,8 @@ describe('the egress proxy and teardown', () => {
     const args = egressRunArgs('r_1', 'spec-review-egress:2', '/w/runs/r_1/egress.filter')
     expect(args).toEqual([
       'run', '-d', '--rm', '--name', 'sr-egress-r_1', '--network', 'sr-out-r_1', '--read-only', '--cap-drop', 'ALL',
-      '--security-opt', 'no-new-privileges', '-v', '/w/runs/r_1/egress.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:2',
+      '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '1',
+      '-v', '/w/runs/r_1/egress.filter:/etc/tinyproxy/filter:ro', 'spec-review-egress:2',
     ])
     expect(args).not.toContain('bridge')
   })

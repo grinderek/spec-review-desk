@@ -52,6 +52,10 @@ Restarting the server issues a new token.
     npm run agent:build   # builds spec-review-agent:2.1.280, spec-review-egress:2 and spec-review-browser:0.0.80
     claude setup-token    # then put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env (gitignored)
 
+Requires Docker ≥ 25: a research read phase starts the agent on two networks at once (two `--network`
+flags on one `docker run`). A research read uses four per-run networks (`sr-net`, `sr-out`, `sr-bnet`,
+`sr-bout`), other runs two, all from Docker's default address pools.
+
 Each run gets its own `--internal` network (`sr-net-<run>`) and tinyproxy (`sr-egress-<run>`) that
 lets only HTTPS through — CONNECT to port 443 of `api.anthropic.com` (plus approved research domains);
 plain HTTP and every other port are refused (`FilterURLs On`, `^host:443$` filter lines). Each proxy

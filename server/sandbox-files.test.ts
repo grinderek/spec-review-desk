@@ -31,7 +31,8 @@ describe('sandbox images (spec B §5)', () => {
     const lock = JSON.parse(await read('package-lock.json')) as { packages: Record<string, { version: string }> }
     const playwright = lock.packages['node_modules/@playwright/test']!.version
     expect(playwright).toBe('1.63.0')
-    expect(dockerfile).toContain(`FROM mcr.microsoft.com/playwright:v${playwright}-noble`)
+    // Review fix 4: the tag names the version, the digest pins the bytes.
+    expect(dockerfile).toMatch(new RegExp(`^FROM mcr\\.microsoft\\.com/playwright:v${playwright.replace(/\./g, '\\.')}-noble@sha256:[0-9a-f]{64}$`, 'm'))
     expect(dockerfile).toContain(`ARG PLAYWRIGHT_MCP_VERSION=${PLAYWRIGHT_MCP_VERSION}`)
     expect(dockerfile).toContain('npm install -g @playwright/mcp@${PLAYWRIGHT_MCP_VERSION}')
     expect(dockerfile).toContain('USER pwuser')

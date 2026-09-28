@@ -64,6 +64,9 @@ export function agentRunArgs(c: AgentContainer): string[] {
   return [
     'run', '--rm', '-i', '--name', containerName(c.runId),
     '--network', networkName(c.runId),
+    // Two --network flags need Docker >= 25. The agent is dual-homed (sr-net and sr-bnet); isolation
+    // relies on --cap-drop ALL here and on the browser — never add NET_ADMIN/NET_RAW, or the agent could
+    // become a route from the browser to the agent's proxy.
     ...(c.browser ? ['--network', browserNetworkName(c.runId)] : []),
     '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/home/agent:uid=10001,gid=10001',
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
@@ -91,8 +94,10 @@ export function agentRunArgs(c: AgentContainer): string[] {
 // capabilities, no host mounts, no token. Chromium's own sandbox is off (--no-sandbox): it needs capabilities the container drops, and
 // the container is the sandbox. --allowed-hosts: the MCP server answers only requests addressed to
 // sr-browser-<run>:8931 — one to localhost:8931 (a page's script, say) gets 403 (spike 2026-09-28).
+// --init: docker-init is PID 1 and reaps orphaned Chromium helpers, which would otherwise count
+// against --pids-limit (review fix 4).
 export const browserRunArgs = (runId: string, image: string): string[] => [
-  'run', '-d', '--rm', '--name', browserName(runId), '--network', browserNetworkName(runId),
+  'run', '-d', '--rm', '--init', '--name', browserName(runId), '--network', browserNetworkName(runId),
   '--read-only', '--tmpfs', '/tmp', '--tmpfs', '/home/pwuser:uid=1001,gid=1001', '--shm-size', '256m',
   '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--pids-limit', '512', '--memory', '2g', '--cpus', '2',
   '--user', BROWSER_USER,
@@ -105,9 +110,11 @@ export const browserRunArgs = (runId: string, image: string): string[] => [
 export const networkCreateArgs = (runId: string): string[] => ['network', 'create', '--internal', networkName(runId)]
 
 // A tinyproxy on its own per-run bridge (its way out), joined to one internal network afterwards.
+// Limits (review fix 4): tinyproxy serves at most 20 clients (tinyproxy.conf MaxClients).
 const proxyRunArgs = (name: string, outNetwork: string, image: string, filterFile: string): string[] => [
   'run', '-d', '--rm', '--name', name, '--network', outNetwork, '--read-only', '--cap-drop', 'ALL',
-  '--security-opt', 'no-new-privileges', '-v', `${filterFile}:/etc/tinyproxy/filter:ro`, image,
+  '--security-opt', 'no-new-privileges', '--pids-limit', '64', '--memory', '128m', '--cpus', '1',
+  '-v', `${filterFile}:/etc/tinyproxy/filter:ro`, image,
 ]
 
 export const outNetworkCreateArgs = (runId: string): string[] => ['network', 'create', outNetworkName(runId)]
