@@ -79,8 +79,12 @@ the agent's proxy; a blocked host fails with `net::ERR_TUNNEL_CONNECTION_FAILED`
 tmpfs `/tmp` and `/home/pwuser`, no capabilities, `no-new-privileges`, pids/memory/cpu limits, no host
 mounts, no token. The agent joins both networks and gets the browser as its one MCP server
 (`--mcp-config` with `--strict-mcp-config`, `NO_PROXY=sr-browser-<run>`) and a minimal tool set:
-navigate, navigate back, snapshot, click, wait for, network requests; script evaluation, file upload,
-screenshots and form input stay denied. The search phase, the planner and the author never get it.
+navigate, navigate back, snapshot, click, wait for, network requests; the script-evaluation tools,
+file upload, screenshots and form input stay denied. Navigation: `file:` URLs are blocked by the MCP
+server and `javascript:` URLs abort, but a `data:` URL still opens a page that runs its own script —
+@playwright/mcp 0.0.80 has no option to block it (`--allowed-origins` does not cover `data:`, verified),
+so, as for any page, the boundary is the browser proxy: HTTPS to the approved hosts only. The search
+phase, the planner and the author never get it.
 The browser, its proxy and its network are removed with the agent, the agent's proxy and the run
 network — also on stop, timeout and failure. A JavaScript page usually loads its scripts from other
 hosts (the Intuit docs need `uxfabric.intuitcdn.net`, `plugin.intuitcdn.net` and
