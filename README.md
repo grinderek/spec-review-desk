@@ -90,6 +90,10 @@ network — also on stop, timeout and failure. A JavaScript page usually loads i
 hosts (the Intuit docs need `uxfabric.intuitcdn.net`, `plugin.intuitcdn.net` and
 `static.developer.intuit.com` besides `developer.intuit.com`): the agent lists the failed requests and
 asks for those hosts with another fetch-domains decision.
+The secret scan fails closed: page text the agent reads (snapshots, tool results) is scanned too, so a
+page that shows an `sk-ant-…` string — e.g. a sample key in API docs — fails the research run with the
+rotate-your-token message even though your token did not leak (a false alarm; rotating is still the
+safe answer when unsure).
 
 Every sandboxed reply (planner/author/research) is requested with `claude --json-schema`; the real
 CLI rejects a schema that carries a top-level `$schema` key (zod's `toJSONSchema` emits one), so
