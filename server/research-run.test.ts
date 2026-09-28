@@ -219,6 +219,29 @@ describe('research runs', () => {
     expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: true })
   })
 
+  it('stops reading when the owner answers the asset-host decision with search only (review fix 3)', async () => {
+    const s = await setup(['developer.intuit.com'])
+    await replies([
+      { match: 'WebFetch and the browser are now off', reply: done },
+      { match: 'already allowed', reply: fetchDomains(['uxfabric.intuitcdn.net']) },
+      { match: 'Topic: Intuit reports', reply: fetchDomains(['developer.intuit.com']) },
+    ])
+    const run = await startResearch(s.service, s.target, { topic: 'Intuit reports', questions: 'Q?' })
+    await s.service.settled(run.id)
+    const [decision] = (await readReview(s.dir)).decisions
+    expect(decision).toMatchObject({ requested_domains: ['uxfabric.intuitcdn.net'] })
+    await decideInitiativeDecision(s.target, decision!.id, { option: 'search_only', note: '' }, '')
+    await resumeResearch(s.service, s.target, run.id)
+    await s.service.settled(run.id)
+    const third = s.sandbox.runs[2]!
+    expect(third).toMatchObject({ browser: false, domains: [] })
+    expect(third.claude.allowedTools).toEqual(['Read', 'Grep', 'Glob', 'WebSearch'])
+    expect(third.claude.prompt).toContain(
+      'The owner chose search only: WebFetch and the browser are now off. Write the document from what you have already read and the search results',
+    )
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: false })
+  })
+
   it('names research files after the topic without clobbering', () => {
     expect(researchFileName('Intuit reports', [])).toBe('research-intuit-reports.md')
     expect(researchFileName('Intuit reports', ['research-intuit-reports.md', 'research-intuit-reports-2.md'])).toBe('research-intuit-reports-3.md')

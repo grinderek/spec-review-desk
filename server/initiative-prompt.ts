@@ -65,6 +65,11 @@ export function researchPrompt(doc: InitiativeDoc, topic: string, questions: str
   ].join('\n')
 }
 
+// Review fix 3: the owner answered a later fetch-domains decision (e.g. asset hosts) with search only.
+export const RESEARCH_READING_STOPPED =
+  'The owner chose search only: WebFetch and the browser are now off. Write the document from what you have already read and the ' +
+  'search results, and reply with it.'
+
 export function researchResumeClosing(domains: readonly string[]): string {
   return domains.length
     ? `WebFetch is now enabled for: ${domains.join(', ')}. The browser (the mcp__browser__ tools) reaches the same hosts: use it for ` +

@@ -3,7 +3,7 @@ import path from 'node:path'
 import { slugify } from './author-run.ts'
 import { addDecisions, decisionsFromReply, runDecisions } from './decision-model.ts'
 import { FETCH_DOMAINS, normalizeDomain } from './egress.ts'
-import { researchPrompt, researchResumeClosing } from './initiative-prompt.ts'
+import { RESEARCH_READING_STOPPED, researchPrompt, researchResumeClosing } from './initiative-prompt.ts'
 import { findRun, type InputEntry, readInitiative, type RunRecord } from './initiative-store.ts'
 import { buildResumePrompt } from './prompt.ts'
 import { readReview, updateReview } from './review-store.ts'
@@ -23,15 +23,18 @@ export async function startResearch(service: InitiativeRunService, target: RunTa
 
 const ALREADY_ALLOWED = 'All the domains you asked for are already allowed.'
 
-// A run already in a reading phase keeps reading: it waits either for a second fetch-domains decision
-// (asset hosts) or — with every domain already allowed — for the browser image (controller ruling 1).
+// The owner's latest recorded fetch-domains answer decides (review fix 3): an allow option reads the
+// approved domains, search only stops reading — also after a second decision (asset hosts). Without a
+// recorded answer (the run waited for the browser image, controller ruling 1, or the owner dismissed
+// the request) a run that was reading keeps reading.
 export async function resumeResearch(service: InitiativeRunService, target: RunTarget, runId: string): Promise<void> {
-  const fetch = runDecisions(await readReview(target.ini.dir), runId).find((d) => d.requested_domains)
+  const latest = runDecisions(await readReview(target.ini.dir), runId).filter((d) => d.requested_domains).at(-1)
   const doc = await readInitiative(target.ini.dir)
   const run = findRun(doc, runId)
-  const approved = fetch?.status === 'recorded' && fetch.choice?.option !== 'search_only'
-  const webFetch = (approved || (run.phase === 'read' && run.web_fetch === true)) && doc.research.domains.length > 0
-  const closing = researchResumeClosing(webFetch ? doc.research.domains : [])
+  const reading = run.phase === 'read' && run.web_fetch === true
+  const chosen = latest?.status === 'recorded' ? (latest.choice?.option ?? null) : null
+  const webFetch = (chosen ? chosen !== 'search_only' : reading) && doc.research.domains.length > 0
+  const closing = webFetch ? researchResumeClosing(doc.research.domains) : reading ? RESEARCH_READING_STOPPED : researchResumeClosing([])
   const prompt = (decisions: Parameters<typeof buildResumePrompt>[0]): string =>
     decisions.length ? buildResumePrompt(decisions, closing) : `${ALREADY_ALLOWED} ${closing}`
   await service.resumeRun(target, runId, { phase: 'read', web_fetch: webFetch }, prompt)
