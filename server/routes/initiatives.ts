@@ -6,6 +6,7 @@ import { resumeAuthor, startAuthor } from '../author-run.ts'
 import { pendingBlocking } from '../decision-model.ts'
 import { listWorktrees } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
+import { MAX_BRIEF_CHARS, saveBrief } from '../initiative-brief.ts'
 import { commitPaths, initiativeCommitMessage } from '../initiative-git.ts'
 import { type CreateInput, createInitiative } from '../initiative-create.ts'
 import { findRun, INITIATIVE_FILE, readInitiative, updateInitiative } from '../initiative-store.ts'
@@ -34,6 +35,7 @@ const PlanEdit = z.object({
 })
 const Propose = z.object({ notes: z.string().max(4000).optional(), change: z.string().max(64).optional() })
 const FromRepo = z.object({ from: z.string().min(1) })
+const Brief = z.object({ brief: z.string().max(MAX_BRIEF_CHARS) })
 const CreateFields = z.object({
   name: z.string().trim(),
   repo: z.string().min(1),
@@ -103,6 +105,18 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
   app.get(base, async (c) => {
     const t = await target(c)
     return c.json(await loadInitiativeView(t.wt, t.ini))
+  })
+
+  // Desk fixes item 2: the owner edits the brief after creation; the edit is committed.
+  app.put(`${base}/brief`, async (c) => {
+    const t = await target(c)
+    const body = Brief.safeParse(await c.req.json().catch(() => undefined))
+    if (!body.success) {
+      throw new HttpError(422, 'invalid_body', body.error.issues.map((i) => `${i.path.join('.') || 'body'}: ${i.message}`).join('; '))
+    }
+    const saved = await saveBrief(t, body.data.brief, trailer)
+    if (saved.commit) changed(t)
+    return c.json(saved)
   })
 
   app.post(`${base}/inputs`, uploadBodyLimit, async (c) => {

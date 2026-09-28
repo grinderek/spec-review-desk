@@ -4,6 +4,7 @@ import type { Config } from './config.ts'
 import { discover, listWorktrees, type Registry, worktreeId } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { ensureExcluded, run } from './git.ts'
+import { BRIEF_FILE, briefText } from './initiative-brief.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
 import { emptyInitiative, initiativeDir, isInitiativeName, writeInitiative } from './initiative-store.ts'
 import { type IncomingFile, planInputs, readRepoFile, writeInputs } from './inputs.ts'
@@ -63,7 +64,7 @@ export async function createInitiative(config: Config, registry: Registry, input
   const dir = initiativeDir(wtPath, input.name)
   try {
     await mkdir(dir, { recursive: true })
-    await writeFile(path.join(dir, 'brief.md'), input.brief.endsWith('\n') ? input.brief : `${input.brief}\n`)
+    await writeFile(path.join(dir, BRIEF_FILE), briefText(input.brief))
     const inputs = await writeInputs(dir, planned, at)
     await writeInitiative(dir, { ...emptyInitiative({ name: input.name, title: input.title, repo: input.repo, created_at: at }), inputs })
     await ensureExcluded(wtPath)

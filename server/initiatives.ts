@@ -7,6 +7,7 @@ import { isActive } from './decision-model.ts'
 import { DECISIONS_FILE, type DecisionLogEntry, parseDecisionLog } from './decisions-md.ts'
 import { type ChangeRef, listChanges, type WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
+import { BRIEF_FILE } from './initiative-brief.ts'
 import { isDirty } from './git.ts'
 import { INITIATIVE_FILE, type InitiativeDoc, type InputEntry, isInitiativeName, readInitiative, type Slice } from './initiative-store.ts'
 import { readReview } from './review-store.ts'
@@ -121,7 +122,7 @@ export async function loadInitiativeView(wt: WorktreeInfo, ref: InitiativeRef): 
     name: ref.name,
     relDir: ref.relDir,
     doc,
-    brief: await readOptional(path.join(ref.dir, 'brief.md')),
+    brief: await readOptional(path.join(ref.dir, BRIEF_FILE)),
     statuses,
     blockers: Object.fromEntries(doc.plan.slices.map((s) => [s.id, proposeBlocker(doc.plan.slices, statuses, s.id)])),
     inputs,

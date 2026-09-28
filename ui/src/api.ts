@@ -95,6 +95,7 @@ export const api = {
   initiative: (id: InitiativeId) => request<InitiativeView>('GET', ibase(id)),
   sandboxStatus: () => request<SandboxStatus>('GET', '/api/sandbox/status'),
   createInitiative: (form: FormData) => request<{ worktreeId: string; name: string }>('POST', '/api/initiatives', form),
+  saveBrief: (id: InitiativeId, brief: string) => request<{ brief: string; commit: string | null }>('PUT', `${ibase(id)}/brief`, { brief }),
   uploadInputs: (id: InitiativeId, form: FormData) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, form),
   addFromRepo: (id: InitiativeId, from: string) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, { from }),
   acceptDraft: (id: InitiativeId, file: string) => request<{ commit: string }>('POST', `${ibase(id)}/inputs/${encodeURIComponent(file)}/accept`),

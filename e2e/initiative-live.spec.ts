@@ -1,16 +1,8 @@
 import { expect, type Page, test } from '@playwright/test'
+import { newInitiative } from './helpers.ts'
 
 // Desk fixes item 1: an initiative mutation shows on the screen without a page reload — and it
 // already shows when the action reports success (the toast), never a moment later.
-async function newInitiative(page: Page, name: string): Promise<void> {
-  await page.goto('/?t=e2e')
-  await page.getByRole('button', { name: '+ New feature' }).click()
-  await page.getByLabel('Name', { exact: true }).fill(name)
-  await page.getByLabel('Title', { exact: true }).fill('Live refresh')
-  await page.getByRole('button', { name: 'Create' }).click()
-  await expect(page.getByRole('heading', { name: new RegExp(name) })).toBeVisible({ timeout: 20_000 })
-}
-
 interface AtToast { main: string; tabs: string[] }
 
 // Records what the main pane shows at the very DOM mutation that inserts the toast `text`.

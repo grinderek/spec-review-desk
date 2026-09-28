@@ -43,7 +43,7 @@ Restarting the server issues a new token.
   clean-room **author** that writes the slice as a behavior-driven change, vetted before it is moved
   into the worktree and committed. **Research** runs in two phases: WebSearch only, then WebFetch
   limited to the domains the owner approves in the initiative inbox; the result is a draft input
-  until accepted.
+  until accepted. The Brief tab edits `brief.md` in place (Save commits it).
 
 ## Sandbox (research, planner, author)
 

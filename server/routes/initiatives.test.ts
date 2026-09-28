@@ -283,6 +283,38 @@ describe('initiative routes', () => {
     expect(seen.every((data) => JSON.stringify(data) === JSON.stringify(announced))).toBe(true)
   })
 
+  // Desk fixes item 2: the brief is editable after creation.
+  it('edits the brief: writes brief.md and commits it like the other initiative commits', async () => {
+    const { app, repo, bus } = await setup()
+    const { json } = await create(app)
+    const url = `/api/initiatives/${json.worktreeId}/health-score`
+    const wt = path.join(repo, '.claude/worktrees/health-score')
+    const seen: unknown[] = []
+    bus.subscribe('initiative', (event) => seen.push(event.data))
+
+    const saved = await call(app, 'PUT', `${url}/brief`, { brief: '# What\n\nScore the founder day, edited.' })
+    expect(saved.status).toBe(200)
+    expect(saved.json).toEqual({ brief: '# What\n\nScore the founder day, edited.\n', commit: expect.stringMatching(/^[0-9a-f]{7,}$/) })
+    expect(await readFile(path.join(wt, 'openspec/initiatives/health-score/brief.md'), 'utf8')).toBe('# What\n\nScore the founder day, edited.\n')
+    expect(await git(wt, ['log', '-1', '--format=%B'])).toBe('docs(openspec): health-score — brief\n\nCo-Authored-By: Test <test@example.com>\n\n')
+    expect((await git(wt, ['show', '--name-only', '--format=', 'HEAD'])).trim()).toBe('openspec/initiatives/health-score/brief.md')
+    expect((await git(wt, ['status', '--porcelain'])).trim()).toBe('')
+    expect((await call(app, 'GET', url)).json.brief).toBe('# What\n\nScore the founder day, edited.\n')
+    expect(seen).toEqual([{ worktreeId: json.worktreeId, name: 'health-score' }])
+
+    // Saving the same text again changes nothing: no empty commit, no error.
+    const head = (await git(wt, ['rev-parse', 'HEAD'])).trim()
+    expect((await call(app, 'PUT', `${url}/brief`, { brief: '# What\n\nScore the founder day, edited.\n' })).json).toMatchObject({ commit: null })
+    expect((await git(wt, ['rev-parse', 'HEAD'])).trim()).toBe(head)
+
+    for (const body of [{}, { brief: 7 }, { brief: 'x'.repeat(20_001) }]) {
+      const refused = await call(app, 'PUT', `${url}/brief`, body)
+      expect(refused.status).toBe(422)
+      expect(refused.json.error.code).toBe('invalid_body')
+    }
+    expect((await call(app, 'PUT', `/api/initiatives/${json.worktreeId}/no-such/brief`, { brief: 'x' })).json.error.code).toBe('unknown_initiative')
+  })
+
   it('adds and dismisses an owner decision on the initiative', async () => {
     const { app } = await setup()
     const { json } = await create(app)

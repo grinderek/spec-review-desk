@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { type ReactNode, useState } from 'react'
 import { api, type InitiativeId, type InitiativeView, type SandboxStatus } from './api.ts'
-import { DocTab } from './DocTab.tsx'
+import { BriefTab } from './BriefTab.tsx'
 import { InitiativeDecisionsTab, InputsTab, ResearchTab, RunsTab } from './InitiativeTabs.tsx'
 import { PlanTab } from './PlanTab.tsx'
 
@@ -12,7 +12,7 @@ type TabEntry = [InitiativeTab, string, (view: InitiativeView) => number | null,
 
 const TABS: TabEntry[] = [
   ['plan', 'Plan', (v) => v.doc.plan.slices.length, (props) => <PlanTab {...props} />],
-  ['brief', 'Brief', () => null, ({ view }) => <DocTab title="brief.md" text={view.brief} />],
+  ['brief', 'Brief', () => null, (props) => <BriefTab {...props} />],
   ['inputs', 'Inputs', (v) => v.inputs.length, (props) => <InputsTab {...props} />],
   ['decisions', 'Decisions', (v) => v.openDecisions, (props) => <InitiativeDecisionsTab {...props} />],
   ['research', 'Research', (v) => v.doc.runs.filter((r) => r.kind === 'research').length, (props) => <ResearchTab {...props} />],
