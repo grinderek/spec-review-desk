@@ -28,6 +28,29 @@ test('the brief is edited on the Brief tab, saved and committed; Cancel discards
   expect((await (await page.request.get(`/api/initiatives/${id.wt}/${id.name}`)).json()).brief).toBe(`${text}\n`)
 })
 
+// Review fix 3: the pilot's automation (chrome-devtools-mcp fill) sets a value of 100+ characters
+// directly on the element, which a React-controlled field never sees — the Brief editor must still
+// save what it shows.
+test('the Brief editor saves a value set directly on the textarea (the CDP automation path)', async ({ page }) => {
+  const id = await newInitiative(page, 'brief-direct')
+  await page.getByRole('tab', { name: 'Brief' }).click()
+  await page.getByRole('button', { name: 'Edit brief' }).click()
+  const text = 'A brief longer than one hundred characters, set the way the automation sets it: value plus an input event.'
+  await page.getByLabel('Brief text').evaluate((el, v) => {
+    (el as HTMLTextAreaElement).value = v
+    el.dispatchEvent(new Event('input', { bubbles: true }))
+    el.dispatchEvent(new Event('change', { bubbles: true }))
+  }, text)
+  await page.getByRole('button', { name: 'Save brief' }).click({ timeout: 5_000 })
+  await expect(page.getByRole('status')).toHaveText('Brief saved and committed')
+  await expect(page.getByLabel('brief.md')).toContainText('set the way the automation sets it')
+  expect((await (await page.request.get(`/api/initiatives/${id.wt}/${id.name}`)).json()).brief).toBe(`${text}\n`)
+  // Saving the unchanged text is a harmless no-op, and says so.
+  await page.getByRole('button', { name: 'Edit brief' }).click()
+  await page.getByRole('button', { name: 'Save brief' }).click()
+  await expect(page.getByRole('status')).toHaveText('No change to the brief')
+})
+
 // Desk fixes item 4: inputs and research drafts open in a viewer on the initiative screen.
 test('a research draft opens in the viewer with Accept/Discard; inputs open as text or inline PDF', async ({ page }) => {
   const id = await newInitiative(page, 'viewer')
