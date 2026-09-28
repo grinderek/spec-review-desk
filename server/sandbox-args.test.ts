@@ -5,6 +5,7 @@ import {
   browserOutNetworkCreateArgs, browserOutNetworkName, cleanupArgs, containerName, EGRESS_IMAGE, egressName, egressRunArgs, networkConnectArgs,
   networkCreateArgs, networkName, outNetworkCreateArgs, outNetworkName, PLAYWRIGHT_MCP_VERSION, PROXY_URL, teardownArgs,
 } from './sandbox-args.ts'
+import { newId } from './review-store.ts'
 
 const container = {
   runId: 'r_0000abcd',
@@ -38,6 +39,25 @@ describe('names', () => {
     expect([browserProxyName('r_1'), browserNetworkName('r_1')]).toEqual(['sr-bproxy-r_1', 'sr-bnet-r_1'])
     expect(BROWSER_PROXY_URL('r_1')).toBe('http://sr-bproxy-r_1:8888')
     expect(JSON.parse(browserMcpConfig('r_1'))).toEqual({ mcpServers: { browser: { type: 'http', url: 'http://sr-browser-r_1:8931/mcp' } } })
+  })
+})
+
+describe('real run ids (review fix 2)', () => {
+  // Run ids are r_<8 hex>, so every per-run hostname carries an underscore. Verified with real docker
+  // (2026-09-28, run id r_0badc0de): Docker DNS, Chromium's --proxy-server, the MCP host check, the
+  // claude CLI's MCP client and NO_PROXY all accept it — no network aliases needed.
+  it('keeps the underscore in every hostname the agent, the browser and the proxies use', () => {
+    const id = newId('r')
+    expect(id).toMatch(/^r_[0-9a-f]{8}$/)
+    expect(new URL(BROWSER_MCP_URL(id)).host).toBe(`sr-browser-${id}:8931`)
+    expect(new URL(BROWSER_PROXY_URL(id)).host).toBe(`sr-bproxy-${id}:8888`)
+    expect(new URL(PROXY_URL(id)).host).toBe(`sr-egress-${id}:8888`)
+    expect(agentRunArgs({ ...container, runId: id, browser: true })).toEqual(
+      expect.arrayContaining([`NO_PROXY=sr-browser-${id}`, `--mcp-config=${browserMcpConfig(id)}`]),
+    )
+    expect(browserRunArgs(id, BROWSER_IMAGE)).toEqual(
+      expect.arrayContaining(['--allowed-hosts', `sr-browser-${id}:8931`, '--proxy-server', `http://sr-bproxy-${id}:8888`]),
+    )
   })
 })
 

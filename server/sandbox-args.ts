@@ -29,6 +29,8 @@ export const networkName = (runId: string): string => `sr-net-${runId}`
 // proxy cannot reach other containers.
 export const outNetworkName = (runId: string): string => `sr-out-${runId}`
 export const browserOutNetworkName = (runId: string): string => `sr-bout-${runId}`
+// Run ids are r_<8 hex>: these hostnames carry an underscore, which Docker DNS, Chromium, the MCP
+// host check, the CLI's MCP client and NO_PROXY all accept (real docker, review fix 2).
 export const browserName = (runId: string): string => `sr-browser-${runId}`
 // Controller ruling 2: the browser's own proxy and network. The browser shares no network with the
 // agent's proxy (the only one that reaches api.anthropic.com) — not even code running in the browser
