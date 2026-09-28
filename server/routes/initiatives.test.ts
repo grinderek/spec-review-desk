@@ -283,6 +283,42 @@ describe('initiative routes', () => {
     expect(seen.every((data) => JSON.stringify(data) === JSON.stringify(announced))).toBe(true)
   })
 
+  // Desk fixes item 3: what New feature sends arrives — a multipart brief comes with CRLF line
+  // breaks (the browser normalizes them so) and is stored with LF; every "Add from repo" line is
+  // listed, and a line that cannot be read fails the create instead of vanishing.
+  it('creates with the brief as written and every repo line listed, or fails naming the line', async () => {
+    const { app, repo } = await setup()
+    const form = new FormData()
+    for (const [k, v] of Object.entries({ name: 'crlf-brief', repo: 'api', where: 'new', base: 'main', title: 'CRLF' })) form.set(k, v)
+    form.set('brief', '# What\r\n\r\nScore the day.\r\n')
+    form.set('fromRepo', 'api/features/STEPS.md\r\n\r\n  api/openspec/changes/add-thread-state/proposal.md  \r\n')
+    const created = await callForm(app, '/api/initiatives', form)
+    expect(created.status).toBe(201)
+    const view = (await call(app, 'GET', `/api/initiatives/${created.json.worktreeId}/crlf-brief`)).json
+    expect(view.brief).toBe('# What\n\nScore the day.\n')
+    expect(view.inputs.map((i: { file: string; source: { path: string } }) => [i.file, i.source.path])).toEqual([
+      ['STEPS.md', 'api/features/STEPS.md'],
+      ['proposal.md', 'api/openspec/changes/add-thread-state/proposal.md'],
+    ])
+
+    const missing = new FormData()
+    for (const [k, v] of Object.entries({ name: 'missing-line', repo: 'api', where: 'new', base: 'main', title: 'Missing' })) missing.set(k, v)
+    missing.set('fromRepo', 'api/features/STEPS.md\napi/doc/no-such.md')
+    const refused = await callForm(app, '/api/initiatives', missing)
+    expect(refused.status).toBe(404)
+    expect(refused.json.error).toMatchObject({ code: 'unknown_file', message: expect.stringContaining('api/doc/no-such.md') })
+    expect((await git(repo, ['branch', '--list', 'plan/missing-line'])).trim()).toBe('')
+
+    // A list sent as a file part is refused, never dropped.
+    const asFile = new FormData()
+    for (const [k, v] of Object.entries({ name: 'file-list', repo: 'api', where: 'new', base: 'main', title: 'File list' })) asFile.set(k, v)
+    asFile.set('fromRepo', new File(['api/features/STEPS.md'], 'list.txt'))
+    const bad = await callForm(app, '/api/initiatives', asFile)
+    expect(bad.status).toBe(422)
+    expect(bad.json.error.code).toBe('invalid_body')
+    expect((await git(repo, ['branch', '--list', 'plan/file-list'])).trim()).toBe('')
+  })
+
   // Desk fixes item 2: the brief is editable after creation.
   it('edits the brief: writes brief.md and commits it like the other initiative commits', async () => {
     const { app, repo, bus } = await setup()

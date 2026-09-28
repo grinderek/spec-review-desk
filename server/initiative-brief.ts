@@ -8,8 +8,12 @@ import type { RunTarget } from './run-service.ts'
 export const BRIEF_FILE = 'brief.md'
 export const MAX_BRIEF_CHARS = 20_000
 
-// The file always ends with one newline, as git and the agents expect.
-export const briefText = (brief: string): string => (brief.endsWith('\n') ? brief : `${brief}\n`)
+// LF line breaks (a multipart form sends a textarea's breaks as CRLF) and one final newline, as
+// git and the agents expect.
+export function briefText(brief: string): string {
+  const text = brief.replace(/\r\n?/g, '\n')
+  return text.endsWith('\n') ? text : `${text}\n`
+}
 
 // Writes and commits the brief (`docs(openspec): <name> — brief`). An unchanged brief is not
 // committed again: `commit` is null.

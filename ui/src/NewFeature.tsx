@@ -15,17 +15,19 @@ export function NewFeature({ choices, onCreated }: { choices: InitiativesRespons
   const [base, setBase] = useState<string | null>(null)
   const [worktree, setWorktree] = useState('')
   const [title, setTitle] = useState('')
-  const [brief, setBrief] = useState('')
   const [files, setFiles] = useState<File[]>([])
-  const [fromRepo, setFromRepo] = useState('')
   if (!choices) return <p className="empty">Loading repositories…</p>
   const repoChoice = choices.repos.find((r) => r.name === repo) ?? choices.repos[0]
   const baseValue = base ?? choices.defaultBase
   const wt = repoChoice?.worktrees.find((w) => w.id === worktree) ?? null
   const preview = createPreview({ name: NAME.test(name) ? name : '', repoPath: repoChoice?.path ?? '', where, base: baseValue, worktreePath: wt?.path ?? null })
   const valid = NAME.test(name) && title.trim() !== '' && repoChoice !== undefined && (where === 'new' ? baseValue.trim() !== '' : wt !== null)
-  const create = () =>
+  // The Brief and "Add from repo" textareas are read from the form itself at submit, not from React
+  // state: what the owner sees is what is sent, even when a tool sets a field's value directly (the
+  // pilot's automation did, and both arrived empty — Desk fixes item 3).
+  const create = (shown: HTMLFormElement) =>
     act(async () => {
+      const typed = new FormData(shown)
       const form = new FormData()
       form.set('name', name)
       form.set('repo', repoChoice!.name)
@@ -33,14 +35,14 @@ export function NewFeature({ choices, onCreated }: { choices: InitiativesRespons
       form.set('base', baseValue)
       form.set('worktreeId', wt?.id ?? '')
       form.set('title', title.trim())
-      form.set('brief', brief)
-      form.set('fromRepo', fromRepo)
+      form.set('brief', String(typed.get('brief') ?? ''))
+      form.set('fromRepo', String(typed.get('fromRepo') ?? ''))
       for (const f of files) form.append('files', f)
       const created = await api.createInitiative(form)
       onCreated({ wt: created.worktreeId, name: created.name })
     }, `Initiative ${name} created`)
   return (
-    <form className="head newfeature" onSubmit={(e) => { e.preventDefault(); void create() }}>
+    <form className="head newfeature" onSubmit={(e) => { e.preventDefault(); void create(e.currentTarget) }}>
       <h1>New feature</h1>
       <label htmlFor={`${uid}-name`}>Name</label>
       <input id={`${uid}-name`} value={name} placeholder="health-score" onChange={(e) => setName(e.target.value.trim())} />
@@ -62,11 +64,11 @@ export function NewFeature({ choices, onCreated }: { choices: InitiativesRespons
       <label htmlFor={`${uid}-title`}>Title</label>
       <input id={`${uid}-title`} value={title} onChange={(e) => setTitle(e.target.value)} />
       <label htmlFor={`${uid}-brief`}>Brief</label>
-      <textarea id={`${uid}-brief`} value={brief} placeholder="What, why, out of scope (Markdown)" onChange={(e) => setBrief(e.target.value)} />
+      <textarea id={`${uid}-brief`} name="brief" placeholder="What, why, out of scope (Markdown)" />
       <label htmlFor={`${uid}-files`}>Inputs to upload</label>
       <input id={`${uid}-files`} type="file" multiple accept=".pdf,.md,.txt,.yaml,.yml,.json,.png,.jpg,.jpeg" onChange={(e) => setFiles([...(e.target.files ?? [])])} />
       <label htmlFor={`${uid}-from`}>Add from repo (one path per line, relative to the hub)</label>
-      <textarea id={`${uid}-from`} value={fromRepo} placeholder="api/doc/health_score_client_contract.md" onChange={(e) => setFromRepo(e.target.value)} />
+      <textarea id={`${uid}-from`} name="fromRepo" placeholder="api/doc/health_score_client_contract.md" />
       <div className="preview" aria-label="Create will run">
         <div className="k">Create will run</div>
         {preview.length ? preview.map((line) => <code key={line}>{line}</code>) : <span className="hash">Name the feature to see the commands.</span>}

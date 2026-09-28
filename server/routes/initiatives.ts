@@ -94,7 +94,12 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
     const where: CreateInput['where'] = fields.where === 'new'
       ? { kind: 'new', base: fields.base || ctx.config.initiativeBase }
       : { kind: 'existing', worktreeId: fields.worktreeId ?? '' }
-    const fromRepo = all(form, 'fromRepo').flatMap((v) => (typeof v === 'string' ? v.split('\n').map((l) => l.trim()).filter(Boolean) : []))
+    // Every "Add from repo" line becomes an input or fails the create (readRepoFile names it); a
+    // list sent as a file part is refused rather than dropped (Desk fixes item 3).
+    const fromRepo = all(form, 'fromRepo').flatMap((v) => {
+      if (typeof v !== 'string') throw new HttpError(422, 'invalid_body', 'fromRepo: one repo path per line, as text')
+      return v.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
+    })
     const created = await createInitiative(ctx.config, ctx.registry, {
       name: fields.name, repo: fields.repo, where, title: fields.title, brief: fields.brief, files: await uploads(form), fromRepo,
     }, nowIso())
