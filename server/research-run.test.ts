@@ -240,6 +240,36 @@ describe('research runs', () => {
       'The owner chose search only: WebFetch and the browser are now off. Write the document from what you have already read and the search results',
     )
     expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: false })
+    // Re-review (b): the draft records the domains its reading phase used, not [] because reading stopped.
+    expect((await readInitiative(s.dir)).inputs.at(-1)).toMatchObject({ draft: true, source: { kind: 'research', domains: ['developer.intuit.com'] } })
+  })
+
+  it('never turns reading back on by itself after the owner chose search only (re-review a)', async () => {
+    const s = await setup(['developer.intuit.com'])
+    await replies([
+      { match: 'already allowed', reply: fetchDomains(['uxfabric.intuitcdn.net']) },
+      { match: 'now off', reply: fetchDomains(['developer.intuit.com']) },
+      { match: 'WebFetch is now enabled', reply: done },
+      { match: 'Topic: Intuit reports', reply: fetchDomains(['developer.intuit.com']) },
+    ])
+    const run = await startResearch(s.service, s.target, { topic: 'Intuit reports', questions: 'Q?' })
+    await s.service.settled(run.id)
+    const [assets] = (await readReview(s.dir)).decisions
+    await decideInitiativeDecision(s.target, assets!.id, { option: 'search_only', note: '' }, '')
+    await resumeResearch(s.service, s.target, run.id)
+    await s.service.settled(run.id)
+    // The agent asks again for a host that is already approved: the owner decides, not the Desk.
+    expect(s.sandbox.runs).toHaveLength(3)
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'needs_owner', web_fetch: false })
+    const again = (await readReview(s.dir)).decisions[1]
+    expect(again).toMatchObject({ agent_id: 'fetch-domains', status: 'open', requested_domains: ['developer.intuit.com'] })
+
+    await decideInitiativeDecision(s.target, again!.id, { option: 'allow_all', note: '' }, '')
+    await resumeResearch(s.service, s.target, run.id)
+    await s.service.settled(run.id)
+    expect(s.sandbox.runs.map((r) => r.browser)).toEqual([false, true, false, true])
+    expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', phase: 'read', web_fetch: true })
+    expect((await readInitiative(s.dir)).inputs.at(-1)).toMatchObject({ source: { domains: ['developer.intuit.com'] } })
   })
 
   it('names research files after the topic without clobbering', () => {

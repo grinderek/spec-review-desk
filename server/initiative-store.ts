@@ -56,6 +56,9 @@ const RunSchema = z.object({
   questions: z.string().optional(),
   phase: z.enum(['search', 'read']).optional(),
   web_fetch: z.boolean().optional(),
+  // The domains the run's reading attempts could reach (union over its read phases): the draft's
+  // provenance, also after the owner stopped reading.
+  read_domains: z.array(z.string()).optional(),
   // Author only: the change name the author must write.
   change: z.string().regex(CHANGE_NAME).optional(),
   // The one validation retry of sub-project A §4 is running (cleared by an owner resume).

@@ -58,7 +58,11 @@ export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
     const decision = reply.decisions.find((d) => d.id === FETCH_DOMAINS.id)!
     const requested = [...new Set(decision.requested_domains.map((h) => normalizeDomain(h)!))]
     const allowed = new Set(doc.research.domains)
-    if (requested.every((h) => allowed.has(h))) {
+    // Re-review (a): once the owner answered search only in this run, only the owner turns reading
+    // back on — a request for already-approved hosts becomes a new decision instead.
+    const refused = runDecisions(await readReview(ini.dir), ctx.run.id)
+      .some((d) => d.requested_domains && d.status === 'recorded' && d.choice?.option === 'search_only')
+    if (!refused && requested.every((h) => allowed.has(h))) {
       // Ruling 2: every requested domain is already approved — continue without asking.
       return ctx.relaunch({ phase: 'read', web_fetch: true, validation_retry: false }, `${ALREADY_ALLOWED} ${researchResumeClosing(doc.research.domains)}`)
     }
@@ -74,7 +78,8 @@ export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
   const entry: InputEntry = {
     file,
     bytes: Buffer.byteLength(body),
-    source: { kind: 'research', run: ctx.run.id, domains: ctx.run.web_fetch ? doc.research.domains : [] },
+    // Re-review (b): the domains its reading attempts used, also when the owner stopped reading.
+    source: { kind: 'research', run: ctx.run.id, domains: findRun(doc, ctx.run.id).read_domains ?? [] },
     added_at: ctx.at,
     draft: true,
   }

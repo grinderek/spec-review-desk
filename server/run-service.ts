@@ -232,6 +232,7 @@ export class InitiativeRunService {
     const { config, sandbox, bus } = this.deps
     const doc = await readInitiative(target.ini.dir)
     const webFetch = readsWeb(run)
+    if (webFetch) await this.#recordReadDomains(target, run.id, doc.research.domains)
     const tools = agentTools(run.kind, webFetch)
     const token = await sandbox.token()
     const claude: ClaudeRunSpec = {
@@ -252,6 +253,13 @@ export class InitiativeRunService {
       },
     })
     await this.#finish(target, run, paths, resultEvent, outcome, token, sawSecret)
+  }
+
+  async #recordReadDomains(target: RunTarget, runId: string, domains: readonly string[]): Promise<void> {
+    await updateInitiative(target.ini.dir, (d) => {
+      const current = findRun(d, runId)
+      return upsertRun(d, { ...current, read_domains: [...new Set([...(current.read_domains ?? []), ...domains])] })
+    })
   }
 
   async #finish(
