@@ -63,11 +63,14 @@ function defaultReply(text) {
   }
 }
 
+const scriptedHit = () =>
+  process.env.FAKE_CLAUDE_REPLIES_FILE
+    ? JSON.parse(readFileSync(process.env.FAKE_CLAUDE_REPLIES_FILE, 'utf8')).find((entry) => prompt.includes(entry.match))
+    : undefined
+
 function scriptedReply() {
-  if (process.env.FAKE_CLAUDE_REPLIES_FILE) {
-    const hit = JSON.parse(readFileSync(process.env.FAKE_CLAUDE_REPLIES_FILE, 'utf8')).find((entry) => prompt.includes(entry.match))
-    if (hit) return hit.reply
-  }
+  const hit = scriptedHit()
+  if (hit) return hit.reply
   if (process.env.FAKE_CLAUDE_REPLY_FILE) return JSON.parse(readFileSync(process.env.FAKE_CLAUDE_REPLY_FILE, 'utf8'))
   if (process.env.FAKE_CLAUDE_REPLY) return JSON.parse(process.env.FAKE_CLAUDE_REPLY)
   return defaultReply(readText())
@@ -107,6 +110,10 @@ if (hangOnce) writeFileSync(hangCountFile, 'hung once')
 if (mode === 'hang' || hangOnce) {
   setInterval(() => undefined, 1000)
 } else if (structured) {
+  // A replies entry may carry delayMs: the agent "works" that long before it answers, so a test can
+  // watch the run while it is running.
+  const delayMs = scriptedHit()?.delayMs ?? 0
+  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
   const reply = chooseReply()
   const json = JSON.stringify(reply)
   streamEvent({ type: 'message_start', message: { id: 'msg_1' } })

@@ -60,6 +60,11 @@ async function main(): Promise<void> {
   sh(repo, 'git', ['checkout', '-q', 'main'])
   const ageDiff = await diffOf(repo, FEATURE, '  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by business-hour age.\n')
   const partialDiff = await diffOf(repo, DECISION_FEATURE, "  Scenario: The founder's reply", '  # Owner decision 2026-09-24: partial days count as business days only.\n')
+  const plannerReply = reply({
+    answer: 'Two slices: the engine, then delivery.',
+    status: 'done',
+    slices: [{ title: 'Engine', scope: 'The pure scoring engine.', depends_on: [] }, { title: 'Delivery', scope: 'Delivery states.', depends_on: [1] }],
+  })
   // First match wins, so the most specific prompt text comes first: a thread replays its history.
   const replies = [
     { match: 'Owner decided', reply: reply({ answer: 'Recorded the decision above the scenario.', patch: partialDiff, resolves: ['$DECISION_ID'] }) },
@@ -81,15 +86,10 @@ async function main(): Promise<void> {
       }),
     },
     { match: 'Why business hours?', reply: reply({ answer: 'Rows weigh by business-hour age, not calendar age.', patch: ageDiff }) },
+    // The live-refresh e2e watches its planner run while it runs: that one takes a few seconds.
+    { match: 'Initiative: live-refresh', delayMs: 3_000, reply: plannerReply },
     // Spec B: the sandboxed planner and author (FakeSandbox runs the fake claude against the room).
-    {
-      match: 'Propose how to slice',
-      reply: reply({
-        answer: 'Two slices: the engine, then delivery.',
-        status: 'done',
-        slices: [{ title: 'Engine', scope: 'The pure scoring engine.', depends_on: [] }, { title: 'Delivery', scope: 'Delivery states.', depends_on: [1] }],
-      }),
-    },
+    { match: 'Propose how to slice', reply: plannerReply },
     { match: 'Slice s1', reply: reply({ answer: 'Wrote the engine slice.', status: 'done', change: 'add-health-score-engine' }) },
   ]
   const writes = [{

@@ -30,7 +30,7 @@ async function setup() {
   registerReadRoutes(app, ctx, { claude: true, docker: true })
   registerInitiativeRoutes(app, ctx, { runs, sandbox })
   registerInitiativeDecisionRoutes(app, ctx)
-  return { hub, repo, app, runs, sandbox }
+  return { hub, repo, app, runs, sandbox, bus: ctx.bus }
 }
 
 // A request whose declared Content-Length exceeds the multipart ceiling, without an actual
@@ -229,6 +229,58 @@ describe('initiative routes', () => {
     const res = await call(app, 'GET', `${url}/runs/r_0000ab01/log`)
     expect(res.status).toBe(409)
     expect(res.json.error).toMatchObject({ code: 'review_invalid', message: expect.stringContaining('runs.0.log') })
+  })
+
+  // Desk fixes item 1: the header ("N running") and the Runs tab follow every run start, stop and
+  // resume live — each one is announced on the bus topic the UI's /api/events invalidation reads.
+  it('announces every run start, stop and resume on the initiative topic', async () => {
+    const { app, runs, bus, repo, sandbox } = await setup()
+    const { json } = await create(app)
+    const url = `/api/initiatives/${json.worktreeId}/health-score`
+    // Stop kills a started attempt (a Stop before the container exists is a separate race).
+    const attempt = (n: number) => expect.poll(() => sandbox.runs.length).toBe(n)
+    const seen: unknown[] = []
+    bus.subscribe('initiative', (event) => seen.push(event.data))
+    const announced = { worktreeId: json.worktreeId, name: 'health-score' }
+
+    process.env.FAKE_CLAUDE_MODE = 'hang'
+    const planner = await call(app, 'POST', `${url}/plan/run`)
+    expect(planner.status).toBe(202)
+    expect(seen).toEqual([announced])
+    await attempt(1)
+    expect((await call(app, 'POST', `${url}/runs/${planner.json.run.id}/stop`)).status).toBe(202)
+    await runs.settled(planner.json.run.id)
+    expect(seen).toEqual([announced, announced])
+    expect((await call(app, 'GET', url)).json.doc.runs[0]).toMatchObject({ outcome: 'stopped' })
+
+    process.env.FAKE_CLAUDE_MODE = 'answer'
+    const blocking = { id: 'basis', question: 'Business or calendar age?', scope: { kind: 'change' }, options: [option('business'), option('calendar')], recommended: 'business', blocking: true }
+    await writeFile(path.join(tmp, 'replies.json'), JSON.stringify([
+      { match: 'Slice s1', reply: { answer: 'Need the age basis.', patch: null, decisions: [blocking], resolves: [], status: 'needs_owner', change: CHANGE } },
+    ]))
+    process.env.FAKE_CLAUDE_REPLIES_FILE = path.join(tmp, 'replies.json')
+    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    await updateInitiative(dir, (d) => ({
+      ...d, plan: { status: 'approved', approved_at: '2026-09-28T10:00:00.000Z', slices: [{ id: 's1', title: 'Engine', scope: 'The engine.', depends_on: [], change: null }] },
+    }))
+    const author = await call(app, 'POST', `${url}/slices/s1/propose`, { change: CHANGE })
+    expect(author.status).toBe(202)
+    expect(seen).toHaveLength(3)
+    await runs.settled(author.json.run.id)
+    expect(seen).toHaveLength(4)
+    const waiting = (await call(app, 'GET', url)).json
+    expect(waiting.doc.runs[1]).toMatchObject({ outcome: 'needs_owner' })
+    expect((await call(app, 'POST', `${url}/decisions/${waiting.decisions[0].id}/dismiss`, { reason: 'Business hours.' })).status).toBe(200)
+    const count = seen.length
+    process.env.FAKE_CLAUDE_MODE = 'hang'
+    expect((await call(app, 'POST', `${url}/runs/${author.json.run.id}/resume`)).status).toBe(202)
+    expect(seen).toHaveLength(count + 1)
+    expect((await call(app, 'GET', url)).json.doc.runs[1]).toMatchObject({ outcome: 'running' })
+    await attempt(3)
+    await call(app, 'POST', `${url}/runs/${author.json.run.id}/stop`)
+    await runs.settled(author.json.run.id)
+    expect(seen).toHaveLength(count + 2)
+    expect(seen.every((data) => JSON.stringify(data) === JSON.stringify(announced))).toBe(true)
   })
 
   it('adds and dismisses an owner decision on the initiative', async () => {

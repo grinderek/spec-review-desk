@@ -101,6 +101,8 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
   const act = useAction()
   const plan = view.doc.plan
   const [edits, setEdits] = useState<SliceEdit[] | null>(null)
+  // A planner start assembles its room before it answers: never a second click meanwhile.
+  const [starting, setStarting] = useState(false)
   const current = edits ?? toEdits(plan)
   const dirty = edits !== null && editsChanged(plan, edits)
   const ready = sandbox?.ready ?? false
@@ -109,7 +111,8 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
   const replan = () => {
     if (dirty && !window.confirm('Re-plan replaces the draft; your unsaved edits are lost. Continue?')) return
     setEdits(null)
-    void act(() => api.runPlanner(id), 'Planner started')
+    setStarting(true)
+    void act(() => api.runPlanner(id), 'Planner started').finally(() => setStarting(false))
   }
   if (planner) {
     return (
@@ -123,7 +126,7 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
   if (plan.status === 'none' && edits === null) {
     return (
       <div className="toolbar">
-        <button className="btn pri" disabled={!ready} onClick={replan}>Plan slices</button>
+        <button className="btn pri" disabled={!ready || starting} onClick={replan}>{starting ? 'Starting the planner…' : 'Plan slices'}</button>
         <button className="btn" onClick={() => setEdits([])}>Write the plan by hand</button>
       </div>
     )
@@ -146,7 +149,7 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
         <span>{approved ? 'Editing the approved plan: add slices at the end, edit or remove planned ones.' : 'Draft plan'}</span>
         <button className="btn" disabled={!dirty} onClick={() => void save()}>{approved ? 'Save plan' : 'Save draft'}</button>
         {approved ? <button className="btn" onClick={() => setEdits(null)}>Cancel</button> : null}
-        {approved ? null : <button className="btn" disabled={!ready} onClick={replan}>Re-plan</button>}
+        {approved ? null : <button className="btn" disabled={!ready || starting} onClick={replan}>Re-plan</button>}
         {approved ? null : (
           <button className="btn pri" disabled={dirty || view.blockingDecisions > 0 || current.length === 0} onClick={() => void act(() => api.approvePlan(id), 'Slice plan approved')}>
             {view.blockingDecisions ? `Approve plan (${view.blockingDecisions} blocking decision${view.blockingDecisions > 1 ? 's' : ''})` : 'Approve plan'}
