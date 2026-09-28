@@ -92,7 +92,6 @@ export const api = {
   recheckPatch: (id: ChangeId, threadId: string, index: number) =>
     request<{ state: string; error: string | null }>('POST', `${base(id)}/threads/${threadId}/patches/${index}/recheck`),
   rejectPatch: (id: ChangeId, threadId: string, index: number) => request<Ok>('POST', `${base(id)}/threads/${threadId}/patches/${index}/reject`),
-  threadEventsUrl: (id: ChangeId, threadId: string) => `${base(id)}/threads/${threadId}/events`,
   runner: (wt: string) => request<{ state: RunnerState | null }>('GET', `/api/runner/${wt}`),
   startRunner: (wt: string) => request<{ state: RunnerState | null }>('POST', `/api/runner/${wt}/start`),
   runCorpus: (wt: string) => request<{ state: RunnerState | null }>('POST', `/api/runner/${wt}/run`),
@@ -100,7 +99,6 @@ export const api = {
   stopApply: (id: ChangeId) => request<Ok>('POST', `${base(id)}/apply/stop`),
   reapply: (id: ChangeId) => request<{ run: ApplyRun }>('POST', `${base(id)}/reapply`),
   runLog: (id: ChangeId, runId: string) => request<{ run: ApplyRun; text: string }>('GET', `${base(id)}/runs/${runId}/log`),
-  runEventsUrl: (id: ChangeId, runId: string) => `${base(id)}/runs/${runId}/events`,
   addDecision: (id: ChangeId, body: NewDecisionBody) => request<{ id: string }>('POST', `${base(id)}/decisions`, body),
   decide: (id: ChangeId, decisionId: string, body: { option: string | null; note: string }) =>
     request<DecideResponse>('POST', `${base(id)}/decisions/${decisionId}/decide`, body),
@@ -128,7 +126,6 @@ export const api = {
   stopRun: (id: InitiativeId, runId: string) => request<Ok>('POST', `${ibase(id)}/runs/${runId}/stop`),
   resumeRun: (id: InitiativeId, runId: string) => request<Ok>('POST', `${ibase(id)}/runs/${runId}/resume`),
   initiativeRunLog: (id: InitiativeId, runId: string) => request<{ run: RunRecord; text: string }>('GET', `${ibase(id)}/runs/${runId}/log`),
-  initiativeRunEventsUrl: (id: InitiativeId, runId: string) => `${ibase(id)}/runs/${runId}/events`,
 
 }
 

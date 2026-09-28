@@ -162,7 +162,7 @@ function RunCard({ id, view, run }: { id: TabProps['id']; view: InitiativeView; 
       </div>
       {run.notes ? <div className="scope">{run.notes}</div> : null}
       {run.problems?.length ? <div className="fail">{run.problems.map((p, i) => <div key={i}>{p}</div>)}</div> : null}
-      {run.outcome === 'running' ? <RunStream id={id} runId={run.id} /> : null}
+      {run.outcome === 'running' ? <RunStream runId={run.id} /> : null}
       <div className="row">
         {run.outcome === 'running' || run.outcome === 'needs_owner' ? <button className="btn bad" onClick={() => void act(() => api.stopRun(id, run.id), 'Stopping…')}>Stop</button> : null}
         {run.outcome === 'needs_owner' ? (

@@ -8,9 +8,9 @@ import { useEventStream } from './events.ts'
 import { useAction } from './feedback.tsx'
 import { reduceLiveLog, type RunEventMessage } from './live-log.ts'
 
-function LiveLog({ id, runId }: { id: ChangeId; runId: string }) {
+function LiveLog({ runId }: { runId: string }) {
   const [text, setText] = useState('')
-  useEventStream(api.runEventsUrl(id, runId), (message) => {
+  useEventStream(`run:${runId}`, (message) => {
     setText((current) => reduceLiveLog(current, message.data as RunEventMessage | null))
   })
   return <pre className="doc">{text || 'Waiting for the agent…'}</pre>
@@ -48,7 +48,7 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
               ) : null}
             </div>
             <div className="sbody">
-              {run.outcome === 'running' ? <LiveLog id={id} runId={run.id} /> : null}
+              {run.outcome === 'running' ? <LiveLog runId={run.id} /> : null}
               {logs[run.id] !== undefined ? <pre className="doc">{logs[run.id] || '(no text output)'}</pre> : null}
             </div>
           </div>

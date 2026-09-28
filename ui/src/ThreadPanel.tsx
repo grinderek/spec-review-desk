@@ -47,7 +47,7 @@ export function ThreadPanel({ id, target, onTarget }: { id: ChangeId; target: Pa
   const applyRunning = view?.review.apply_runs.some((r) => r.outcome === 'running') ?? false
   const scenarioKeys = view?.features.flatMap((f) => f.scenarios.map((s) => s.key)) ?? []
 
-  useEventStream(thread ? api.threadEventsUrl(id, thread.id) : null, (message) => {
+  useEventStream(thread ? `thread:${thread.id}` : null, (message) => {
     const data = message.data as { type?: string; text?: string } | null
     if (!data?.type) return
     if (data.type === 'delta') setLive((current) => current + (data.text ?? ''))

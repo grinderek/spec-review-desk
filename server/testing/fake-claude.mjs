@@ -110,15 +110,20 @@ if (hangOnce) writeFileSync(hangCountFile, 'hung once')
 if (mode === 'hang' || hangOnce) {
   setInterval(() => undefined, 1000)
 } else if (structured) {
-  // A replies entry may carry delayMs: the agent "works" that long before it answers, so a test can
-  // watch the run while it is running.
-  const delayMs = scriptedHit()?.delayMs ?? 0
-  if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
   const reply = chooseReply()
   const json = JSON.stringify(reply)
   streamEvent({ type: 'message_start', message: { id: 'msg_1' } })
   streamEvent({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })
   streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Reading the change.' } })
+  // A replies entry may carry delayMs: after its first narration the agent "works" that long before
+  // it answers, so a test can watch the run — and its live text — while it is running.
+  // Meanwhile it keeps narrating, each piece longer than the secret-scan holdback (256 characters),
+  // so a live view opened at any moment of the run shows text within half a second.
+  const delayMs = scriptedHit()?.delayMs ?? 0
+  for (const end = Date.now() + delayMs; Date.now() < end; ) {
+    streamEvent({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: ' Working through the room.'.repeat(12) } })
+    await new Promise((resolve) => setTimeout(resolve, 500))
+  }
   streamEvent({ type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 'toolu_1', name: 'Read', input: {} } })
   streamEvent({ type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"file_path":"features/x.feature","answer":"not this"}' } })
   streamEvent({ type: 'message_start', message: { id: 'msg_2' } })

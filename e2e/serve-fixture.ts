@@ -86,6 +86,12 @@ async function main(): Promise<void> {
       }),
     },
     { match: 'Why business hours?', reply: reply({ answer: 'Rows weigh by business-hour age, not calendar age.', patch: ageDiff }) },
+    // The live-streams e2e keeps three research runs running for a few seconds at once.
+    {
+      match: 'Topic: Slow topic',
+      delayMs: 6_000,
+      reply: reply({ answer: 'Done slowly.', status: 'done', document: '# Slow topic\n\nFound slowly.\n\n## Sources\n- https://developer.intuit.com/\n' }),
+    },
     // The input viewer e2e reads this research draft before accepting it.
     {
       match: 'Topic: AR ageing',

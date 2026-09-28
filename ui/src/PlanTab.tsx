@@ -86,7 +86,7 @@ function ApprovedPlan({ id, view, sandbox }: TabProps) {
               <>
                 {card.waiting
                   ? <div className="hash">The author is waiting for your decisions: decide them in the inbox, then Resume it under Runs — or Stop to abandon it.</div>
-                  : <RunStream id={id} runId={card.runId} />}
+                  : <RunStream runId={card.runId} />}
                 <div className="row"><button className="btn bad" onClick={() => void act(() => api.stopRun(id, card.runId!), 'Stopping…')}>Stop</button></div>
               </>
             ) : null}
@@ -118,7 +118,7 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
     return (
       <>
         <p>The planner is proposing slices…</p>
-        <RunStream id={id} runId={planner.id} />
+        <RunStream runId={planner.id} />
         <div className="row"><button className="btn bad" onClick={() => void act(() => api.stopRun(id, planner.id), 'Stopping…')}>Stop</button></div>
       </>
     )
