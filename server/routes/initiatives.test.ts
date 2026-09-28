@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
@@ -408,6 +408,34 @@ describe('initiative routes', () => {
       expect(refused.json.error.code).toBe('invalid_body')
     }
     expect((await call(app, 'PUT', `/api/initiatives/${json.worktreeId}/no-such/brief`, { brief: 'x' })).json.error.code).toBe('unknown_initiative')
+    // The limit holds for the stored text: 20 000 characters without a final newline would be
+    // stored as 20 001 and refused on the next save.
+    expect((await call(app, 'PUT', `${url}/brief`, { brief: 'x'.repeat(20_000) })).status).toBe(422)
+    expect((await call(app, 'PUT', `${url}/brief`, { brief: `${'x'.repeat(19_999)}\n` })).status).toBe(200)
+  })
+
+  // Review fix 1: a brief whose commit failed is committed by the next save of the same text
+  // (it used to count as "unchanged" — commit: null — and stay uncommitted for good).
+  it('commits a brief whose earlier commit failed when it is saved again', async () => {
+    const { app, repo } = await setup()
+    const { json } = await create(app)
+    const url = `/api/initiatives/${json.worktreeId}/health-score`
+    const wt = path.join(repo, '.claude/worktrees/health-score')
+    const hooks = path.join(tmp, 'hooks')
+    await mkdir(hooks, { recursive: true })
+    await writeFile(path.join(hooks, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    await git(repo, ['config', 'core.hooksPath', hooks])
+    const failed = await call(app, 'PUT', `${url}/brief`, { brief: 'Edited once.' })
+    expect(failed.status).toBe(500)
+    expect(failed.json.error.code).toBe('command_failed')
+    expect((await git(wt, ['status', '--porcelain'])).trim()).toBe('M openspec/initiatives/health-score/brief.md')
+
+    await git(repo, ['config', '--unset', 'core.hooksPath'])
+    const retried = await call(app, 'PUT', `${url}/brief`, { brief: 'Edited once.' })
+    expect(retried.status).toBe(200)
+    expect(retried.json.commit).toMatch(/^[0-9a-f]{7,}$/)
+    expect((await git(wt, ['status', '--porcelain'])).trim()).toBe('')
+    expect((await git(wt, ['log', '-1', '--format=%s'])).trim()).toBe('docs(openspec): health-score — brief')
   })
 
   it('adds and dismisses an owner decision on the initiative', async () => {

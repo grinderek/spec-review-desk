@@ -6,7 +6,7 @@ import { resumeAuthor, startAuthor } from '../author-run.ts'
 import { pendingBlocking } from '../decision-model.ts'
 import { listWorktrees } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
-import { MAX_BRIEF_CHARS, saveBrief } from '../initiative-brief.ts'
+import { briefFits, MAX_BRIEF_CHARS, saveBrief } from '../initiative-brief.ts'
 import { commitPaths, initiativeCommitMessage } from '../initiative-git.ts'
 import { type CreateInput, createInitiative } from '../initiative-create.ts'
 import { findRun, INITIATIVE_FILE, readInitiative, updateInitiative } from '../initiative-store.ts'
@@ -35,7 +35,8 @@ const PlanEdit = z.object({
 })
 const Propose = z.object({ notes: z.string().max(4000).optional(), change: z.string().max(64).optional() })
 const FromRepo = z.object({ from: z.string().min(1) })
-const Brief = z.object({ brief: z.string().max(MAX_BRIEF_CHARS) })
+const briefField = z.string().refine(briefFits, { message: `at most ${MAX_BRIEF_CHARS} characters` })
+const Brief = z.object({ brief: briefField })
 const CreateFields = z.object({
   name: z.string().trim(),
   repo: z.string().min(1),
@@ -43,7 +44,7 @@ const CreateFields = z.object({
   base: z.string().trim().optional(),
   worktreeId: z.string().optional(),
   title: z.string().trim().min(1).max(200),
-  brief: z.string().max(20_000).default(''),
+  brief: briefField.default(''),
 })
 
 type Form = Record<string, string | File | (string | File)[]>

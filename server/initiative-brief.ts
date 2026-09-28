@@ -1,6 +1,8 @@
 import { readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { isDirty } from './git.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
+import { withInitiativeLock } from './initiative-store.ts'
 import type { RunTarget } from './run-service.ts'
 
 // openspec/initiatives/<name>/brief.md — what, why and out of scope, written by the owner at
@@ -15,17 +17,24 @@ export function briefText(brief: string): string {
   return text.endsWith('\n') ? text : `${text}\n`
 }
 
-// Writes and commits the brief (`docs(openspec): <name> — brief`). An unchanged brief is not
-// committed again: `commit` is null.
-export async function saveBrief(target: RunTarget, brief: string, trailer: string): Promise<{ brief: string; commit: string | null }> {
+// The limit applies to the stored text (after briefText), so a saved brief always saves again.
+export const briefFits = (brief: string): boolean => briefText(brief).length <= MAX_BRIEF_CHARS
+
+// Writes the brief when its text differs, then commits it whenever brief.md differs from HEAD
+// (`docs(openspec): <name> — brief`) — also after an earlier save whose commit failed (review fix
+// 1). Nothing to commit: `commit` is null. One save at a time per initiative.
+export function saveBrief(target: RunTarget, brief: string, trailer: string): Promise<{ brief: string; commit: string | null }> {
   const { wt, ini } = target
   const file = path.join(ini.dir, BRIEF_FILE)
+  const rel = `${ini.relDir}/${BRIEF_FILE}`
   const text = briefText(brief)
-  const current = await readFile(file, 'utf8').catch(() => null)
-  if (current === text) return { brief: text, commit: null }
-  const tmp = `${file}.${process.pid}.tmp`
-  await writeFile(tmp, text)
-  await rename(tmp, file)
-  const commit = await commitPaths(wt.path, [`${ini.relDir}/${BRIEF_FILE}`], initiativeCommitMessage(`${ini.name} — brief`, trailer))
-  return { brief: text, commit }
+  return withInitiativeLock(ini.dir, async () => {
+    if ((await readFile(file, 'utf8').catch(() => null)) !== text) {
+      const tmp = `${file}.${process.pid}.tmp`
+      await writeFile(tmp, text)
+      await rename(tmp, file)
+    }
+    if (!(await isDirty(wt.path, rel))) return { brief: text, commit: null }
+    return { brief: text, commit: await commitPaths(wt.path, [rel], initiativeCommitMessage(`${ini.name} — brief`, trailer)) }
+  })
 }
