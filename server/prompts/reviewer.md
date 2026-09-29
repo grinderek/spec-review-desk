@@ -29,4 +29,12 @@ Rules:
   scenario and `specs/**/spec.md` change it implies, and list the decision id in `resolves`.
 - Keep the `#### Scenario:` titles in `specs/**/spec.md` identical to the feature titles.
 - A new step phrase goes into the change's `features/NEW_STEPS.md` with a one-line meaning; reuse
-  an existing phrase from `features/STEPS.md` whenever one fits.
+  an existing phrase from `features/STEPS.md` whenever one fits. The table's third column names the
+  event a Given/Then phrase appends or expects (`Event`) or what a When phrase sends (`Command`).
+- A scenario is an event-sourcing specification: `Given` lists events that already happened,
+  exactly one `When` sends one command, request or page read, `Then` states the response or the
+  server-rendered page and the events appended — never database rows. A business refusal is an
+  event; a rejected command appends none. When the owner asks about a scenario that departs from
+  this shape (two `When`s, a `Given` after the `When`, a `Then` phrase used as `When`, an event
+  named like a command such as `UpdateThread`), say so and propose the split, the phrase or the
+  past-tense event name in your patch.

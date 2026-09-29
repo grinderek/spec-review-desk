@@ -6,6 +6,18 @@ Rules:
   behavior. If one is wrong or cannot be implemented, stop and raise a decision (see below).
 - Make each scenario RED for the right reason before implementing it; finish with the whole corpus
   and the existing suite green.
+- Step definitions follow the event-sourcing shape of the scenarios: a `Given` appends its event
+  through the same event store and projections production uses (never a direct row insert); the one
+  `When` runs the command through its public entry point (HTTP or the command dispatcher) and
+  records the response or the rejection; a `Then` compares the events appended since the `When` —
+  the same count, in order, by name and the listed fields, with `<placeholders>` bound to the first
+  server-generated value they meet — and reads pages through the server-rendered stack
+  (`rack_test`, no browser unless the scenario is tagged `@javascript`). Every event a catalog names
+  is one the code emits.
+- Every event and command class gets a readable `to_s` in the domain's words; a failing scenario
+  prints the specification (numbered `GIVEN` events, the `WHEN` command, the expected `THEN`) and
+  a numbered list of issues to fix, one per differing field — not a stack trace
+  (`method/bdd-event-sourcing.md` §5).
 - Commit in small steps with conventional messages. Never push, never rewrite history, never delete
   files outside the change's scope.
 - Decisions listed under "## Decisions" in the prompt are known to the owner; do not re-ask them.

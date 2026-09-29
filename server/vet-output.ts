@@ -2,7 +2,8 @@ import { cp, lstat, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { parse, YAMLParseError } from 'yaml'
-import { FeatureParseError, parseFeature, unclassified } from './gherkin.ts'
+import { type Catalog, emptyCatalog, makeClassifier, parseCatalog } from './catalog.ts'
+import { FeatureParseError, parseFeature } from './gherkin.ts'
 import { run } from './git.ts'
 import { checkJoinKey, specTitles } from './joinkey.ts'
 import { findSecrets, maskSecrets } from './secret-scan.ts'
@@ -69,6 +70,14 @@ async function exists(file: string): Promise<boolean> {
   return (await lstat(file).catch(() => null)) !== null
 }
 
+async function catalogAt(file: string): Promise<Catalog> {
+  try {
+    return parseCatalog(await readFile(file, 'utf8'))
+  } catch {
+    return emptyCatalog()
+  }
+}
+
 async function schemaProblem(dir: string, files: readonly string[]): Promise<string | null> {
   if (!files.includes('.openspec.yaml')) return '.openspec.yaml must say schema: behavior-driven'
   try {
@@ -108,11 +117,17 @@ async function contentProblems(dir: string, files: readonly string[], input: Vet
   problems.push(...(await secretProblems(dir, files, input.token)))
   const keys: string[] = []
   const titles: string[] = []
+  // The author writes against the worktree's STEPS.md and its own NEW_STEPS.md: the shape check
+  // (one When, Given before it, Then after it, phrases under their catalog keyword) needs both.
+  const approved = await catalogAt(path.join(input.worktree, 'features', 'STEPS.md'))
+  const proposed = files.includes('features/NEW_STEPS.md') ? await catalogAt(path.join(dir, 'features', 'NEW_STEPS.md')) : emptyCatalog()
+  const classify = makeClassifier(approved, proposed)
   for (const rel of files.filter((f) => f.startsWith('features/') && f.endsWith('.feature'))) {
     try {
-      const feature = parseFeature(await readFile(path.join(dir, rel), 'utf8'), rel, unclassified)
+      const feature = parseFeature(await readFile(path.join(dir, rel), 'utf8'), rel, classify)
       keys.push(...feature.scenarios.map((s) => s.key))
       titles.push(...feature.scenarios.map((s) => s.title))
+      for (const s of feature.scenarios) problems.push(...s.shape.warnings.map((w) => `${rel}: ${s.title}: ${w}`))
     } catch (error) {
       if (!(error instanceof FeatureParseError)) throw error
       problems.push(`${rel}: ${error.message}`)

@@ -37,25 +37,27 @@ export const STEPS_MD = `# Step catalog — the living corpus under \`features/\
 Every phrase a \`.feature\` may use.
 
 - **Response field tables** (\`| field | value |\`): \`field\` is a dotted path.
+- **Event** names the event a Given phrase appends to the stream or a Then phrase expects there;
+  **Command** names what a When phrase sends.
 
 ## Given
 
-| Phrase | Meaning |
-|---|---|
-| \`a founder in time zone {string}\` | A founder account in that IANA zone. |
-| \`it is {string} in the founder's time zone\` | Freezes the clock at that local instant. |
+| Phrase | Meaning | Event |
+|---|---|---|
+| \`a founder in time zone {string}\` | A founder account in that IANA zone. | \`FounderRegistered\` |
+| \`it is {string} in the founder's time zone\` | Freezes the clock at that local instant. | |
 
 ## When
 
-| Phrase | Meaning |
-|---|---|
-| \`Gmail finished syncing at {string}\` | Runs a Gmail sync to completion at that instant. |
+| Phrase | Meaning | Command |
+|---|---|---|
+| \`Gmail finished syncing at {string}\` | Runs a Gmail sync to completion at that instant. | \`SyncGmail\` |
 
 ## Then
 
-| Phrase | Meaning |
-|---|---|
-| \`the response includes:\` (table) | Compares the listed fields; a table row \`| field | value |\` per field. |
+| Phrase | Meaning | Event |
+|---|---|---|
+| \`the response includes:\` (table) | Compares the listed fields; a table row \`| field | value |\` per field. | |
 `
 
 export const NEW_STEPS_MD = `# New step phrases — add-thread-state
@@ -70,15 +72,15 @@ Two new phrases.
 
 ## Given
 
-| Phrase | Meaning |
-|---|---|
-| \`the/another founder's mailbox holds these threads:\` (table \`from\`, \`arrived\`) | What Gmail holds for the founder. |
+| Phrase | Meaning | Event |
+|---|---|---|
+| \`the/another founder's mailbox holds these threads:\` (table \`from\`, \`arrived\`) | What Gmail holds for the founder. | \`MailboxSynced\` |
 
 ## Then
 
-| Phrase | Meaning |
-|---|---|
-| \`the founder's inbox read lists {int} message(s)\` | GET /api/gmail/messages returns exactly that many items. |
+| Phrase | Meaning | Event |
+|---|---|---|
+| \`the founder's inbox read lists {int} message(s)\` | GET /api/gmail/messages returns exactly that many items. | \`InboxRead\` |
 `
 
 export const SPEC_MD = `## ADDED Requirements

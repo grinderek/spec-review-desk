@@ -65,6 +65,7 @@ const METHOD_AND_CORPUS = [
   'corpus/features/STEPS.md',
   'corpus/features/inbox/threads.feature',
   'corpus/specs/inbox/spec.md',
+  'method/bdd-event-sourcing.md',
   'method/schema/schema.yaml',
   'method/schema/templates/proposal.md',
   'method/spec-driven-work.md',
@@ -96,6 +97,7 @@ describe('assembleRoom', () => {
     expect(plan).toMatchObject({ initiative: 'hs', target: 's2', change: 'add-hs-email', notes: 'Keep it small.' })
     expect((plan.slices as { id: string; status: string }[]).map((s) => [s.id, s.status])).toEqual([['s1', 'approved'], ['s2', 'planned'], ['s3', 'planned']])
     expect(await readFile(path.join(room, 'method/spec-driven-work.md'), 'utf8')).toBe('## Spec-driven work\n\nScenarios first.\n\n### Detail\n\nKept.\n')
+    expect(await readFile(path.join(room, 'method/bdd-event-sourcing.md'), 'utf8')).toContain('## 1. The shape of a scenario')
   })
 
   it('gives the planner every proposed slice and no target', async () => {

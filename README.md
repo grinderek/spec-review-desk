@@ -16,10 +16,26 @@ Design: `docs/superpowers/specs/2026-09-23-spec-review-desk-design.md` and
 The server prints a one-time URL with `?t=<token>`. Open it; the token becomes an HttpOnly cookie.
 Restarting the server issues a new token.
 
+## The method
+
+`docs/method/bdd-event-sourcing.md`: classic Gherkin/Cucumber BDD plus two additions — every
+scenario is an event-sourcing specification (`Given` = events that already happened, exactly one
+`When` = one command or request, `Then` = the response or the server-rendered page and the events
+appended), and full-stack checks read pages the server rendered, in process, without a browser.
+The step catalogs carry an `Event` / `Command` column naming what each phrase appends, expects or
+sends. It also covers refusals (a business "no" is an event, a rejected command appends none),
+server-generated values, printing specifications and comparing events, projections in the
+scenarios, event versioning and migrating a legacy corpus, after Rinat Abdullin's articles it
+links. The document is copied into every planner and author room as `method/bdd-event-sourcing.md`.
+
 ## What it does
 
 - Renders each change's `features/*.feature` with decisions (`# Owner decision …`), author notes,
   tables and Examples; underlines each step by catalog status (STEPS.md / NEW_STEPS.md / neither).
+- Checks each scenario's shape — one `When`, `Given` before it, `Then` after it, phrases under their
+  catalog keyword, events named in the past tense rather than as CRUD commands — and marks a departure *off shape* with the reasons; shows the scenario as
+  `Given events → When command → Then events` from the catalogs' Event / Command column. An
+  author's change that is off shape is refused at vetting.
 - Approve / revoke / request changes per scenario and per new phrase. Approval is bound to the
   scenario's text hash: any edit sends it back to pending, with a diff since approval.
 - Ask the change's agent (one `claude` session per change, opus, read-only tools). A proposed patch

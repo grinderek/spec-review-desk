@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto'
 import { CucumberExpression, ParameterTypeRegistry } from '@cucumber/cucumber-expressions'
-import type { Classification, Classify } from './gherkin.ts'
+import type { Classification, Classify, StepKeyword } from './gherkin.ts'
 
-export type StepKeyword = 'Given' | 'When' | 'Then'
+export type { StepKeyword } from './gherkin.ts'
 export interface Phrase {
   key: string
   phrase: string
@@ -10,6 +10,10 @@ export interface Phrase {
   meaning: string
   note: string
   kind: 'phrase' | 'extension'
+  // The event-sourcing column (docs/method/bdd-event-sourcing.md): under Given and Then the event
+  // the phrase appends to / expects in the stream, under When the command or request it sends.
+  // Null when the catalog table has no such column or the cell is empty.
+  event: string | null
   hash: string
   compileError: string | null
 }
@@ -75,6 +79,9 @@ export function parseCatalog(markdown: string): Catalog {
     if (!line.trim().startsWith('|') || !SEPARATOR.test(lines[i + 1]?.trim() ?? '')) continue
     const header = splitRow(line).map((h) => h.toLowerCase())
     const kind: Phrase['kind'] = (header[1] ?? '').includes('extended') ? 'extension' : 'phrase'
+    // An optional third column — `Event` (Given/Then) or `Command` (When) — names what the phrase
+    // means in the event stream; the Desk shows it as the scenario's Given → When → Then line.
+    const eventColumn = header.findIndex((h, index) => index >= 2 && /\b(event|command|request)s?\b/.test(h))
     let j = i + 2
     for (; j < lines.length && lines[j]!.trim().startsWith('|'); j++) {
       const cells = splitRow(lines[j]!)
@@ -84,6 +91,7 @@ export function parseCatalog(markdown: string): Catalog {
       const phrase = tick[1]!
       const note = first.slice(tick.index + tick[0].length).trim()
       const meaning = cells[1] ?? ''
+      const event = eventColumn === -1 ? null : (cells[eventColumn] ?? '').replace(/`/g, '').trim() || null
       phrases.push({
         key: kind === 'extension' ? `${phrase}#extension` : phrase,
         phrase,
@@ -91,7 +99,8 @@ export function parseCatalog(markdown: string): Catalog {
         meaning,
         note,
         kind,
-        hash: hashOf([phrase, meaning, note, kind]),
+        event,
+        hash: hashOf([phrase, meaning, note, kind, event]),
         compileError: compile(phrase).error,
       })
     }
@@ -106,16 +115,16 @@ export function makeClassifier(approved: Catalog, proposed: Catalog): Classify {
       .filter((p) => p.kind === 'phrase')
       .flatMap((p) => {
         const { expression } = compile(p.phrase)
-        return expression ? [{ phrase: p.phrase, expression }] : []
+        return expression ? [{ phrase: p.phrase, keyword: p.keyword, event: p.event, expression }] : []
       })
   const catalog = compiled(approved)
   const fresh = compiled(proposed)
   const extended = new Set(proposed.phrases.filter((p) => p.kind === 'extension').map((p) => p.phrase))
   return (text: string): Classification => {
     const hit = catalog.find((c) => c.expression.match(text) !== null)
-    if (hit) return { kind: 'catalog', phrase: hit.phrase, extended: extended.has(hit.phrase) }
+    if (hit) return { kind: 'catalog', phrase: hit.phrase, extended: extended.has(hit.phrase), keyword: hit.keyword, event: hit.event }
     const proposedHit = fresh.find((c) => c.expression.match(text) !== null)
-    if (proposedHit) return { kind: 'new', phrase: proposedHit.phrase, extended: false }
-    return { kind: 'uncatalogued', phrase: null, extended: false }
+    if (proposedHit) return { kind: 'new', phrase: proposedHit.phrase, extended: false, keyword: proposedHit.keyword, event: proposedHit.event }
+    return { kind: 'uncatalogued', phrase: null, extended: false, keyword: null, event: null }
   }
 }
