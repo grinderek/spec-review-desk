@@ -23,6 +23,18 @@ describe('parseCatalog', () => {
     expect(catalog.phrases[3]).toMatchObject({ note: '(table)', meaning: 'Compares the listed fields; a table row `| field | value |` per field.' })
   })
 
+  it('reads the optional Event / Command column, empty cells as null', () => {
+    expect(parseCatalog(STEPS_MD).phrases.map((p) => p.event)).toEqual(['FounderRegistered', null, 'SyncGmail', null])
+    expect(parseCatalog(NEW_STEPS_MD).phrases.map((p) => p.event)).toEqual([null, 'MailboxSynced', 'InboxRead'])
+    const twoColumns = parseCatalog('## Given\n\n| Phrase | Meaning |\n|---|---|\n| `a thing` | x |\n').phrases
+    expect(twoColumns[0]!.event).toBeNull()
+  })
+
+  it('changes a phrase hash when its event changes', () => {
+    const before = parseCatalog(STEPS_MD).phrases[0]!.hash
+    expect(parseCatalog(STEPS_MD.replace('`FounderRegistered`', '`FounderCreated`')).phrases[0]!.hash).not.toBe(before)
+  })
+
   it('reads the meaning-extension table as extensions', () => {
     const phrases = parseCatalog(NEW_STEPS_MD).phrases
     expect(phrases.map((p) => [p.kind, p.key])).toEqual([
@@ -49,14 +61,18 @@ describe('makeClassifier', () => {
   const classify = makeClassifier(parseCatalog(STEPS_MD), parseCatalog(NEW_STEPS_MD))
 
   it('marks catalog, new and uncatalogued steps', () => {
-    expect(classify('a founder in time zone "America/New_York"')).toEqual({ kind: 'catalog', phrase: 'a founder in time zone {string}', extended: false })
-    expect(classify("the founder's mailbox holds these threads:")).toMatchObject({ kind: 'new' })
+    expect(classify('a founder in time zone "America/New_York"')).toEqual({
+      kind: 'catalog', phrase: 'a founder in time zone {string}', extended: false, keyword: 'Given', event: 'FounderRegistered',
+    })
+    expect(classify("the founder's mailbox holds these threads:")).toMatchObject({ kind: 'new', keyword: 'Given', event: 'MailboxSynced' })
     expect(classify("another founder's mailbox holds these threads:")).toMatchObject({ kind: 'new' })
-    expect(classify("the founder's inbox read lists 1 message")).toMatchObject({ kind: 'new' })
-    expect(classify('something nobody wrote down')).toEqual({ kind: 'uncatalogued', phrase: null, extended: false })
+    expect(classify("the founder's inbox read lists 1 message")).toMatchObject({ kind: 'new', keyword: 'Then', event: 'InboxRead' })
+    expect(classify('something nobody wrote down')).toEqual({ kind: 'uncatalogued', phrase: null, extended: false, keyword: null, event: null })
   })
 
   it('flags a catalog phrase whose meaning this change extends', () => {
-    expect(classify('Gmail finished syncing at "2026-09-22 13:50"')).toEqual({ kind: 'catalog', phrase: 'Gmail finished syncing at {string}', extended: true })
+    expect(classify('Gmail finished syncing at "2026-09-22 13:50"')).toEqual({
+      kind: 'catalog', phrase: 'Gmail finished syncing at {string}', extended: true, keyword: 'When', event: 'SyncGmail',
+    })
   })
 })

@@ -1,5 +1,6 @@
 import { copyFile, lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { stringify } from 'yaml'
 import type { InitiativeDoc, RunKind } from './initiative-store.ts'
 import type { SliceStatus } from './slice-plan.ts'
@@ -16,6 +17,10 @@ export interface RoomInput {
 
 const SLICE_FILES = ['proposal.md', 'decisions.md']
 const SLICE_DIRS = ['specs', 'features']
+// The Desk's own method — Gherkin + event sourcing + full-stack checks — goes into every planner
+// and author room next to the repository's rules, so the agents write to the same shape the Desk
+// checks (vet-output.ts, shape.ts).
+export const METHOD_DOC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'method', 'bdd-event-sourcing.md')
 
 async function kind(file: string): Promise<'file' | 'dir' | 'other' | null> {
   try {
@@ -99,6 +104,7 @@ export async function assembleRoom(room: string, input: RoomInput): Promise<stri
     for (const rel of await walk(features, (r) => r.endsWith('.feature') || r === 'STEPS.md')) add(path.join(features, rel), `corpus/features/${rel}`)
     const specs = path.join(input.worktree, 'openspec', 'specs')
     for (const rel of await walk(specs, () => true)) add(path.join(specs, rel), `corpus/specs/${rel}`)
+    if ((await kind(METHOD_DOC)) === 'file') add(METHOD_DOC, 'method/bdd-event-sourcing.md')
     const claudeMd = (await kind(path.join(input.worktree, 'CLAUDE.md'))) === 'file' ? await readFile(path.join(input.worktree, 'CLAUDE.md'), 'utf8') : ''
     const section = extractSection(claudeMd, 'Spec-driven work')
     if (section) texts.push(['method/spec-driven-work.md', section])

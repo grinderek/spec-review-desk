@@ -100,6 +100,19 @@ describe('vetAuthorOutput', () => {
     ])
   })
 
+  it('refuses a scenario off the event-sourcing shape, naming the file, the scenario and the line', async () => {
+    // A second When, and a Then phrase (NEW_STEPS.md) used as the command.
+    const feature = FEATURE.replace(
+      '    When Gmail finished syncing at "2026-09-22 13:50"\n    Then the response includes:',
+      '    When Gmail finished syncing at "2026-09-22 13:50"\n    When the founder\'s inbox read lists 1 message\n    Then the response includes:',
+    )
+    await writeFiles(out, { [`${BASE}/features/thread_state.feature`]: feature })
+    expect((await vet()).problems).toEqual([
+      "features/thread_state.feature: The founder's reply resolves a waiting thread: 2 When steps (line 17, line 18) — one command or request per scenario",
+      "features/thread_state.feature: The founder's reply resolves a waiting thread: line 18: \"the founder's inbox read lists 1 message\" is a Then phrase in the catalog, used as When",
+    ])
+  })
+
   it('finds a secret in any file', async () => {
     await writeFiles(out, { [`${BASE}/proposal.md`]: `## Why\n\ntoken ${TOKEN}\n` })
     expect((await vet()).problems).toEqual(['proposal.md: contains a secret (the OAuth token, an sk-ant- key)'])

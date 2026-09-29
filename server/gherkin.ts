@@ -3,11 +3,20 @@ import { AstBuilder, GherkinClassicTokenMatcher, Parser } from '@cucumber/gherki
 import { IdGenerator } from '@cucumber/messages'
 import type { Background, DataTable, DocString, Examples, FeatureChild, GherkinDocument, Scenario, Step, Tag } from '@cucumber/messages'
 import { type CommentLine, type Decision, splitComments, stripCommentMarker } from './decisions.ts'
+import { type ScenarioShape, scenarioShape } from './shape.ts'
 
 export type StepKind = 'catalog' | 'new' | 'uncatalogued'
-export interface Classification { kind: StepKind; phrase: string | null; extended: boolean }
+export type StepKeyword = 'Given' | 'When' | 'Then'
+export interface Classification {
+  kind: StepKind
+  phrase: string | null
+  extended: boolean
+  // The catalog section the matched phrase sits under, and its Event/Command column (catalog.ts).
+  keyword: StepKeyword | null
+  event: string | null
+}
 export type Classify = (text: string) => Classification
-export const unclassified: Classify = () => ({ kind: 'uncatalogued', phrase: null, extended: false })
+export const unclassified: Classify = () => ({ kind: 'uncatalogued', phrase: null, extended: false, keyword: null, event: null })
 
 export interface StepView {
   keyword: string
@@ -16,6 +25,8 @@ export interface StepView {
   kind: StepKind
   phrase: string | null
   extended: boolean
+  catalogKeyword: StepKeyword | null
+  event: string | null
   table: string[][] | null
   docString: string | null
 }
@@ -31,6 +42,7 @@ export interface ScenarioView {
   notes: string[]
   steps: StepView[]
   examples: ExamplesView[]
+  shape: ScenarioShape
   source: string
   hash: string
 }
@@ -106,6 +118,8 @@ function stepView(step: Step, classify: Classify, sample: (text: string) => stri
     kind: c.kind,
     phrase: c.phrase,
     extended: c.extended,
+    catalogKeyword: c.keyword,
+    event: c.event,
     table: tableRows(step.dataTable),
     docString: step.docString?.content ?? null,
   }
@@ -161,6 +175,7 @@ export function parseFeature(source: string, file: string, classify: Classify): 
       notes,
       steps,
       examples,
+      shape: scenarioShape(background, steps),
       source: lines.slice(blockStart - 1, nodeEnd(node)).join('\n'),
       hash: sha256({
         background: background.map(canonStep),

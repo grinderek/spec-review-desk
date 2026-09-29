@@ -24,10 +24,16 @@ test('review, question, patch, re-approval and approval record', async ({ page }
 
   const plain = page.locator('article.scn', { hasText: "The founder's reply resolves a waiting thread" })
   await plain.getByRole('button', { name: /The founder's reply resolves a waiting thread/ }).click()
+  // The scenario as an event-sourcing spec, from the catalogs' Event / Command column; it keeps
+  // the shape (one When, Then after it), so no off-shape pill.
+  await expect(plain.locator('[data-shape-line]')).toHaveText(/Given\s*FounderRegistered\s*MailboxSynced\s*When\s*SyncGmail\s*Then/)
+  await expect(plain.locator('.pill.p-warn')).toHaveCount(0)
   await plain.getByRole('button', { name: 'Approve' }).click()
   await expect(plain.locator('.pill.p-approved')).toBeVisible()
 
   await page.getByRole('tab', { name: /New phrases/ }).click()
+  await expect(page.getByRole('columnheader', { name: 'Event / Command' })).toBeVisible()
+  await expect(page.getByRole('cell', { name: 'MailboxSynced' })).toBeVisible()
   for (const remaining of [3, 2, 1]) {
     await expect(page.getByRole('button', { name: 'Approve' })).toHaveCount(remaining)
     await page.getByRole('button', { name: 'Approve' }).first().click()

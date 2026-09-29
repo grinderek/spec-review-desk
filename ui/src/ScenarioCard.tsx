@@ -3,6 +3,7 @@ import type { DecisionView, ScenarioWithStatus } from '../../server/change-view.
 import type { CorpusState } from '../../server/corpus.ts'
 import type { Effective, Thread } from '../../server/review-store.ts'
 import type { ScenarioRun } from '../../server/run-messages.ts'
+import type { ScenarioShape } from '../../server/shape.ts'
 import { api, type ChangeId } from './api.ts'
 import { type DiffLine, lineDiff } from './diff.ts'
 import { useAction } from './feedback.tsx'
@@ -12,6 +13,21 @@ import { DiffView, StepLines } from './StepLines.tsx'
 export function StatusPill({ effective }: { effective: Effective }) {
   const label = effective.status === 'changes_requested' ? 'changes requested' : effective.changedSinceApproval ? 'pending · changed' : effective.status
   return <span className={`pill p-${effective.status}`}>{label}</span>
+}
+
+// The scenario as an event-sourcing specification: the events already in the stream, the one
+// command, the events expected after it — from the catalogs' Event / Command column, so a catalog
+// without that column shows nothing here.
+export function ShapeLine({ shape }: { shape: ScenarioShape }) {
+  if (!shape.given.length && !shape.when.length && !shape.then.length) return null
+  const list = (names: string[]) => (names.length ? names.map((n) => <code key={n}>{n}</code>) : <span className="hash">—</span>)
+  return (
+    <div className="esline" data-shape-line>
+      <span><b>Given</b> {list(shape.given)}</span>
+      <span><b>When</b> {list(shape.when)}</span>
+      <span><b>Then</b> {list(shape.then)}</span>
+    </div>
+  )
 }
 
 function RunPill({ run, corpus }: { run: ScenarioRun | undefined; corpus: CorpusState | undefined }) {
@@ -62,11 +78,22 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
             {decisions.length > 1 ? `${decisions.length} decisions open` : 'decision open'}
           </button>
         ) : null}
+        {s.shape.warnings.length ? (
+          <span className="pill p-warn" title={s.shape.warnings.join('\n')}>
+            {s.shape.warnings.length === 1 ? 'off shape' : `off shape · ${s.shape.warnings.length}`}
+          </span>
+        ) : null}
         <RunPill run={run} corpus={corpus} />
         <StatusPill effective={s.effective} />
       </div>
       {open ? (
         <div className="sbody">
+          {s.shape.warnings.length ? (
+            <div className="warnings" data-shape-warnings>
+              {s.shape.warnings.map((w) => <div key={w}>{w}</div>)}
+            </div>
+          ) : null}
+          <ShapeLine shape={s.shape} />
           {s.decisions.map((d) => (
             <div className="decision" key={d.line}>
               <b>Owner decision {d.date}{d.tag ? ` (${d.tag})` : ''}{d.commit ? ` · ${d.commit}` : ''}</b>

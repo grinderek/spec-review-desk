@@ -7,6 +7,7 @@ import { StatusPill } from './ScenarioCard.tsx'
 export function PhrasesTab({ id, view, setPanel }: { id: ChangeId; view: ChangeView; setPanel: (t: PanelTarget) => void }) {
   const act = useAction()
   const threadFor = (key: string) => view.review.threads.find((t) => t.anchor === 'phrase' && t.ref === key && t.status !== 'resolved')
+  const withEvents = view.phrases.some((p) => p.event !== null)
   return (
     <>
       {view.proposedPreamble ? <p className="note">{view.proposedPreamble}</p> : null}
@@ -18,7 +19,7 @@ export function PhrasesTab({ id, view, setPanel }: { id: ChangeId; view: ChangeV
       <div className="tablewrap">
         <table className="list">
           <thead>
-            <tr><th /><th>Phrase</th><th>Meaning</th><th>Used</th><th /></tr>
+            <tr><th /><th>Phrase</th><th>Meaning</th>{withEvents ? <th>Event / Command</th> : null}<th>Used</th><th /></tr>
           </thead>
           <tbody>
             {view.phrases.map((p) => {
@@ -31,6 +32,7 @@ export function PhrasesTab({ id, view, setPanel }: { id: ChangeId; view: ChangeV
                     {p.compileError ? <div className="fail">{p.compileError}</div> : null}
                   </td>
                   <td>{p.meaning}</td>
+                  {withEvents ? <td className="mono">{p.event ?? ''}</td> : null}
                   <td>{p.kind === 'extension' ? '—' : `${p.usedBy}×`}</td>
                   <td>
                     <div className="row">

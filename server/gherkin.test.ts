@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
+import { makeClassifier, parseCatalog } from './catalog.ts'
 import { type Classify, FeatureParseError, parseFeature, unclassified } from './gherkin.ts'
-import { FEATURE } from './testing/fixtures.ts'
+import { FEATURE, NEW_STEPS_MD, STEPS_MD } from './testing/fixtures.ts'
 
 const FILE = 'features/thread_state.feature'
 const parse = (source: string, classify: Classify = unclassified) => parseFeature(source, FILE, classify)
@@ -35,9 +36,20 @@ describe('parseFeature', () => {
 
   it('classifies an outline step against its first Examples row', () => {
     const seen: string[] = []
-    parse(FEATURE, (text) => { seen.push(text); return { kind: 'catalog', phrase: null, extended: false } })
+    parse(FEATURE, (text) => { seen.push(text); return { kind: 'catalog', phrase: null, extended: false, keyword: null, event: null } })
     expect(seen).toContain("the founder's inbox read lists 1 messages")
     expect(seen).not.toContain("the founder's inbox read lists <count> messages")
+  })
+
+  it('gives every scenario its event-sourcing shape, background included', () => {
+    const classify = makeClassifier(parseCatalog(STEPS_MD), parseCatalog(NEW_STEPS_MD))
+    const [first, outline] = parse(FEATURE, classify).scenarios
+    expect(first!.shape).toEqual({ given: ['FounderRegistered', 'MailboxSynced'], when: ['SyncGmail'], then: [], warnings: [] })
+    expect(outline!.shape).toEqual({ given: ['FounderRegistered', 'MailboxSynced'], when: ['SyncGmail'], then: ['InboxRead'], warnings: [] })
+    expect(parse('Feature: F\n  Scenario: S\n    Given x\n    And y\n').scenarios[0]!.shape.warnings).toEqual([
+      'no When step — a scenario sends exactly one command or request',
+      'no Then step — nothing is expected of the command',
+    ])
   })
 
   describe('hash', () => {

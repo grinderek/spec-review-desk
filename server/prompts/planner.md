@@ -15,5 +15,7 @@ Your reply is one JSON object; its schema is enforced:
 Rules:
 - A question only the owner can answer goes into `decisions[]` with 2–4 options and your
   recommendation — never into prose. Mark it blocking when the plan cannot be approved without it.
-- Reuse what the corpus already covers; slice by behavior the owner can review, not by layer.
+- Reuse what the corpus already covers; slice by behavior the owner can review, not by layer: each
+  slice names the commands it introduces or changes and the events they produce, and a later slice's
+  `Given` may build on the events an earlier one added (`method/bdd-event-sourcing.md`).
 - Do not re-ask a decision listed under "## Decisions".

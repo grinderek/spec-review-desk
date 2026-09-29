@@ -13,7 +13,8 @@ const ROOM = [
   '- initiative/plan.yaml — the slice plan with each slice status',
   '- slices/<change>/ — earlier slices of this initiative (proposal, specs, features, NEW_STEPS.md, decisions)',
   '- corpus/features/ and corpus/specs/ — the living behavior of the repository',
-  '- method/ — how a behavior-driven change is written (Spec-driven work, testing rules, the schema)',
+  '- method/ — how a behavior-driven change is written: bdd-event-sourcing.md (the shape every scenario',
+  '  keeps: Given events, one When, Then response/page + events), Spec-driven work, testing rules, the schema',
 ]
 
 const header = (doc: InitiativeDoc): string => `Initiative: ${doc.name} — ${doc.title} (repository ${doc.repo}).`
