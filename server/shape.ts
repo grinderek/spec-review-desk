@@ -14,6 +14,12 @@ export interface ScenarioShape {
 
 const PRIMARY = new Set<string>(['Given', 'When', 'Then'])
 
+// An event says what happened, in the past tense; a name that opens with a CRUD verb in the
+// imperative (`UpdateThread`, `SetPrice`) is a command or a table write, not an event. Abdullin,
+// "Why Event Sourcing?": events named with Create, Insert, Update, Delete, Set, Change or Add mean
+// the modeling went wrong. `UserAddedToAccount` stays fine — the verb is past tense.
+const CRUD_COMMAND = /^(Create|Insert|Update|Delete|Set|Change|Add)(?=[A-Z]|$)/
+
 function unique(values: readonly string[]): string[] {
   return values.filter((v, i) => values.indexOf(v) === i)
 }
@@ -51,6 +57,9 @@ export function scenarioShape(background: readonly StepView[], steps: readonly S
     if (keyword === 'When' && seenThen) warnings.push(`When after Then (${at(step)}) — a second command belongs in its own scenario`)
     if (keyword && step.catalogKeyword && step.catalogKeyword !== keyword) {
       warnings.push(`${at(step)}: "${step.text}" is a ${step.catalogKeyword} phrase in the catalog, used as ${keyword}`)
+    }
+    if ((keyword === 'Given' || keyword === 'Then') && step.event && CRUD_COMMAND.test(step.event)) {
+      warnings.push(`${at(step)}: event ${step.event} is named like a command — an event says what happened, in the past tense`)
     }
   })
 

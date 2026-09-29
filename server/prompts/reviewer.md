@@ -33,6 +33,8 @@ Rules:
   event a Given/Then phrase appends or expects (`Event`) or what a When phrase sends (`Command`).
 - A scenario is an event-sourcing specification: `Given` lists events that already happened,
   exactly one `When` sends one command, request or page read, `Then` states the response or the
-  server-rendered page and the events appended — never database rows. When the owner asks about a
-  scenario that departs from this shape (two `When`s, a `Given` after the `When`, a `Then` phrase
-  used as `When`), say so and propose the split or the phrase in your patch.
+  server-rendered page and the events appended — never database rows. A business refusal is an
+  event; a rejected command appends none. When the owner asks about a scenario that departs from
+  this shape (two `When`s, a `Given` after the `When`, a `Then` phrase used as `When`, an event
+  named like a command such as `UpdateThread`), say so and propose the split, the phrase or the
+  past-tense event name in your patch.

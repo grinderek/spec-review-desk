@@ -113,6 +113,13 @@ describe('vetAuthorOutput', () => {
     ])
   })
 
+  it('refuses a new phrase whose event is named like a command, wherever a scenario uses it', async () => {
+    await writeFiles(out, { [`${BASE}/features/NEW_STEPS.md`]: NEW_STEPS_MD.replace('`MailboxSynced`', '`InsertThreads`') })
+    const problems = (await vet()).problems
+    expect(problems.length).toBeGreaterThan(0)
+    for (const problem of problems) expect(problem).toMatch(/^features\/thread_state\.feature: .*: line \d+: event InsertThreads is named like a command — an event says what happened, in the past tense$/)
+  })
+
   it('finds a secret in any file', async () => {
     await writeFiles(out, { [`${BASE}/proposal.md`]: `## Why\n\ntoken ${TOKEN}\n` })
     expect((await vet()).problems).toEqual(['proposal.md: contains a secret (the OAuth token, an sk-ant- key)'])

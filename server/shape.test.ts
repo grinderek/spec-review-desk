@@ -88,4 +88,20 @@ describe('scenarioShape', () => {
     expect(scenarioShape(background, [step('Then', 'c')]).warnings).toEqual([])
     expect(scenarioShape(background, [step('When', 'd'), step('Then', 'e')]).warnings).toEqual(['2 When steps (line 2, line 4) — one command or request per scenario'])
   })
+
+  it('reports a Given or Then event named like a CRUD command, not a When command or a past-tense name', () => {
+    line = 0
+    const steps = [
+      ev('Given', 'a price', 'SetPrice'),
+      ev('Given', 'a user', 'UserAddedToAccount'),
+      ev('Given', 'a settings page', 'Settings'),
+      ev('When', 'the thread is edited', 'UpdateThread'),
+      ev('Then', 'the thread changed', 'UpdateThread'),
+      ev('Then', 'the customer was created', 'CustomerCreated'),
+    ]
+    expect(scenarioShape([], steps).warnings).toEqual([
+      'line 1: event SetPrice is named like a command — an event says what happened, in the past tense',
+      'line 5: event UpdateThread is named like a command — an event says what happened, in the past tense',
+    ])
+  })
 })
