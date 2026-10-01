@@ -29,6 +29,13 @@ payload. `events: []` expects no new domain events. Unknown structural fields, d
 aliases, duplicate ids and multiple commands are rejected. There are no arbitrary expressions or
 embedded executable code.
 
+## What belongs in a contract
+
+Keep the owner corpus small: a scenario describes a product rule someone can read and approve.
+File formats, import compatibility, concurrency, corrupt state and invalid HTTP input belong in
+ordinary TypeScript integration tests. Do not extend the language to express every technical check.
+The review corpus has 14 product contracts; technical coverage is in `server/review.integration.test.ts`.
+
 ## Case tables and observations
 
 `cases` lists parameter mappings. Each row executes the same rule in a fresh repository. `$name`
@@ -56,22 +63,21 @@ then:
         body: { phrases: [{ key: $phrase, effective: { status: approved } }] }
 ```
 
-Each `then.reads` entry issues a GET, can bind generated fields and compares its response. Observing
-state must not emit events. Optional `then.git` checks head, parent, message and changed files of the
-resulting commit. Responses and event payloads match listed object fields recursively; arrays match
-length and order exactly. Events match exact count, order and type. Status can be an HTTP number or
-a case variable. Failures identify the contract, case and field; empty or malformed corpora fail.
+Each `then.reads` entry issues a GET and compares its response. Observations must not emit events.
+Responses and event payloads match listed object fields recursively; arrays match length and order
+exactly. Events match exact count, order and type. Response status is an HTTP number. Failures
+identify the contract, case and field; empty or malformed corpora fail.
 
 ## The review adapter
 
-`scripts/desk-specs/review-world.mts` creates a clean Git repository, real Hono app, security
+`server/testing/review-world.ts` creates a clean Git repository, real Hono app, security
 middleware, discovery, disk-backed review store and review routes for every execution. Commands
 cover scenario/phrase approvals and revocations, requests for changes, change approval and orphan
 operations. Reads expose change and summary views. A domain adapter is defined once per operation.
 
-Given facts prepare source contracts, phrases, prior approvals, discussions, decisions, legacy
-reviews, malformed files and archival conditions. Approvals use the same serialized writer as
-production. Concurrent prior approvals test this writer, followed by a public HTTP read. Fixture
+Given facts prepare source contracts, phrases, prior approvals, discussions and decisions.
+Approvals use the same serialized writer as production. Storage compatibility, malformed input,
+concurrency and Git artifact details use ordinary integration tests. Fixture
 bindings include `$key`, `$hash`, `$head`, `$at`, `$change`, `$phrase` and `$phraseHash`. Production
 commands generate their own ids and times. The question service uses a deterministic model transport
 while running real reply validation and persistence. No LLM or Docker is required for this corpus.
@@ -111,6 +117,6 @@ live in gitignored `.spec-review/`, with native Desk envelopes and support for C
 The UI displays YAML contracts, event/command summaries, approvals and diffs. Keys use file::id.
 Hashes include canonical contract content and case tables: comments, indentation and mapping-key
 order preserve approval; changed expectations require approval again. Corpus comparison uses the
-same hash. See [the review migration map](review-migration.md) for removed legacy checks. Other
-legacy domains and browser checks remain. Live authoring through a Codex account is outside these
+same hash. See [the testing boundary](review-migration.md) for the split between product rules and technical
+checks. Other domains and browser checks retain their coverage. Live authoring through a Codex account is outside these
 offline contracts.

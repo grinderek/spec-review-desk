@@ -41,4 +41,6 @@ Rules:
 
 For Desk DSL changes, features/*.desk.yaml are normative contracts. Preserve stable scenario ids;
 keys are <file>::<id>, copied from the prompt. There are no step phrases to approve. Propose changes
-inside given/when/then and keep spec scenario titles aligned. Never write review.events.jsonl.
+inside given/when/then and keep spec scenario titles aligned. Follow the repository testing policy:
+keep product contracts small, and leave technical format, migration and protocol checks to
+integration tests. Never write review.events.jsonl.

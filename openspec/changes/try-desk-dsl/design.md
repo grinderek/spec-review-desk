@@ -1,31 +1,33 @@
-## Scope
+## Testing boundary
 
-The review corpus covers scenario and phrase approvals, requests for changes, whole-change approval
-commits, orphan reassignment, readiness, public views and persistence compatibility. YAML DSL
-coexists with Gherkin. A case table expresses variants of one rule; each row runs in a fresh repository.
+The DSL covers owner workflows and business gates: approvals, semantic changes, requests for
+changes, readiness and orphan operations. Fourteen readable rules use small case tables for
+meaningful variants. Source formats, migration, concurrency, corrupt state, invalid API input and
+Git artifacts use ordinary TypeScript integration tests. Do not extend the language for those checks.
 
 ## Execution
 
-A domain adapter prepares prior events and environment conditions, then executes authenticated
-HTTP commands against the real Hono app. Then compares exact new domain events, public responses,
-subsequent GET observations and optional Git commit metadata. Generated ids and timestamps bind
-from response fields. The question service uses a deterministic model transport for offline runs;
-its validation and persistence remain real. UI behavior has a separate browser suite.
+A shared fixture creates a fresh Git repository and real Hono app. The DSL adapter prepares prior
+facts and executes one authenticated public command. Then checks exact new domain events, the
+response and subsequent GET observations. Generated values bind from command responses. Technical
+tests use the same fixture with direct disk/HTTP assertions. The question service uses a deterministic
+model transport while running real validation and persistence. UI behavior retains browser coverage.
 
 ## Persistence
 
-Approval history commits before review.yaml projection writing. Reading replays scenario, phrase
-and whole-change approvals even if the projection is missing. A versioned import checkpoint preserves
-old YAML approvals and scenario-only journals on their first approval-changing write. Import state
-is distinct from newly emitted domain events. Invalid projections remain visible blocking errors.
+Approval history commits before review.yaml projection writing. Reads replay scenario, phrase and
+whole-change approvals after projection loss. A versioned import checkpoint preserves old YAML
+approvals and scenario-only journals on their first approval-changing write. Import state is
+distinct from new domain events. Invalid files remain visible errors.
 
 Threads, decisions and agent runs retain YAML storage. A request-for-changes event includes the
-initial owner thread, but subsequent discussion is not replayed from this approval journal.
-Existing per-process locking serializes writes; multiple writers in different server processes
-remain unsupported. Journal replacement cost grows with history. Git commits include the journal.
+initial owner thread; later discussion is not replayed from this approval journal. Per-process
+locking serializes writes; multiple server processes writing one change remain unsupported.
+Journal replacement cost grows with history. Approval commits include the journal.
 
-## Migration
+## Coverage
 
-The four legacy review test files are removed. Public behavior is mapped to the corpus in
-`docs/method/review-migration.md`. Pure helper implementation checks are retired; discussion patch
-and decision behavior retains its existing route coverage. Other domains migrate separately.
+The old review route, readiness, store and change-view files are retired. Product rules live in
+three DSL files; technical coverage lives in server/review.integration.test.ts. See
+`docs/method/review-migration.md`. Other domains retain their tests. The Desk runner verifies
+product contracts; npm test verifies both contracts and technical checks.

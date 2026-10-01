@@ -6,7 +6,7 @@ import { FeatureParseError, type FeatureView, type StepView } from './gherkin.ts
 const Name = /^(?:[A-Z][A-Za-z0-9]+|\$[a-z][a-zA-Z0-9]*)$/
 const Fact = z.record(z.string().regex(Name), z.record(z.string(), z.unknown())).refine((v) => Object.keys(v).length === 1, 'exactly one named event or command is required')
 const Bind = z.record(z.string().regex(/^[a-z][a-zA-Z0-9]*$/), z.string().regex(/^response\.body\.[a-zA-Z0-9_.]+$/))
-const Response = z.object({ status: z.union([z.number().int().min(100).max(599), z.string().regex(/^\$[a-z][a-zA-Z0-9]*$/)]), body: z.unknown().optional() }).strict()
+const Response = z.object({ status: z.number().int().min(100).max(599), body: z.unknown().optional() }).strict()
 const Scenario = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]*$/),
   scenario: z.string().min(1),
@@ -16,8 +16,7 @@ const Scenario = z.object({
   then: z.object({
     bind: Bind.optional(),
     events: z.array(Fact), response: Response,
-    git: z.object({ head: z.string().optional(), parent: z.string().optional(), message: z.string().optional(), files: z.array(z.string()).optional() }).strict().optional(),
-    reads: z.array(z.object({ path: z.string(), bind: Bind.optional(), response: Response }).strict()).optional(),
+    reads: z.array(z.object({ path: z.string(), response: Response }).strict()).optional(),
   }).strict(),
 }).strict()
 export const DeskDslSchema = z.object({ version: z.literal(1), feature: z.string().min(1), scenarios: z.array(Scenario).min(1) }).strict()

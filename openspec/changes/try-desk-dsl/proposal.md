@@ -1,10 +1,10 @@
 ## Why
 
-Develop Desk behavior through executable event/command contracts that owners can review in Desk.
+Develop Desk through a small corpus of product contracts that owners can read and approve.
 
 ## What
 
 Support strict YAML contracts alongside Gherkin, with stable ids, semantic hashes, case tables,
-response bindings and persisted-state observations. Run the review corpus through real HTTP routes
-and the local self-review runner. Replay scenario, phrase and whole-change approvals from a journal.
-Replace the legacy review route, readiness, store and change-view test files with this corpus.
+response bindings and public-state observations. Keep the review corpus to 14 owner rules and
+execute it through the local self-review runner. Use TypeScript integration tests for storage,
+compatibility, technical errors and Git artifacts. Replay approval state from a journal.

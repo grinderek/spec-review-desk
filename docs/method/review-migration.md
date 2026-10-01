@@ -1,22 +1,27 @@
-# Review migration to Desk contracts
+# Product contracts and technical review checks
 
-The review area now has one executable behavior corpus. The following four Vitest files and their
-25 remaining checks were removed after the contracts passed. Earlier scenario approval helper and
-route checks were already replaced by `scenario-approval.desk.yaml`.
+The owner corpus contains 14 rules in three files, reduced from 40 contracts in six files.
+Case tables produce 24 executions instead of 65. A rule belongs here when a product owner needs
+to understand and approve its behavior. Removing unit tests is not a goal by itself.
 
-| Removed file | Behavior expressed in the DSL corpus |
+| Place | Responsibility |
 | --- | --- |
-| `server/routes/review.test.ts` | `review-actions`: requests for changes with an owner thread and agent reply, new/extended phrase approval, ready/unready approval commits, orphan drop/reassignment. `scenario-approval`: all archived review writes. |
-| `server/readiness.test.ts` | `review-readiness`: approval gates, review versus Apply discussions, decision statuses, empty changes, join-key mismatches, invalid contracts and uncatalogued phrases. |
-| `server/review-store.test.ts` | `scenario-approval`: empty defaults. `review-persistence`: Unicode keys, invalid projections, external metadata, concurrent approvals, message/patch/decision metadata, legacy YAML and journal compatibility. `review-actions`: moving/removing orphan entries. |
-| `server/change-view.test.ts` | `review-views`: legacy features, phrase usage, decision provenance, obligation counts, orphan decisions and decision logs. `review-readiness`: ready views, partial parsing failures. `review-persistence`: invalid review files. Scenario lookup is exercised by review commands. |
+| `features/scenario-approval.desk.yaml` | Approve/revoke a scenario; require new approval after a semantic change; preserve approval after formatting. |
+| `features/review-actions.desk.yaml` | Request changes, approve/revoke phrases, approve a ready change, refuse an unready one, drop or reattach orphan reviews. |
+| `features/review-readiness.desk.yaml` | Blocking decisions, unresolved discussions and proposed phrases gate readiness. |
+| `server/review.integration.test.ts` | Legacy imports, replay and projection loss, escaped keys, external metadata, concurrent writes, corrupt state, invalid HTTP input, archival protection, parser errors, spec-title consistency, legacy views and approval Git artifacts. |
+| Browser suite | Rendering, approvals, live updates and contract diffs. |
 
-Pure helper immutability and patch indexing checks are retired rather than translated into public
-contracts. Discussion patch operations keep their HTTP coverage in `server/routes/threads.test.ts`;
-decision mutations retain their own route tests. Other domains keep their existing tests until
-migration. The browser suite verifies UI rendering, contract approval hashes and diffs.
+The technical tests use real disk, HTTP and Git with a shared review fixture. They are ordinary
+TypeScript: no second declarative language and no technical scenario corpus for owner approval.
+Git artifact assertions and observation bindings were removed from the DSL; response bindings
+remain for generated ids and commits needed by product workflows.
 
-Case tables keep variants under one reviewed rule. Each row executes in isolation; the corpus
-contains 40 reviewed contracts with 65 executions. These counts describe the resulting corpus,
-not a one-to-one conversion of implementation tests. New assertions cover the expanded approval
-journal and old-state compatibility introduced by this migration.
+The four old review route, readiness, store and change-view files remain retired. Their product
+rules are expressed in the DSL, and their technical boundaries are exercised by the integration
+file. Pure helper immutability and patch indexing checks were retired rather than mirrored.
+Discussion patch and decision operations retain their separate route coverage. Other domains
+keep their existing tests until deliberately migrated.
+
+Run `npm test` to verify both kinds of checks. The local Desk runner executes the owner contract
+corpus; passing that corpus alone does not claim technical or browser verification.

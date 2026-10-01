@@ -1,8 +1,7 @@
 - [x] Parse and display DSL contracts with case tables
-- [x] Replay scenario, phrase and whole-change review approvals
-- [x] Execute review actions, readiness, persistence and public views through HTTP contracts
-- [x] Observe persisted state and approval Git commits
-- [x] Import original YAML reviews and scenario-only journals
-- [x] Remove the four replaced legacy review test files
+- [x] Replay scenario, phrase and whole-change approvals
+- [x] Keep the owner corpus to core product rules
+- [x] Exercise technical boundaries with ordinary integration tests
+- [x] Remove unused Git and observation-binding DSL syntax
 - [x] Provide and verify a local self-review runner
 - [ ] Owner review and approval through Desk

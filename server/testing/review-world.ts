@@ -1,23 +1,21 @@
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
-import { parse, stringify } from 'yaml'
+import { stringify } from 'yaml'
 import type { Hono } from 'hono'
-import { createBaseApp, type AppContext } from '../../server/app.ts'
-import { contractHash, type DeskScenario } from '../../server/desk-dsl.ts'
-import { makeClassifier, parseCatalog } from '../../server/catalog.ts'
-import { FEATURE, NEW_STEPS_MD, SPEC_MD, STEPS_MD } from '../../server/testing/fixtures.ts'
-import { parseFeature } from '../../server/gherkin.ts'
-import { git, headSha } from '../../server/git.ts'
-import { QuestionService } from '../../server/questions.ts'
+import { createBaseApp, type AppContext } from '../app.ts'
+import { contractHash, type DeskScenario } from '../desk-dsl.ts'
+import { parseCatalog } from '../catalog.ts'
+import { git, headSha } from '../git.ts'
+import { QuestionService } from '../questions.ts'
 import {
-  addThread, emptyReview, readReviewEvents, recordApproval, REVIEW_EVENTS_FILE, REVIEW_FILE,
+  addThread, readReviewEvents,
   setEntry, updateReview, type DecisionRecord, type Entry,
-} from '../../server/review-store.ts'
-import { registerReadRoutes } from '../../server/routes/read.ts'
-import { registerReviewRoutes } from '../../server/routes/review.ts'
-import { call, testContext } from '../../server/testing/http.ts'
-import { sh, writeFiles } from '../../server/testing/repo.ts'
+} from '../review-store.ts'
+import { registerReadRoutes } from '../routes/read.ts'
+import { registerReviewRoutes } from '../routes/review.ts'
+import { call, testContext } from './http.ts'
+import { sh, writeFiles } from './repo.ts'
 
 // The adapter contains transport and environment mechanics only; expectations live in DSL.
 export class ReviewWorld {
@@ -27,7 +25,6 @@ export class ReviewWorld {
   private readonly ctx: AppContext
   private readonly questions: QuestionService
   private subjectRel = 'features/subject.desk.yaml'
-  private archived = false
   private constructor(readonly repo: string, head: string) {
     this.ctx = testContext(repo, { commitTrailer: '' })
     this.app = createBaseApp(this.ctx)
@@ -51,7 +48,7 @@ export class ReviewWorld {
       return new ReviewWorld(repo, await headSha(repo))
     } catch (error) { await rm(repo, { recursive: true, force: true }); throw error }
   }
-  get dir(): string { return path.join(this.repo, this.archived ? 'openspec/changes/archive/subject' : 'openspec/changes/subject') }
+  get dir(): string { return path.join(this.repo, 'openspec/changes/subject') }
   private get sourceFile(): string { return path.join(this.dir, this.subjectRel) }
   resolve(value: unknown): any {
     if (typeof value === 'string') {
@@ -81,41 +78,13 @@ export class ReviewWorld {
     } else if (name === 'ReviewEntryRecorded') {
       await updateReview(this.dir, (review) => setEntry(review, data.section, data.key, this.entry(data)))
     } else if (name === 'ScenarioReformatted') await writeFile(this.sourceFile, '# Presentation-only change\n' + stringify({ scenarios: [this.subject], feature: 'Subject', version: 1 }))
-    else if (name === 'ContractSourceWritten') await writeFile(this.sourceFile, data.source)
-    else if (name === 'ReviewProjectionLost') await rm(path.join(this.dir, REVIEW_FILE), { force: true })
-    else if (name === 'ReviewProjectionWritten') await writeFile(path.join(this.dir, REVIEW_FILE), data.source)
-    else if (name === 'ChangeArchived') {
-      const archive = path.join(this.repo, 'openspec/changes/archive/subject')
-      await mkdir(path.dirname(archive), { recursive: true }); await rename(this.dir, archive); this.archived = true
-    } else if (name === 'GherkinReviewDiscovered') {
-      await rm(this.sourceFile, { force: true })
-      this.subjectRel = 'features/thread_state.feature'
-      await writeFiles(this.repo, {
-        'features/STEPS.md': STEPS_MD,
-        'openspec/changes/subject/features/thread_state.feature': FEATURE,
-        'openspec/changes/subject/features/NEW_STEPS.md': NEW_STEPS_MD,
-        'openspec/changes/subject/specs/subject/spec.md': SPEC_MD,
-        'openspec/changes/subject/proposal.md': '## Why\n\nThreads wait on the founder.\n',
-      })
-      const parsed = parseFeature(FEATURE, this.subjectRel, makeClassifier(parseCatalog(STEPS_MD), parseCatalog(NEW_STEPS_MD)))
-      this.vars.key = parsed.scenarios[0]!.key; this.vars.hash = parsed.scenarios[0]!.hash
-      sh(this.repo, 'git', ['add', '-A']); sh(this.repo, 'git', ['commit', '-q', '-m', 'legacy contract discovered']); this.vars.head = await headSha(this.repo)
-    } else if (name === 'DecisionLogWritten') {
-      await writeFile(path.join(this.dir, 'decisions.md'), data.source)
-    } else if (name === 'PhraseProposed') {
+    else if (name === 'PhraseProposed') {
       const phrase = data.phrase ?? 'the owner reviews {string}'
       const meaning = data.meaning ?? 'The proposed phrase.'
       const source = `## When\n\n| Phrase | ${data.extension ? 'Extended meaning' : 'Meaning'} | Command |\n|---|---|---|\n| \`${phrase}\` | ${meaning} | \`ReviewContract\` |\n`
       await writeFiles(this.repo, { 'openspec/changes/subject/features/NEW_STEPS.md': source })
       const entry = parseCatalog(source).phrases[0]!
       this.vars.phrase = entry.key; this.vars.phraseHash = entry.hash
-    } else if (name === 'LegacyReviewImported') {
-      const doc = { ...emptyReview(), scenarios: { [String(this.vars.key)]: this.entry({ hash: this.vars.hash, commit: this.vars.head }) },
-        phrases: { [String(this.vars.phrase)]: this.entry({ hash: this.vars.phraseHash }) }, approved_at: String(this.vars.at), approved_commit: String(this.vars.head) }
-      await writeFile(path.join(this.dir, REVIEW_FILE), stringify(doc))
-      if (data.journalled) await writeFile(path.join(this.dir, REVIEW_EVENTS_FILE), JSON.stringify({ version: 1, type: 'ScenarioApproved', key: this.vars.key, entry: doc.scenarios[String(this.vars.key)] }) + '\n')
-    } else if (name === 'ChangeApprovalRecorded') {
-      await updateReview(this.dir, (review) => recordApproval(review, data.at, data.commit))
     } else if (name === 'ReviewThreadOpened') {
       await updateReview(this.dir, (review) => addThread(review, { id: data.id ?? 't_fixture', anchor: data.anchor ?? 'change', ref: data.ref ?? '', status: data.status ?? 'open', messages: data.messages ?? [] }))
     } else if (name === 'DecisionRaised') {
@@ -124,25 +93,6 @@ export class ReviewWorld {
         choice: data.choice ?? null, recorded: data.recorded ?? null, dismissed: data.dismissed ?? null, created_at: String(this.vars.at),
         ...(data.requested_domains ? { requested_domains: data.requested_domains } : {}), }
       await updateReview(this.dir, (review) => ({ ...review, decisions: [...review.decisions, decision] }))
-    } else if (name === 'SpecTitlesWritten') {
-      await writeFile(path.join(this.dir, 'specs/subject/spec.md'), data.titles.map((t: string) => `#### Scenario: ${t}\n`).join('\n'))
-    } else if (name === 'ScenarioRemoved') await rm(this.sourceFile)
-    else if (name === 'BrokenFeatureAdded') await writeFile(path.join(this.dir, 'features/broken.feature'), 'Feature: a\n  Scenario: s\n    Given x:\n      | a | b |\n      | 1 |\n')
-    else if (name === 'UncataloguedScenarioDiscovered') {
-      await rm(this.sourceFile, { force: true })
-      await writeFile(path.join(this.dir, 'features/subject.feature'), 'Feature: Subject\n  Scenario: Subject contract\n    Given a missing phrase\n    When a command arrives\n    Then something happened\n')
-    } else if (name === 'ConcurrentScenarioApprovalsDelivered') {
-      const second = { ...structuredClone(this.subject), id: 'second', scenario: 'Second contract' }
-      this.vars.otherKey = `${this.subjectRel}::second`; this.vars.otherHash = contractHash(second)
-      await writeFile(this.sourceFile, stringify({ version: 1, feature: 'Subject', scenarios: [this.subject, second] }))
-      await writeFile(path.join(this.dir, 'specs/subject/spec.md'), '#### Scenario: Subject contract\n\n#### Scenario: Second contract\n')
-      await Promise.all([['key', 'hash'], ['otherKey', 'otherHash']].map(([key, hash]) => updateReview(this.dir, (review) => setEntry(review, 'scenarios', String(this.vars[key!]), this.entry({ hash: this.vars[hash!] })))))
-    } else if (name === 'ProjectionMetadataEdited') {
-      const projection = parse(await readFile(path.join(this.dir, REVIEW_FILE), 'utf8'))
-      await writeFile(path.join(this.dir, REVIEW_FILE), stringify({ ...projection, agent_session: data.session }))
-    } else if (name === 'ProjectionScenarioApprovalEdited') {
-      const projection = parse(await readFile(path.join(this.dir, REVIEW_FILE), 'utf8'))
-      projection.scenarios = {}; await writeFile(path.join(this.dir, REVIEW_FILE), stringify(projection))
     } else throw Error(`Unsupported Given event ${name}`)
   }
   async ready(): Promise<void> {
@@ -178,7 +128,7 @@ export class ReviewWorld {
     return { status: response.status, body: response.json }
   }
   async commitContract() {
-    // A repository snapshot is the external artifact promised by recording change approval.
+    // Expose the Git artifact for integration checks.
     return { head: await headSha(this.repo), parent: (await git(this.repo, ['rev-parse', '--short', 'HEAD~1'])).trim(), message: (await git(this.repo, ['log', '-1', '--format=%s'])).trim(),
       files: (await git(this.repo, ['show', '--format=', '--name-only', 'HEAD'])).trim().split('\n') }
   }

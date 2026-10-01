@@ -4,7 +4,7 @@ import path from 'node:path'
 import { parseDeskDsl } from '../server/desk-dsl.ts'
 import { corpusKey } from '../server/run-messages.ts'
 import type { ReviewEvent } from '../server/review-store.ts'
-import { ReviewWorld } from './desk-specs/review-world.mts'
+import { ReviewWorld } from '../server/testing/review-world.ts'
 
 const root = path.resolve('features')
 const files = (await readdir(root, { recursive: true })).filter((file) => file.endsWith('.desk.yaml')).sort()
@@ -64,12 +64,10 @@ for (const file of files) {
         })
         for (const [i, observation] of (scenario.then.reads ?? []).entries()) {
           const observed = await world.read(world.resolve(observation.path))
-          bind(world, observation.bind, observed)
           subset(world.resolve(observation.response), observed, `reads[${i}]`)
         }
         // Observing a public view must not change history.
         assert.deepEqual(await world.events(), [...before, ...actual], 'Then reads appended events')
-        if (scenario.then.git) subset(world.resolve(scenario.then.git), await world.commitContract(), 'git')
         passed++; console.log(`PASS ${label}`)
         report.push({ ...result, status: 'passed' })
       } catch (error) {

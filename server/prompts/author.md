@@ -57,4 +57,7 @@ Desk DSL repositories:
   scenarios (stable id, scenario title, given event list, exactly one when command, then.events
   and then.response). No arbitrary fields or duplicate ids. Existing Gherkin repositories keep
   their existing format. The contract, not a phrase catalog, is normative for Desk DSL.
-- Never create review.events.jsonl: the Desk writes scenario review history.
+- Follow the repository testing policy: reserve owner contracts for readable product rules.
+  Keep format, migration, concurrency and protocol checks in ordinary integration tests; do not
+  invent DSL fields or scenarios for every technical assertion.
+- Never create review.events.jsonl: the Desk writes approval history.

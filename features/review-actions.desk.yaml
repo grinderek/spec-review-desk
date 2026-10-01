@@ -82,20 +82,6 @@ scenarios:
               phrases:
                 - effective: { status: pending, changedSinceApproval: false }
 
-  - id: reject-invalid-review-request
-    scenario: Reject invalid review input without changing history
-    cases:
-      - { name: unknown phrase, path: phrases/approve, payload: { key: missing }, status: 404, code: unknown_phrase }
-      - { name: unknown scenario, path: scenarios/request-changes, payload: { key: missing, reason: Explain. }, status: 404, code: unknown_scenario }
-      - { name: blank reason, path: scenarios/request-changes, payload: { key: missing, reason: ' ' }, status: 400, code: invalid_body }
-    given:
-      - ScenarioDiscovered: {}
-    when:
-      HttpRequest: { method: POST, path: '$change/$path', body: $payload }
-    then:
-      events: []
-      response: { status: $status, body: { error: { code: $code } } }
-
   - id: record-ready-change
     scenario: Commit owner approval and its event history
     given:
@@ -108,13 +94,6 @@ scenarios:
       events:
         - ChangeApprovalRecorded: { commit: $head }
       response: { status: 200, body: { commit: $newCommit } }
-      git:
-        head: $newCommit
-        parent: $head
-        message: 'docs(openspec): subject — owner approval'
-        files:
-          - openspec/changes/subject/review.events.jsonl
-          - openspec/changes/subject/review.yaml
       reads:
         - path: $change
           response:
@@ -177,17 +156,3 @@ scenarios:
                 $section:
                   $targetKey: { status: approved, text_hash: obsolete }
               readiness: { ready: false }
-
-  - id: reject-invalid-orphan-target
-    scenario: Reject orphan reassignment to a missing entry or target
-    cases:
-      - { name: missing target, target: missing, oldKey: old, code: unknown_target }
-      - { name: missing review, target: current, oldKey: missing, code: unknown_entry }
-    given:
-      - ScenarioDiscovered: {}
-      - ReviewEntryRecorded: { section: scenarios, key: old, hash: obsolete, at: $at }
-    when:
-      ReattachOrphanReview: { section: scenarios, key: $oldKey, to: $targetKey }
-    then:
-      events: []
-      response: { status: 404, body: { error: { code: $code } } }
