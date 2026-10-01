@@ -102,7 +102,7 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
           ))}
           {s.notes.map((note, i) => <div className="note" key={i}>{note}</div>)}
           <div className="code">
-            <StepLines steps={s.steps} />
+            {s.tags.includes('desk-dsl') ? <pre data-desk-contract>{s.source}</pre> : <StepLines steps={s.steps} />}
             {s.examples.map((examples, i) => (
               <div key={i}>
                 <div className="step"><span className="kw">Examples:</span><span>{examples.name}</span></div>

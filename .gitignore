@@ -6,3 +6,5 @@ playwright-report/
 .fake-codex-sessions/
 .fake-docker/
 .env
+
+.spec-review/

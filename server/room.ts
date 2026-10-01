@@ -101,7 +101,7 @@ export async function assembleRoom(room: string, input: RoomInput): Promise<stri
       }
     }
     const features = path.join(input.worktree, 'features')
-    for (const rel of await walk(features, (r) => r.endsWith('.feature') || r === 'STEPS.md')) add(path.join(features, rel), `corpus/features/${rel}`)
+    for (const rel of await walk(features, (r) => r.endsWith('.feature') || r.endsWith('.desk.yaml') || r === 'STEPS.md')) add(path.join(features, rel), `corpus/features/${rel}`)
     const specs = path.join(input.worktree, 'openspec', 'specs')
     for (const rel of await walk(specs, () => true)) add(path.join(specs, rel), `corpus/specs/${rel}`)
     if ((await kind(METHOD_DOC)) === 'file') add(METHOD_DOC, 'method/bdd-event-sourcing.md')

@@ -29,7 +29,7 @@ runners:
     expect(config.hubRoot).toBe(path.resolve(dir, '../hub'))
     expect(config.repos).toEqual([{ name: 'api', path: path.resolve(dir, '../hub/api') }])
     expect(config.runners[0]).toMatchObject({ name: 'pilot', worktreePath: path.resolve(dir, '../hub/api/wt') })
-    expect(config.runners[0]!.compose.files).toEqual([path.resolve(dir, 'compose/bdd.yaml')])
+    expect(config.runners[0]!.compose!.files).toEqual([path.resolve(dir, 'compose/bdd.yaml')])
   })
 
   it('applies defaults', async () => {

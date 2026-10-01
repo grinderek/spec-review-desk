@@ -1,0 +1,5 @@
+- [x] Parse and display DSL contracts
+- [x] Replay scenario review events
+- [x] Execute the contract corpus through Desk HTTP routes
+- [x] Provide a local self-review runner
+- [ ] Owner review and approval through Desk

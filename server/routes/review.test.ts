@@ -3,7 +3,7 @@ import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { createBaseApp } from '../app.ts'
 import { listChanges, worktreeId } from '../discovery.ts'
-import { git, headSha } from '../git.ts'
+import { git } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import { readReview, setEntry, updateReview } from '../review-store.ts'
 import { FAKE_CODEX, resetFakeCodex } from '../testing/fake-codex-path.ts'
@@ -36,17 +36,6 @@ beforeEach(() => {
 })
 
 describe('review routes', () => {
-  it('approves a scenario with its current hash and HEAD, and revokes it', async () => {
-    const { repo, app, base, dir } = await setup()
-    expect((await call(app, 'POST', `${base}/scenarios/approve`, { key: FIRST })).status).toBe(200)
-    const entry = (await readReview(dir)).scenarios[FIRST]!
-    expect(entry).toMatchObject({ status: 'approved', approved_commit: await headSha(repo) })
-    const view = await call(app, 'GET', base)
-    expect(view.json.features[0].scenarios[0].effective.status).toBe('approved')
-    await call(app, 'POST', `${base}/scenarios/revoke`, { key: FIRST })
-    expect((await readReview(dir)).scenarios[FIRST]).toBeUndefined()
-  })
-
   it('opens a thread when changes are requested', async () => {
     const { app, base, dir, questions } = await setup()
     const res = await call(app, 'POST', `${base}/scenarios/request-changes`, { key: FIRST, reason: 'The 100 looks wrong.' })

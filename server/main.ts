@@ -64,8 +64,8 @@ export async function startServer(opts: StartOptions) {
   registerDecisionRoutes(app, ctx, { questions })
   const runner = new RunnerService({ profiles: config.runners, bus })
   await Promise.all(config.runners.map((p) => runner.loadLast(p.worktreePath)))
-  if (capabilities.docker) await Promise.all(config.runners.map((p) => runner.refreshUp(p.worktreePath).catch(() => false)))
-  const stopRunner = capabilities.docker ? runner.watch() : async () => undefined
+  await Promise.all(config.runners.filter((p) => capabilities.docker || p.execution === 'local').map((p) => runner.refreshUp(p.worktreePath).catch(() => false)))
+  const stopRunner = capabilities.docker || config.runners.some((p) => p.execution === 'local') ? runner.watch() : async () => undefined
   registerRunnerRoutes(app, ctx, runner)
   registerCorpusRoutes(app, ctx)
   registerApplyRoutes(app, ctx, { apply })

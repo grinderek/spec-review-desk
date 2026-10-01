@@ -1,0 +1,17 @@
+# Run the Desk against its own repository and executable DSL corpus.
+port: 4600
+hubRoot: .
+repos:
+  - { name: desk, path: . }
+model: gpt-5.4
+codexBin: codex
+initiativeBase: main
+sandbox:
+  auth: chatgpt
+runners:
+  desk:
+    execution: local
+    worktree: .
+    command: [npm, run, test:spec]
+    watch: [server, scripts, features]
+    applyAllowedTools: [Read, Grep, Glob, Edit, Write, "Bash(npm run test:spec:*)", "Bash(npm run typecheck:*)", "Bash(git status:*)", "Bash(git diff:*)", "Bash(git add:*)", "Bash(git commit:*)"]

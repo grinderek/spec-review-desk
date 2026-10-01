@@ -50,6 +50,24 @@ async function main(): Promise<void> {
   const { hub, repo } = await makeRepo()
   cleanupDirs.push(hub)
   await writeFiles(repo, changeFiles('add-decision-flow'))
+  await writeFiles(repo, {
+    'openspec/changes/add-dsl-review/.openspec.yaml': 'schema: behavior-driven\n',
+    'openspec/changes/add-dsl-review/specs/review/spec.md': '#### Scenario: Review a YAML contract\n',
+    'openspec/changes/add-dsl-review/features/review.desk.yaml': `version: 1
+feature: DSL browser review
+scenarios:
+  - id: review-yaml
+    scenario: Review a YAML contract
+    given:
+      - ScenarioDiscovered: {}
+    when:
+      ApproveScenario: { key: subject }
+    then:
+      events:
+        - ScenarioApproved: { key: subject }
+      response: { status: 200 }
+`,
+  })
   sh(repo, 'git', ['add', '-A'])
   sh(repo, 'git', ['commit', '-q', '-m', 'a second change for the decisions flow'])
   // The initiative flow branches its worktree from a base without the review fixtures' changes, so

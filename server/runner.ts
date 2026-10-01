@@ -11,6 +11,7 @@ export type Exec = (cmd: string, args: readonly string[], opts: RunOptions) => P
 
 export interface RunnerState {
   profile: string
+  execution?: 'compose' | 'local'
   worktreePath: string
   up: boolean | null
   running: boolean
@@ -47,7 +48,7 @@ export class RunnerService {
 
   constructor(private readonly deps: RunnerDeps) {
     for (const p of deps.profiles) {
-      this.#states.set(p.worktreePath, { profile: p.name, worktreePath: p.worktreePath, up: null, running: false, queued: false, lastRunAt: null, result: null, error: null })
+      this.#states.set(p.worktreePath, { profile: p.name, execution: p.execution ?? 'compose', worktreePath: p.worktreePath, up: null, running: false, queued: false, lastRunAt: null, result: null, error: null })
     }
   }
 
@@ -65,7 +66,8 @@ export class RunnerService {
 
   async refreshUp(worktreePath: string): Promise<boolean> {
     const p = this.#require(worktreePath)
-    const r = await this.#exec('docker', this.#compose(p, ['ps', '--status', 'running', '-q', p.compose.service]), { cwd: worktreePath, allowFailure: true, timeoutMs: 30_000 })
+    if (p.execution === 'local') { this.#set(worktreePath, { up: true }); return true }
+    const r = await this.#exec('docker', this.#compose(p, ['ps', '--status', 'running', '-q', p.compose!.service]), { cwd: worktreePath, allowFailure: true, timeoutMs: 30_000 })
     const up = r.code === 0 && r.stdout.trim() !== ''
     this.#set(worktreePath, { up })
     return up
@@ -73,7 +75,8 @@ export class RunnerService {
 
   async start(worktreePath: string): Promise<void> {
     const p = this.#require(worktreePath)
-    await this.#exec('docker', this.#compose(p, ['up', '-d', p.compose.service]), { cwd: worktreePath, timeoutMs: 600_000 })
+    if (p.execution === 'local') { await this.refreshUp(worktreePath); return }
+    await this.#exec('docker', this.#compose(p, ['up', '-d', p.compose!.service]), { cwd: worktreePath, timeoutMs: 600_000 })
     await this.refreshUp(worktreePath)
   }
 
@@ -145,7 +148,7 @@ export class RunnerService {
     await ensureExcluded(worktreePath).catch(() => undefined)
     await mkdir(path.join(worktreePath, '.spec-review'), { recursive: true })
     await rm(path.join(worktreePath, RESULT_FILE), { force: true })
-    const r = await this.#exec('docker', this.#compose(p, ['exec', '-T', p.compose.service, ...p.command]), {
+    const r = await this.#exec(p.execution === 'local' ? p.command[0]! : 'docker', p.execution === 'local' ? p.command.slice(1) : this.#compose(p, ['exec', '-T', p.compose!.service, ...p.command]), {
       cwd: worktreePath,
       allowFailure: true,
       timeoutMs: this.deps.runTimeoutMs ?? 900_000,
@@ -155,7 +158,7 @@ export class RunnerService {
       this.#set(worktreePath, { result, error: null, lastRunAt: (this.deps.now ?? (() => new Date()))().toISOString() })
     } catch {
       const tail = (r.stderr || r.stdout).trim().split('\n').slice(-5).join('\n')
-      this.#set(worktreePath, { error: `cucumber produced no result (exit ${r.code ?? 'none'}): ${tail}` })
+      this.#set(worktreePath, { error: `corpus runner produced no result (exit ${r.code ?? 'none'}): ${tail}` })
     }
   }
 
@@ -164,6 +167,7 @@ export class RunnerService {
   }
 
   #compose(p: RunnerProfile, args: string[]): string[] {
+    if (!p.compose) throw new Error('compose settings are missing')
     return ['compose', '-p', p.compose.project, ...p.compose.files.flatMap((f) => ['-f', f]), ...args]
   }
 

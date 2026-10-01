@@ -14,17 +14,17 @@ function RunnerStat({ id, runner, docker }: { id: ChangeId; runner: RunnerState 
   else if (runner.up === false) value = (
     <>
       <span className="pill r-failed">runner off</span>
-      <button className="btn" disabled={!docker} onClick={() => void act(() => api.startRunner(id.wt), 'Starting the container…')}>Start</button>
+      <button className="btn" disabled={!docker && runner?.execution !== 'local'} onClick={() => void act(() => api.startRunner(id.wt), 'Starting the container…')}>Start</button>
     </>
   )
   else if (runner.result) value = (
     <>
       <span className={`dot ${runner.result.totals.failed ? 'bad' : 'ok'}`} />
       {runner.result.totals.passed} green · {runner.result.totals.failed} red{runner.result.totals.other ? ` · ${runner.result.totals.other} other` : ''}
-      <button className="btn" disabled={!docker} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
+      <button className="btn" disabled={!docker && runner?.execution !== 'local'} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
     </>
   )
-  else value = <button className="btn" disabled={!docker} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
+  else value = <button className="btn" disabled={!docker && runner?.execution !== 'local'} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
   return (
     <div>
       <div className="k">Corpus run{runner?.lastRunAt ? ` · ${new Date(runner.lastRunAt).toLocaleTimeString()}` : ''}</div>

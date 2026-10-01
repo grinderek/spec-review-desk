@@ -7,8 +7,11 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,ui \"tsx watch server/main.ts --config config.yaml --dev\" \"vite --config ui/vite.config.ts\"",
+    "desk": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.desk.yaml",
     "start": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.yaml",
-    "test": "vitest run",
+    "test": "npm run test:spec && npm run test:legacy",
+    "test:spec": "tsx scripts/run-desk-specs.mts",
+    "test:legacy": "vitest run",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "e2e": "vite build --config ui/vite.config.ts && playwright test",

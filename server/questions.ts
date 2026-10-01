@@ -13,7 +13,7 @@ import {
   AGENT_REPLY_SCHEMA_ARG, type AgentKind, type AgentReply, parseReply, type ReplyContext, retryPrompt, validateReply,
 } from './protocol.ts'
 import {
-  appendMessage, type DecisionRecord, findThread, type Message, nowIso, type Patch, REVIEW_FILE, setAgentSession, setThreadStatus, type Thread,
+  appendMessage, type DecisionRecord, findThread, type Message, nowIso, type Patch, REVIEW_EVENTS_FILE, REVIEW_FILE, setAgentSession, setThreadStatus, type Thread,
   updateReview,
 } from './review-store.ts'
 
@@ -32,6 +32,8 @@ export async function vetPatch(cwd: string, relDir: string, diff: string): Promi
   if (contentError) return { diff, state: 'stale', commit: null, error: contentError, files: patchPaths(diff) }
   const files = await touchedPaths(cwd, diff)
   const reviewFile = `${relDir}/${REVIEW_FILE}`
+  const reviewEvents = `${relDir}/${REVIEW_EVENTS_FILE}`
+  if (files.includes(reviewEvents)) return { diff, state: 'stale', commit: null, error: `a patch may not touch ${reviewEvents} — it is written by the Desk itself`, files }
   if (files.includes(reviewFile)) {
     return { diff, state: 'stale', commit: null, error: `a patch may not touch ${reviewFile} — it is written by the apply route itself`, files }
   }

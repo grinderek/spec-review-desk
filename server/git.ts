@@ -42,14 +42,26 @@ export async function headSha(cwd: string): Promise<string> {
   return (await git(cwd, ['rev-parse', '--short', 'HEAD'])).trim()
 }
 
+async function withReviewJournals(cwd: string, files: readonly string[]): Promise<string[]> {
+  const journals: string[] = []
+  for (const file of files.filter((f) => f.endsWith('/review.yaml'))) {
+    const journal = file.slice(0, -'review.yaml'.length) + 'review.events.jsonl'
+    try { await readFile(path.join(cwd, journal)); journals.push(journal) } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    }
+  }
+  return [...new Set([...files, ...journals])]
+}
+
 export async function commitFiles(cwd: string, files: readonly string[], message: string): Promise<string> {
+  files = await withReviewJournals(cwd, files)
   await git(cwd, ['add', '--', ...files])
   await git(cwd, ['commit', '-q', '-F', '-', '--', ...files], message)
   return headSha(cwd)
 }
 
 export async function resetStaged(cwd: string, files: readonly string[]): Promise<void> {
-  await git(cwd, ['reset', '-q', '--', ...files])
+  await git(cwd, ['reset', '-q', '--', ...await withReviewJournals(cwd, files)])
 }
 
 export async function showFile(cwd: string, rev: string, relPath: string): Promise<string | null> {

@@ -50,3 +50,11 @@ Rules:
   recommendation — never into prose. After `done` you may scope a decision to a scenario key
   (`features/<file>.feature::<title>`) of the change you wrote.
 - Stay inside the slice scope; later slices are not yours.
+
+Desk DSL repositories:
+- If repository instructions select Desk DSL, write features/*.desk.yaml instead of Gherkin and
+  omit NEW_STEPS.md. Reuse the version-1 corpus contracts; they contain version, feature and
+  scenarios (stable id, scenario title, given event list, exactly one when command, then.events
+  and then.response). No arbitrary fields or duplicate ids. Existing Gherkin repositories keep
+  their existing format. The contract, not a phrase catalog, is normative for Desk DSL.
+- Never create review.events.jsonl: the Desk writes scenario review history.

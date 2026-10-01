@@ -137,6 +137,18 @@ State lives in `review.yaml`, `initiative.yaml` and `decisions.md`, next to the 
 Run logs and temporary files live under gitignored `.spec-review/`. A patch commit SHA is written
 back to `review.yaml` after that commit, so it can remain modified until the next decision commits it.
 
+## Developing the Desk with Desk DSL
+
+The experimental YAML contract corpus in [features/](features/) runs through real HTTP handlers
+and scenario-review event history. `npm run test:spec` executes it without an LLM; `npm run desk`
+opens this repository in the Desk using `config.desk.yaml` and its local runner. Proposed contracts
+are in `openspec/changes/try-desk-dsl` for owner review. The UI shows YAML, event/command summaries,
+hash-bound approvals and verification results. Gherkin projects remain supported.
+
+See [the language and migration boundary](docs/method/desk-dsl.md). Scenario review state is now
+replayed from `review.events.jsonl`; other modules still use their existing state. `npm test` runs
+both the DSL corpus and the remaining legacy checks. Only checks replaced by the corpus are removed.
+
 ## Checks
 
 ```sh

@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { z } from 'zod'
@@ -113,7 +113,7 @@ export const emptyReview = (): ReviewDoc => ReviewSchema.parse({ version: 1 })
 export const newId = (prefix: string): string => `${prefix}_${randomBytes(4).toString('hex')}`
 export const nowIso = (date: Date = new Date()): string => date.toISOString()
 
-export async function readReview(changeDir: string): Promise<ReviewDoc> {
+async function readReviewSnapshot(changeDir: string): Promise<ReviewDoc> {
   const file = path.join(changeDir, REVIEW_FILE)
   let text: string
   try {
@@ -135,11 +135,59 @@ export async function readReview(changeDir: string): Promise<ReviewDoc> {
   return result.data
 }
 
-export async function writeReview(changeDir: string, doc: ReviewDoc): Promise<void> {
-  const file = path.join(changeDir, REVIEW_FILE)
+export const REVIEW_EVENTS_FILE = 'review.events.jsonl'
+const ReviewEventSchema = z.discriminatedUnion('type', [
+  z.object({ version: z.literal(1), type: z.literal('ScenarioApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('ScenarioChangesRequested'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('changes_requested') }) }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('ScenarioReviewRemoved'), key: z.string() }).strict(),
+])
+export type ReviewEvent = z.infer<typeof ReviewEventSchema>
+export async function readReviewEvents(changeDir: string): Promise<ReviewEvent[]> {
+  const file = path.join(changeDir, REVIEW_EVENTS_FILE)
+  let text: string
+  try { text = await readFile(file, 'utf8') } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  try { return text.split('\n').filter((line) => line.trim()).map((line) => ReviewEventSchema.parse(JSON.parse(line))) }
+  catch (error) { throw new ReviewFileError(file, [error instanceof Error ? error.message : String(error)]) }
+}
+export function replayScenarioReviews(events: readonly ReviewEvent[]): ReviewDoc['scenarios'] {
+  const scenarios: ReviewDoc['scenarios'] = {}
+  for (const event of events) {
+    if (event.type === 'ScenarioReviewRemoved') delete scenarios[event.key]
+    else scenarios[event.key] = event.entry
+  }
+  return scenarios
+}
+export async function readReview(changeDir: string): Promise<ReviewDoc> {
+  const doc = await readReviewSnapshot(changeDir)
+  const events = await readReviewEvents(changeDir)
+  return events.length ? { ...doc, scenarios: replayScenarioReviews(events) } : doc
+}
+async function replaceFile(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
-  await writeFile(tmp, stringify(ReviewSchema.parse(doc), { lineWidth: 0 }))
-  await rename(tmp, file)
+  try { await writeFile(tmp, text); await rename(tmp, file) }
+  finally { await rm(tmp, { force: true }) }
+}
+export async function writeReview(changeDir: string, doc: ReviewDoc): Promise<void> {
+  const next = ReviewSchema.parse(doc)
+  const previous = await readReview(changeDir)
+  const history = await readReviewEvents(changeDir)
+  const eventFor = (key: string, entry: Entry): ReviewEvent => ReviewEventSchema.parse({ version: 1, type: entry.status === 'approved' ? 'ScenarioApproved' : 'ScenarioChangesRequested', key, entry })
+  const events: ReviewEvent[] = []
+  for (const key of new Set([...Object.keys(previous.scenarios), ...Object.keys(next.scenarios)])) {
+    if (JSON.stringify(previous.scenarios[key]) === JSON.stringify(next.scenarios[key])) continue
+    const entry = next.scenarios[key]
+    events.push(entry ? eventFor(key, entry) : { version: 1, type: 'ScenarioReviewRemoved', key })
+  }
+  if (events.length) {
+    // Existing YAML approvals enter history before the first event-backed update.
+    const baseline = history.length ? [] : Object.entries(previous.scenarios).map(([key, entry]) => eventFor(key, entry))
+    await replaceFile(path.join(changeDir, REVIEW_EVENTS_FILE), [...history, ...baseline, ...events].map((event) => JSON.stringify(event)).join('\n') + '\n')
+  }
+  // The journal commits first. If projection writing fails, replay retains scenario approvals.
+  await replaceFile(path.join(changeDir, REVIEW_FILE), stringify(next, { lineWidth: 0 }))
 }
 
 const locks = new Map<string, Promise<unknown>>()

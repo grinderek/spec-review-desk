@@ -27,6 +27,7 @@ export function parseRunMessages(ndjson: string): CorpusRun {
   const started = new Map<string, string>()
   const results = new Map<string, { status: RunStatus; failure: ScenarioRun['failure'] }>()
   let finishedAt: string | null = null
+  const deskScenarios: Record<string, ScenarioRun> = {}
 
   for (const line of ndjson.split('\n')) {
     if (!line.trim()) continue
@@ -36,7 +37,11 @@ export function parseRunMessages(ndjson: string): CorpusRun {
     } catch {
       continue
     }
-    if (envelope.gherkinDocument) {
+    if (envelope.deskScenarioResult) {
+      const r = envelope.deskScenarioResult
+      deskScenarios[String(r.key)] = { status: toStatus(r.status), failure: r.message ? { step: 'contract', message: String(r.message) } : null, rows: null }
+    } else if (envelope.deskRunFinished) { finishedAt = String(envelope.deskRunFinished.at)
+    } else if (envelope.gherkinDocument) {
       const doc = envelope.gherkinDocument
       const children: any[] = doc.feature?.children ?? []
       const scenarios = children.flatMap((c) => (c.rule ? c.rule.children : [c])).flatMap((c: any) => (c.scenario ? [c.scenario] : []))
@@ -86,6 +91,12 @@ export function parseRunMessages(ndjson: string): CorpusRun {
       failure: previous?.failure ?? result.failure,
       rows,
     }
+  }
+  for (const [key, scenario] of Object.entries(deskScenarios)) {
+    scenarios[key] = scenario
+    if (scenario.status === 'passed') totals.passed++
+    else if (scenario.status === 'failed') totals.failed++
+    else totals.other++
   }
   return { scenarios, totals, finishedAt }
 }

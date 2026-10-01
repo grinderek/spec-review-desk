@@ -36,3 +36,8 @@ Your final reply is one JSON object; its schema is enforced:
 - `status`: `done` when the change is implemented and green; `needs_owner` when you must stop for
   a decision only the owner can make (at least one decision with `blocking: true`); `failed` when
   you cannot continue for another reason (explain it in `answer`).
+
+For a repository using Desk DSL, approved features/*.desk.yaml contracts are normative instead of
+Gherkin. Preserve their meaning and stable ids; implement command/event adapters and run the DSL
+corpus (npm run test:spec in Desk), plus typecheck and remaining legacy checks. Never forge or edit
+review.events.jsonl or review.yaml to bypass owner approvals.

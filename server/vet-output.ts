@@ -1,6 +1,7 @@
 import { cp, lstat, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { deskFeature } from './desk-dsl.ts'
 import { parse, YAMLParseError } from 'yaml'
 import { type Catalog, emptyCatalog, makeClassifier, parseCatalog } from './catalog.ts'
 import { FeatureParseError, parseFeature } from './gherkin.ts'
@@ -13,7 +14,7 @@ export const MAX_FILES = 200
 export const MAX_BYTES = 5 * 1024 * 1024
 const EXTENSIONS = ['.md', '.feature', '.yaml']
 // The Desk writes these itself (review state, owner decisions); an author never may.
-const DESK_FILES = ['review.yaml', 'decisions.md']
+const DESK_FILES = ['review.yaml', 'review.events.jsonl', 'decisions.md']
 
 export interface VetInput { out: string; change: string; worktree: string; openspecBin: string; token: string | null }
 export interface VetResult { problems: string[]; files: string[]; scenarioKeys: string[] }
@@ -122,9 +123,10 @@ async function contentProblems(dir: string, files: readonly string[], input: Vet
   const approved = await catalogAt(path.join(input.worktree, 'features', 'STEPS.md'))
   const proposed = files.includes('features/NEW_STEPS.md') ? await catalogAt(path.join(dir, 'features', 'NEW_STEPS.md')) : emptyCatalog()
   const classify = makeClassifier(approved, proposed)
-  for (const rel of files.filter((f) => f.startsWith('features/') && f.endsWith('.feature'))) {
+  for (const rel of files.filter((f) => f.startsWith('features/') && (f.endsWith('.feature') || f.endsWith('.desk.yaml')))) {
     try {
-      const feature = parseFeature(await readFile(path.join(dir, rel), 'utf8'), rel, classify)
+      const source = await readFile(path.join(dir, rel), 'utf8')
+      const feature = rel.endsWith('.desk.yaml') ? deskFeature(source, rel) : parseFeature(source, rel, classify)
       keys.push(...feature.scenarios.map((s) => s.key))
       titles.push(...feature.scenarios.map((s) => s.title))
       for (const s of feature.scenarios) problems.push(...s.shape.warnings.map((w) => `${rel}: ${s.title}: ${w}`))

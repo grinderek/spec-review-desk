@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
-  addThread, appendMessage, type DecisionRecord, effectiveStatus, emptyReview, moveEntry, orphanKeys, readReview, recordApproval,
+  addThread, appendMessage, type DecisionRecord, emptyReview, moveEntry, orphanKeys, readReview, recordApproval,
   REVIEW_FILE, ReviewFileError, setEntry, setThreadStatus, type Thread, updatePatch, updateReview, writeReview,
 } from './review-store.ts'
 
@@ -46,19 +46,6 @@ describe('review.yaml IO', () => {
     const d = await dir()
     await Promise.all(Array.from({ length: 10 }, (_, i) => updateReview(d, (doc) => setEntry(doc, 'scenarios', `k${i}`, approved))))
     expect(Object.keys((await readReview(d)).scenarios)).toHaveLength(10)
-  })
-})
-
-describe('effectiveStatus', () => {
-  it('is pending without an entry', () => {
-    expect(effectiveStatus(undefined, 'sha256:a')).toEqual({ status: 'pending', changedSinceApproval: false, approvedCommit: null })
-  })
-  it('keeps the status while the hash matches', () => {
-    expect(effectiveStatus(approved, 'sha256:a').status).toBe('approved')
-    expect(effectiveStatus({ ...approved, status: 'changes_requested' }, 'sha256:a').status).toBe('changes_requested')
-  })
-  it('falls back to pending, flagged, when the text changed after approval', () => {
-    expect(effectiveStatus(approved, 'sha256:b')).toEqual({ status: 'pending', changedSinceApproval: true, approvedCommit: 'abc1234' })
   })
 })
 

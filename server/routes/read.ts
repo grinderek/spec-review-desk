@@ -1,6 +1,7 @@
 import type { Hono } from 'hono'
 import type { AppContext } from '../app.ts'
 import { findScenario, loadChangeView, summarize } from '../change-view.ts'
+import { deskFeature } from '../desk-dsl.ts'
 import { discover } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { parseFeature, unclassified } from '../gherkin.ts'
@@ -57,7 +58,7 @@ export function registerReadRoutes(app: Hono, ctx: AppContext, capabilities: Cap
     let before: string | null = null
     if (previous) {
       try {
-        before = parseFeature(previous, scenario.file, unclassified).scenarios.find((s) => s.key === key)?.source ?? null
+        before = (scenario.file.endsWith('.desk.yaml') ? deskFeature(previous, scenario.file) : parseFeature(previous, scenario.file, unclassified)).scenarios.find((s) => s.key === key)?.source ?? null
       } catch {
         before = null
       }
