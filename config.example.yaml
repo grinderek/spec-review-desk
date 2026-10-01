@@ -8,6 +8,8 @@ initiativeBase: main
 commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"
 questionTimeoutMinutes: 10
 sandbox:
+  auth: chatgpt
+  authVolume: spec-review-codex-auth
   envFile: .env
   timeoutMinutes: 30
 # Configure runners for your repository's Cucumber container and allowed Apply commands.

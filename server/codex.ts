@@ -66,6 +66,7 @@ export function codexArgs(spec: CodexRunSpec): string[] {
     '-c', 'features.shell_tool=false', '-c', 'features.unified_exec=false',
     '-c', 'features.multi_agent=false', '-c', 'features.view_image=false', '-c', 'features.goals=false', '-c', 'features.plugins=false', '-c', 'features.apps=false',
     '-c', 'web_search="disabled"',
+    '-c', 'cli_auth_credentials_store="file"',
     '-c', `mcp_servers=${toml({ desk })}`,
     '-c', `developer_instructions=${toml('Use the desk MCP tools for file access and permitted commands. Native shell tools are disabled. Do not use apply_patch; use desk.write_file when available.\n' + (spec.appendSystemPrompt ?? ''))}`,
     ...(spec.jsonSchema ? ['--output-schema', spec.schemaFile ?? path.join(spec.cwd, '.spec-review', 'reply-schema.json')] : []),

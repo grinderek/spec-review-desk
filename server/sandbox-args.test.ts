@@ -21,7 +21,7 @@ const pairs = (args: readonly string[], flag: string): string[] => args.flatMap(
 describe('names', () => {
   it('derives per-run container, proxy and network names (ruling 1)', () => {
     expect(CODEX_VERSION).toBe('0.159.3')
-    expect(AGENT_IMAGE).toBe('spec-review-codex:0.159.3')
+    expect(AGENT_IMAGE).toBe('spec-review-codex:0.159.3-auth1')
     expect([containerName('r_1'), egressName('r_1'), networkName('r_1')]).toEqual(['sr-r_1', 'sr-egress-r_1', 'sr-net-r_1'])
     expect(PROXY_URL('r_1')).toBe('http://sr-egress-r_1:8888')
     // Review fix 1: each proxy's way out is its own per-run bridge, never the shared default bridge.

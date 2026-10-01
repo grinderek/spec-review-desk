@@ -3,7 +3,9 @@ import type { RunKind } from './initiative-store.ts'
 // Spec B §5: every docker argv the Desk runs, built from validated values only (never a shell).
 // Codex runs as uid 10001 behind tinyproxy, on an internal network with a read-only root.
 export const CODEX_VERSION = '0.159.3'
-export const AGENT_IMAGE = `spec-review-codex:${CODEX_VERSION}`
+export const AGENT_IMAGE = `spec-review-codex:${CODEX_VERSION}-auth1`
+export const AUTH_VOLUME = 'spec-review-codex-auth'
+export const AUTH_STORE = '/opt/spec-review-auth'
 // :2 — the HTTPS-only proxy config (FilterURLs On, host:443 filter lines; review fix 1).
 export const EGRESS_IMAGE = 'spec-review-egress:2'
 // The research browser (spike 2026-09-28): the Playwright MCP server over HTTP in the official
@@ -43,7 +45,8 @@ export const BROWSER_MCP_URL = (runId: string): string => `http://${browserName(
 export interface AgentContainer {
   runId: string
   image: string
-  envFile: string
+  envFile?: string
+  authVolume?: string
   schemaFile?: string
   room: string
   out: string
@@ -67,7 +70,8 @@ export function agentRunArgs(c: AgentContainer): string[] {
     '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
     '--pids-limit', '256', '--memory', '2g', '--cpus', '2',
     '--user', AGENT_USER,
-    '--env-file', c.envFile,
+    ...(c.envFile ? ['--env-file', c.envFile] : []),
+    ...(c.authVolume ? ['--mount', `type=volume,src=${c.authVolume},dst=${AUTH_STORE}`, '-e', 'DESK_CHATGPT_AUTH=1'] : []),
     '-e', `HTTPS_PROXY=${PROXY_URL(c.runId)}`,
     '-e', `HTTP_PROXY=${PROXY_URL(c.runId)}`,
     '-e', `https_proxy=${PROXY_URL(c.runId)}`,

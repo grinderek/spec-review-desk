@@ -32,16 +32,18 @@ const ConfigSchema = z.object({
       image: z.string().min(1).default(AGENT_IMAGE),
       egressImage: z.string().min(1).default(EGRESS_IMAGE),
       browserImage: z.string().min(1).default(BROWSER_IMAGE),
+      auth: z.enum(['chatgpt', 'api']).default('chatgpt'),
+      authVolume: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/).default('spec-review-codex-auth'),
       envFile: z.string().min(1).default('.env'),
       timeoutMinutes: z.number().positive().default(30),
       dockerBin: z.string().min(1).default('docker'),
     })
-    .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, browserImage: BROWSER_IMAGE, envFile: '.env', timeoutMinutes: 30, dockerBin: 'docker' }),
+    .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, browserImage: BROWSER_IMAGE, envFile: '.env', auth: 'chatgpt', authVolume: 'spec-review-codex-auth', timeoutMinutes: 30, dockerBin: 'docker' }),
   openspecBin: z.string().min(1).default('openspec'),
   initiativeBase: z.string().min(1).default('staging'),
 })
 
-export interface SandboxConfig { image: string; egressImage: string; browserImage: string; envFile: string; timeoutMs: number; dockerBin: string }
+export interface SandboxConfig { auth?: 'chatgpt' | 'api'; authVolume?: string; image: string; egressImage: string; browserImage: string; envFile: string; timeoutMs: number; dockerBin: string }
 
 export interface RunnerProfile {
   name: string
@@ -96,6 +98,8 @@ export async function loadConfig(file: string): Promise<Config> {
       applyAllowedTools: r.applyAllowedTools,
     })),
     sandbox: {
+      auth: c.sandbox.auth,
+      authVolume: c.sandbox.authVolume,
       image: c.sandbox.image,
       egressImage: c.sandbox.egressImage,
       browserImage: c.sandbox.browserImage,

@@ -3,16 +3,19 @@
 // moved, committed or shown.
 const SK_ANT = /sk-ant-[A-Za-z0-9_-]{20,}/g
 const SK_OPENAI = /sk-(?!ant-)(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}/g
-const KEYS = new RegExp(`${SK_ANT.source}|${SK_OPENAI.source}`, 'g')
+// Also mask JWT prefixes cut off mid-stream; credentials never reach scoped file tools.
+const JWT = /eyJ[A-Za-z0-9_-]{12,}(?:\.[A-Za-z0-9_-]+){0,2}/g
+const KEYS = new RegExp(`${SK_ANT.source}|${SK_OPENAI.source}|${JWT.source}`, 'g')
 
 export const ROTATE_HINT =
-  'A secret appeared in the agent output. Nothing was moved or committed and the log was redacted. Rotate the OpenAI API key and update OPENAI_API_KEY in the .env next to config.yaml.'
+  'A secret appeared in the agent output. Nothing was moved or committed and the log was redacted. For ChatGPT run npm run agent:logout and npm run agent:login; for API mode rotate the key and update OPENAI_API_KEY in .env.'
 
 export function findSecrets(text: string, token: string | null): string[] {
   return [
     ...(token && text.includes(token) ? ['the OAuth token'] : []),
     ...(new RegExp(SK_ANT.source).test(text) ? ['an sk-ant- key'] : []),
     ...(new RegExp(SK_OPENAI.source).test(text) ? ['an OpenAI API key'] : []),
+    ...(new RegExp(JWT.source).test(text) ? ['a JWT credential'] : []),
   ]
 }
 
@@ -165,6 +168,8 @@ export class SecretHoldback {
     if (ranges.some((r) => r.secret)) this.#sawSecret = true
     if (cut <= 0) return ''
     for (const range of ranges) if (range.start < cut && range.end > cut) cut = range.start
+    // Keep an unterminated JWT until its delimiter arrives, even beyond the normal window.
+    for (const match of this.#raw.matchAll(JWT)) if (match.index + match[0].length === this.#raw.length) cut = Math.min(cut, match.index)
     return this.#release(cut, ranges.filter((r) => r.end <= cut))
   }
 

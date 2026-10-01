@@ -13,9 +13,9 @@ describe('sandbox images (spec B §5)', () => {
     expect(dockerfile).toContain('--uid 10001')
     expect(dockerfile).toContain('USER agent')
     expect(dockerfile).not.toMatch(/apk add|\bgit\b/)
-    // The only system package: poppler-utils, which the CLI's Read tool needs to render PDF inputs.
+    // PDF extraction, TLS trust and the OS lock for refreshable subscription credentials.
     const packages = [...dockerfile.matchAll(/apt-get install -y --no-install-recommends ([^\\\n]+)/g)].map((m) => m[1]!.trim())
-    expect(packages).toEqual(['poppler-utils ca-certificates'])
+    expect(packages).toEqual(['poppler-utils ca-certificates util-linux'])
   })
 
   it('denies every host the filter does not list, and everything but HTTPS to port 443 (review fix 1)', async () => {

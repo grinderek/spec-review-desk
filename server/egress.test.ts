@@ -58,3 +58,9 @@ describe('approvedDomains', () => {
     expect(approvedDomains(requested, null)).toEqual([])
   })
 })
+
+
+it('allows ChatGPT inference and refresh only on the agent proxy, even when requested as browser domains', () => {
+  expect(egressFilter([], 'chatgpt')).toBe('^chatgpt\\.com:443$\n^auth\\.openai\\.com:443$\n^www\\.bing\\.com:443$\n')
+  expect(browserFilter(['chatgpt.com', 'auth.openai.com', 'api.openai.com', 'www.bing.com', 'docs.stripe.com'])).toBe('^docs\\.stripe\\.com:443$\n')
+})

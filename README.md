@@ -77,13 +77,28 @@ this method, the corpus, schema and repository instructions from `AGENTS.md`.
 
 ```sh
 npm run agent:build
-cp .env.example .env
-# Set OPENAI_API_KEY in .env next to config.yaml. Never commit the key.
+npm run agent:login
+npm run agent:auth-status
 ```
 
-Reviewer and Apply use the host's Codex login (ChatGPT or API-key login). Docker initiative agents
-use an OpenAI API key from `.env`, passed privately to `codex exec` as `CODEX_API_KEY`. The host's
-ChatGPT credentials are not copied into containers. The key is neither logged nor served.
+Docker initiative agents use ChatGPT subscription authentication by default. `agent:login` prints a
+URL and device code: open the URL on your computer and sign in to the account whose plan includes
+Codex. No API key is needed in this mode; usage consumes that account's Codex allowance. Enable
+device-code login in your ChatGPT security settings if the login page requests it.
+
+Credentials live in the private Docker volume `spec-review-codex-auth`, owned by uid 10001, rather
+than in the project or the image. Each run has a separate Codex session directory and links its
+`auth.json` to the shared volume. The pinned CLI writes refreshed credentials through that link.
+An OS file lock serializes subscription agent sessions, including login/logout, to avoid concurrent
+refresh-token rotation. Waiting for this lock counts towards the run timeout. Stop active agents before logging out or changing accounts. Authentication
+commands accept `--config path/to/config.yaml` after `--` in the npm command. `npm run agent:logout`
+removes the container login. Host Reviewer and Apply still use the host's `codex login`; sign in to
+the same account there separately. Host history and credentials are never mounted into containers.
+
+For separately billed API usage, set `sandbox.auth: api` in config.yaml and put `OPENAI_API_KEY` in
+the gitignored `.env` next to it (`cp .env.example .env`). The key is passed privately to `codex exec`
+as `CODEX_API_KEY`. The application never silently falls back from a subscription to paid API usage.
+`sandbox.authVolume` selects a different named credential volume, for example for another account.
 
 Codex has its native shell, web search, apps and plugins disabled. A scoped stdio MCP server
 provides file reads, text search, PDF text and images. Reviewer, planner and research have no file
@@ -94,12 +109,12 @@ wget, ssh and scp stay denied even under a broader allowlist. Apply commands run
 this allowlist is a command boundary, not a Docker sandbox.
 
 Each initiative attempt runs as uid 10001 with a read-only root, resource limits and no Linux
-capabilities, on internal networks behind per-run HTTPS proxies. Only its room, output and Codex
-session store are mounted. The agent proxy permits `api.openai.com`, the search endpoint and approved
-read domains. The browser has a separate proxy/network and no key or host mounts. Its enabled MCP
+capabilities, on internal networks behind per-run HTTPS proxies. Its room, output, separate Codex session store and subscription credential volume are mounted.
+The agent proxy permits `chatgpt.com` and `auth.openai.com` in subscription mode (`api.openai.com`
+in API mode), the search endpoint and approved read domains. The browser has a separate proxy/network and no key or host mounts. Its enabled MCP
 tools are navigation, back, snapshot, click, wait and network requests. Teardown removes containers
 and networks after completion, failure, timeout or stop; a run waiting for its owner keeps its
-session for Resume. API keys and their fragments are redacted from logs and cause the run to fail.
+session for Resume. API keys and JWT credentials are redacted from logs and cause the run to fail.
 
 The browser image is required only for a read phase. Without it research can search and then wait
 for the owner to build the image. In a proxy environment, builds accept an optional BuildKit
@@ -113,7 +128,7 @@ files for questions. Finish or stop running Claude agents before switching runti
 initiative runs waiting for their owner should be restarted under Codex rather than resumed with
 an old Claude session ID.
 
-Set `codexBin: codex`, an available Codex `model`, and `OPENAI_API_KEY` for sandbox agents. Existing
+Set `codexBin: codex`, an available Codex `model`, rebuild the agent image and run `npm run agent:login`. Existing
 worktree paths in configuration need not move. New worktrees use `.codex/worktrees`. Room assembly
 prefers `AGENTS.md` and `.agents/rules/testing.md`, with legacy `CLAUDE.md` and
 `.claude/rules/testing.md` accepted as migration inputs.
@@ -131,6 +146,7 @@ npm run coverage
 npx playwright install chromium
 npm run e2e
 npm run smoke:codex
+npm run smoke:agent-auth # offline Docker credential/locking check; build the image first
 ```
 
 Vitest and Playwright use a fake Codex emitting native thread/item/turn JSONL, fake OpenSpec and

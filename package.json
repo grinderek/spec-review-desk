@@ -12,7 +12,11 @@
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "e2e": "vite build --config ui/vite.config.ts && playwright test",
-    "agent:build": "docker build -t spec-review-codex:0.159.3 --build-arg CODEX_VERSION=0.159.3 -f sandbox/agent/Dockerfile . && docker build -t spec-review-egress:2 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser",
+    "agent:login": "tsx scripts/agent-auth.mts login",
+    "agent:logout": "tsx scripts/agent-auth.mts logout",
+    "agent:auth-status": "tsx scripts/agent-auth.mts status",
+    "agent:build": "docker build -t spec-review-codex:0.159.3-auth1 --build-arg CODEX_VERSION=0.159.3 -f sandbox/agent/Dockerfile . && docker build -t spec-review-egress:2 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser",
+    "smoke:agent-auth": "tsx scripts/smoke-agent-auth.mts",
     "smoke:codex": "tsx scripts/smoke-codex.mts"
   },
   "dependencies": {

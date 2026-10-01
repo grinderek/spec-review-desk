@@ -172,3 +172,17 @@ it('detects and masks OpenAI API keys even when they differ from the configured 
   expect(redactSecrets(`Key: ${key}`, null)).toBe('Key: [REDACTED]')
   expect(redactSecrets(`Key: ${key}`, key)).toBe('Key: [REDACTED]')
 })
+
+
+describe('ChatGPT JWT credentials', () => {
+  it('redacts complete JWTs and long JWTs arriving in many chunks without knowing their values', () => {
+    const jwt = `eyJ${'a'.repeat(36)}.${'b'.repeat(800)}.${'c'.repeat(80)}`
+    expect(findSecrets(jwt, null)).toContain('a JWT credential')
+    const hold = new SecretHoldback(null)
+    let out = ''
+    for (const chunk of jwt.match(/.{1,7}/g) ?? []) out += hold.push(chunk)
+    out += hold.push(' finished') + hold.flush()
+    expect(out).toBe('[REDACTED] finished')
+    expect(hold.sawSecret).toBe(true)
+  })
+})

@@ -47,9 +47,11 @@ describe('sandbox settings (spec B §5)', () => {
     const file = await writeConfig('repos: [{ name: api, path: api }]')
     const config = await loadConfig(file)
     expect(config.sandbox).toEqual({
-      image: 'spec-review-codex:0.159.3',
+      image: 'spec-review-codex:0.159.3-auth1',
       egressImage: 'spec-review-egress:2',
       browserImage: 'spec-review-browser:0.0.80',
+      auth: 'chatgpt',
+      authVolume: 'spec-review-codex-auth',
       envFile: path.join(path.dirname(file), '.env'),
       timeoutMs: 30 * 60_000,
       dockerBin: 'docker',

@@ -12,6 +12,7 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 
 const args = process.argv.slice(2)
+if (args.includes('node') && args.includes('-e') && process.env.FAKE_DOCKER_NO_AUTH) process.exit(1)
 const state = process.env.FAKE_DOCKER_STATE ?? path.join(process.cwd(), '.fake-docker')
 mkdirSync(state, { recursive: true })
 const log = (entry) => {
