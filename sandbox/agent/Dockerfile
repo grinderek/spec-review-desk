@@ -1,17 +1,19 @@
-# Spec Review Desk agent sandbox (spec B §5): the claude CLI and nothing else — no version control, no extra
-# shell tools. Built by `npm run agent:build`; the tag carries the pinned CLI version.
-# The one package: poppler-utils, which the CLI's Read tool calls to render PDF pages (without it a PDF
-# input — e.g. the score spec — cannot be read). Agents have no Bash, so they cannot call it themselves.
-FROM node:22-slim
-ARG CLAUDE_CODE_VERSION=2.1.280
+# syntax=docker/dockerfile:1
+# Codex CLI with scoped Desk MCP tools. No model-generated shell commands are exposed.
+ARG NODE_IMAGE=node:24-slim
+FROM ${NODE_IMAGE}
+ARG CODEX_VERSION=0.159.3
 RUN apt-get update \
- && apt-get install -y --no-install-recommends poppler-utils \
+ && apt-get install -y --no-install-recommends poppler-utils ca-certificates \
  && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION} \
+RUN --mount=type=secret,id=proxy_ca \
+    if [ -f /run/secrets/proxy_ca ]; then export NODE_EXTRA_CA_CERTS=/run/secrets/proxy_ca; fi; \
+    npm install -g @openai/codex@${CODEX_VERSION} \
  && npm cache clean --force \
  && groupadd --gid 10001 agent \
  && useradd --uid 10001 --gid 10001 --home-dir /home/agent --create-home --shell /usr/sbin/nologin agent \
- && mkdir -p /work/in /work/out \
+ && mkdir -p /work/in /work/out /opt/spec-review \
  && chown agent:agent /work/out
+COPY server/desk-tools.mjs /opt/spec-review/desk-tools.mjs
 USER agent
 WORKDIR /work/in

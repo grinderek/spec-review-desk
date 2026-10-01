@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  AGENT_IMAGE, agentRunArgs, agentTools, BROWSER_IMAGE, BROWSER_MCP_URL, BROWSER_PROXY_URL, BROWSER_TOOLS, browserMcpConfig, browserName,
-  browserNetworkCreateArgs, browserNetworkName, browserProxyConnectArgs, browserProxyName, browserProxyRunArgs, browserRunArgs, CLAUDE_CODE_VERSION,
+  AGENT_IMAGE, agentRunArgs, agentTools, BROWSER_IMAGE, BROWSER_MCP_URL, BROWSER_PROXY_URL, BROWSER_TOOLS, browserName,
+  browserNetworkCreateArgs, browserNetworkName, browserProxyConnectArgs, browserProxyName, browserProxyRunArgs, browserRunArgs, CODEX_VERSION,
   browserOutNetworkCreateArgs, browserOutNetworkName, cleanupArgs, containerName, EGRESS_IMAGE, egressName, egressRunArgs, networkConnectArgs,
   networkCreateArgs, networkName, outNetworkCreateArgs, outNetworkName, PLAYWRIGHT_MCP_VERSION, PROXY_URL, teardownArgs,
 } from './sandbox-args.ts'
@@ -14,14 +14,14 @@ const container = {
   room: '/w/.spec-review/runs/r_0000abcd/room',
   out: '/w/.spec-review/runs/r_0000abcd/out',
   sessions: '/w/.spec-review/runs/r_0000abcd/sessions',
-  claudeArgs: ['-p', '--model', 'opus'],
+  codexArgs: ['-p', '--model', 'gpt-5.4'],
 }
 const pairs = (args: readonly string[], flag: string): string[] => args.flatMap((a, i) => (a === flag ? [args[i + 1]!] : []))
 
 describe('names', () => {
   it('derives per-run container, proxy and network names (ruling 1)', () => {
-    expect(CLAUDE_CODE_VERSION).toBe('2.1.280')
-    expect(AGENT_IMAGE).toBe('spec-review-agent:2.1.280')
+    expect(CODEX_VERSION).toBe('0.159.3')
+    expect(AGENT_IMAGE).toBe('spec-review-codex:0.159.3')
     expect([containerName('r_1'), egressName('r_1'), networkName('r_1')]).toEqual(['sr-r_1', 'sr-egress-r_1', 'sr-net-r_1'])
     expect(PROXY_URL('r_1')).toBe('http://sr-egress-r_1:8888')
     // Review fix 1: each proxy's way out is its own per-run bridge, never the shared default bridge.
@@ -38,7 +38,6 @@ describe('names', () => {
     // Controller ruling 2: the browser has its own proxy on its own internal network.
     expect([browserProxyName('r_1'), browserNetworkName('r_1')]).toEqual(['sr-bproxy-r_1', 'sr-bnet-r_1'])
     expect(BROWSER_PROXY_URL('r_1')).toBe('http://sr-bproxy-r_1:8888')
-    expect(JSON.parse(browserMcpConfig('r_1'))).toEqual({ mcpServers: { browser: { type: 'http', url: 'http://sr-browser-r_1:8931/mcp' } } })
   })
 })
 
@@ -53,7 +52,7 @@ describe('real run ids (review fix 2)', () => {
     expect(new URL(BROWSER_PROXY_URL(id)).host).toBe(`sr-bproxy-${id}:8888`)
     expect(new URL(PROXY_URL(id)).host).toBe(`sr-egress-${id}:8888`)
     expect(agentRunArgs({ ...container, runId: id, browser: true })).toEqual(
-      expect.arrayContaining([`NO_PROXY=sr-browser-${id}`, `--mcp-config=${browserMcpConfig(id)}`]),
+      expect.arrayContaining([`NO_PROXY=sr-browser-${id}`, `mcp_servers.browser.url="${BROWSER_MCP_URL(id)}"`]),
     )
     expect(browserRunArgs(id, BROWSER_IMAGE)).toEqual(
       expect.arrayContaining(['--allowed-hosts', `sr-browser-${id}:8931`, '--proxy-server', `http://sr-bproxy-${id}:8888`]),
@@ -82,26 +81,29 @@ describe('agentRunArgs', () => {
     expect(pairs(args, '-e')).toEqual([
       'HTTPS_PROXY=http://sr-egress-r_0000abcd:8888',
       'HTTP_PROXY=http://sr-egress-r_0000abcd:8888',
-      'DISABLE_TELEMETRY=1',
-      'DISABLE_ERROR_REPORTING=1',
-      'DISABLE_AUTOUPDATER=1',
-      'CLAUDE_CONFIG_DIR=/home/agent/.claude',
+      'https_proxy=http://sr-egress-r_0000abcd:8888',
+      'http_proxy=http://sr-egress-r_0000abcd:8888',
+      'NO_PROXY=',
+      'no_proxy=',
+      'CODEX_HOME=/home/agent/.codex',
+      'NODE_USE_ENV_PROXY=1',
     ])
-    expect(args.join(' ')).not.toMatch(/CLAUDE_CODE_OAUTH_TOKEN|-v \/var\/run\/docker\.sock/)
+    expect(args.join(' ')).not.toMatch(/OPENAI_API_KEY|-v \/var\/run\/docker\.sock/)
   })
 
   it('mounts exactly the room read-only, the output and the session store', () => {
     expect(pairs(args, '-v')).toEqual([
       `${container.room}:/work/in:ro`,
       `${container.out}:/work/out:rw`,
-      `${container.sessions}:/home/agent/.claude:rw`,
+      `${container.sessions}:/home/agent/.codex:rw`,
     ])
     expect(pairs(args, '-w')).toEqual(['/work/in'])
-    expect(args.slice(args.indexOf(AGENT_IMAGE))).toEqual([AGENT_IMAGE, 'claude', '-p', '--model', 'opus'])
+    expect(args.slice(args.indexOf(AGENT_IMAGE))).toEqual([AGENT_IMAGE, 'codex', '-p', '--model', 'gpt-5.4'])
   })
 
   it('without a browser: no MCP server and no proxy bypass', () => {
-    expect(args.join(' ')).not.toMatch(/--mcp-config|NO_PROXY/)
+    expect(args).toContain('NO_PROXY=')
+    expect(args).toContain('no_proxy=')
     expect(agentRunArgs({ ...container, browser: false })).toEqual(args)
   })
 
@@ -112,16 +114,19 @@ describe('agentRunArgs', () => {
     expect(pairs(withBrowser, '-e')).toEqual([
       'HTTPS_PROXY=http://sr-egress-r_0000abcd:8888',
       'HTTP_PROXY=http://sr-egress-r_0000abcd:8888',
+      'https_proxy=http://sr-egress-r_0000abcd:8888',
+      'http_proxy=http://sr-egress-r_0000abcd:8888',
       // Spike 2026-09-28: without it the CLI sends its MCP requests through tinyproxy, which refuses them.
       'NO_PROXY=sr-browser-r_0000abcd',
-      'DISABLE_TELEMETRY=1',
-      'DISABLE_ERROR_REPORTING=1',
-      'DISABLE_AUTOUPDATER=1',
-      'CLAUDE_CONFIG_DIR=/home/agent/.claude',
+      'no_proxy=sr-browser-r_0000abcd',
+      'CODEX_HOME=/home/agent/.codex',
+      'NODE_USE_ENV_PROXY=1',
     ])
     expect(withBrowser.slice(withBrowser.indexOf(AGENT_IMAGE))).toEqual([
-      AGENT_IMAGE, 'claude', '-p', '--model', 'opus',
-      '--mcp-config={"mcpServers":{"browser":{"type":"http","url":"http://sr-browser-r_0000abcd:8931/mcp"}}}',
+      AGENT_IMAGE, 'codex', '-p', '--model', 'gpt-5.4',
+      '-c', 'mcp_servers.browser.url="http://sr-browser-r_0000abcd:8931/mcp"',
+      '-c', 'mcp_servers.browser.enabled_tools=["browser_navigate","browser_navigate_back","browser_snapshot","browser_click","browser_wait_for","browser_network_requests"]',
+      '-c', 'mcp_servers.browser.required=true',
     ])
   })
 })
@@ -141,7 +146,7 @@ describe('browserRunArgs', () => {
       '--host', '0.0.0.0', '--port', '8931', '--allowed-hosts', 'sr-browser-r_1:8931',
       '--proxy-server', 'http://sr-bproxy-r_1:8888',
     ])
-    expect(args.join(' ')).not.toMatch(/--env-file|CLAUDE_CODE_OAUTH_TOKEN|-v |--volume|bridge|--network host|sr-egress|sr-net-/)
+    expect(args.join(' ')).not.toMatch(/--env-file|OPENAI_API_KEY|-v |--volume|bridge|--network host|sr-egress|sr-net-/)
   })
 
   it('gives the browser its own hardened proxy, reachable only from the browser network (controller ruling 2)', () => {

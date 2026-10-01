@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { logText, outcomeOf } from './apply-outcome.ts'
-import type { ClaudeEvent, ResultEvent } from './claude.ts'
+import type { CodexEvent, ResultEvent } from './codex.ts'
 
-const result = (over: Partial<ResultEvent>): ClaudeEvent[] => [{ type: 'result', ok: true, text: '', numTurns: 2, sessionId: 's', ...over }]
+const result = (over: Partial<ResultEvent>): CodexEvent[] => [{ type: 'result', ok: true, text: '', numTurns: 2, sessionId: 's', ...over }]
 const reply = { answer: 'Blocked.', patch: null, decisions: [], resolves: [], status: 'needs_owner' }
 
 describe('outcomeOf', () => {
@@ -30,7 +30,7 @@ describe('outcomeOf', () => {
 
 describe('logText', () => {
   it('shows the narration plus the structured answer', () => {
-    const events: ClaudeEvent[] = [{ type: 'delta', text: 'Reading.' }, ...result({ structured: { ...reply, answer: 'Done.', status: 'done' } })]
+    const events: CodexEvent[] = [{ type: 'delta', text: 'Reading.' }, ...result({ structured: { ...reply, answer: 'Done.', status: 'done' } })]
     expect(logText(events)).toBe('Reading.\n\nDone.')
     expect(logText([{ type: 'delta', text: 'hi' }])).toBe('hi')
   })

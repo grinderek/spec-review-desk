@@ -1,10 +1,9 @@
 import type { RunKind } from './initiative-store.ts'
 
 // Spec B §5: every docker argv the Desk runs, built from validated values only (never a shell).
-// Verified in the 2026-09-24 spike: node:22-slim + @anthropic-ai/claude-code 2.1.280, uid 10001,
-// tinyproxy on an --internal network, read-only root with tmpfs /tmp and /home/agent.
-export const CLAUDE_CODE_VERSION = '2.1.280'
-export const AGENT_IMAGE = `spec-review-agent:${CLAUDE_CODE_VERSION}`
+// Codex runs as uid 10001 behind tinyproxy, on an internal network with a read-only root.
+export const CODEX_VERSION = '0.159.3'
+export const AGENT_IMAGE = `spec-review-codex:${CODEX_VERSION}`
 // :2 — the HTTPS-only proxy config (FilterURLs On, host:443 filter lines; review fix 1).
 export const EGRESS_IMAGE = 'spec-review-egress:2'
 // The research browser (spike 2026-09-28): the Playwright MCP server over HTTP in the official
@@ -18,9 +17,9 @@ export const AGENT_USER = '10001:10001'
 export const EGRESS_PORT = 8888
 export const WORK_IN = '/work/in'
 export const WORK_OUT = '/work/out'
-// The claude config dir, sessions included. Mounted whole: a bind mount below the /home/agent tmpfs
-// would leave a root-owned ~/.claude the agent user cannot write.
-export const SESSION_STORE = '/home/agent/.claude'
+// The Codex config dir, sessions included. Mounted whole: a bind mount below the /home/agent tmpfs
+// would leave a root-owned ~/.codex the agent user cannot write.
+export const SESSION_STORE = '/home/agent/.codex'
 
 export const containerName = (runId: string): string => `sr-${runId}`
 export const egressName = (runId: string): string => `sr-egress-${runId}`
@@ -33,7 +32,7 @@ export const browserOutNetworkName = (runId: string): string => `sr-bout-${runId
 // host check, the CLI's MCP client and NO_PROXY all accept (real docker, review fix 2).
 export const browserName = (runId: string): string => `sr-browser-${runId}`
 // Controller ruling 2: the browser's own proxy and network. The browser shares no network with the
-// agent's proxy (the only one that reaches api.anthropic.com) — not even code running in the browser
+// agent's proxy (the only one that reaches api.openai.com) — not even code running in the browser
 // container (Chromium runs --no-sandbox) can use it.
 export const browserProxyName = (runId: string): string => `sr-bproxy-${runId}`
 export const browserNetworkName = (runId: string): string => `sr-bnet-${runId}`
@@ -41,19 +40,15 @@ export const PROXY_URL = (runId: string): string => `http://${egressName(runId)}
 export const BROWSER_PROXY_URL = (runId: string): string => `http://${browserProxyName(runId)}:${EGRESS_PORT}`
 export const BROWSER_MCP_URL = (runId: string): string => `http://${browserName(runId)}:${BROWSER_PORT}/mcp`
 
-// The one MCP server a research agent ever gets (read phase only); --strict-mcp-config keeps every
-// other MCP configuration out.
-export const browserMcpConfig = (runId: string): string =>
-  JSON.stringify({ mcpServers: { browser: { type: 'http', url: BROWSER_MCP_URL(runId) } } })
-
 export interface AgentContainer {
   runId: string
   image: string
   envFile: string
+  schemaFile?: string
   room: string
   out: string
   sessions: string
-  claudeArgs: readonly string[]
+  codexArgs: readonly string[]
   // The research read phase: the agent also joins the browser network, talks to sr-browser-<run>
   // directly (NO_PROXY — through the proxy the CLI's MCP requests are refused) and loads it as its
   // MCP server.
@@ -75,17 +70,19 @@ export function agentRunArgs(c: AgentContainer): string[] {
     '--env-file', c.envFile,
     '-e', `HTTPS_PROXY=${PROXY_URL(c.runId)}`,
     '-e', `HTTP_PROXY=${PROXY_URL(c.runId)}`,
-    ...(c.browser ? ['-e', `NO_PROXY=${browserName(c.runId)}`] : []),
-    '-e', 'DISABLE_TELEMETRY=1',
-    '-e', 'DISABLE_ERROR_REPORTING=1',
-    '-e', 'DISABLE_AUTOUPDATER=1',
-    '-e', `CLAUDE_CONFIG_DIR=${SESSION_STORE}`,
+    '-e', `https_proxy=${PROXY_URL(c.runId)}`,
+    '-e', `http_proxy=${PROXY_URL(c.runId)}`,
+    '-e', `NO_PROXY=${c.browser ? browserName(c.runId) : ''}`,
+    '-e', `no_proxy=${c.browser ? browserName(c.runId) : ''}`,
+    '-e', `CODEX_HOME=${SESSION_STORE}`,
+    '-e', 'NODE_USE_ENV_PROXY=1',
     '-v', `${c.room}:${WORK_IN}:ro`,
     '-v', `${c.out}:${WORK_OUT}:rw`,
     '-v', `${c.sessions}:${SESSION_STORE}:rw`,
+    ...(c.schemaFile ? ['-v', `${c.schemaFile}:/work/reply-schema.json:ro`] : []),
     '-w', WORK_IN,
-    c.image, 'claude', ...c.claudeArgs,
-    ...(c.browser ? [`--mcp-config=${browserMcpConfig(c.runId)}`] : []),
+    c.image, 'codex', ...c.codexArgs,
+    ...(c.browser ? ['-c', `mcp_servers.browser.url="${BROWSER_MCP_URL(c.runId)}"`, '-c', `mcp_servers.browser.enabled_tools=${JSON.stringify(['browser_navigate','browser_navigate_back','browser_snapshot','browser_click','browser_wait_for','browser_network_requests'])}`, '-c', 'mcp_servers.browser.required=true'] : []),
   ]
 }
 
@@ -158,7 +155,7 @@ export function cleanupArgs(image: string, dirs: readonly string[]): string[] {
   ]
 }
 
-// Read/Grep/Glob never see /proc or /sys, where the claude process environment (and so the OAuth
+// Read/Grep/Glob never see /proc or /sys, where the Codex process environment (and so the API
 // token) is readable (spec B §5.2).
 const PROC_DENY = ['Read(//proc/**)', 'Read(//sys/**)', 'Grep(//proc/**)', 'Grep(//sys/**)', 'Glob(//proc/**)', 'Glob(//sys/**)']
 

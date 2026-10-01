@@ -1,4 +1,4 @@
-import { type ClaudeEvent, parseStreamLine, type ResultEvent } from './claude.ts'
+import { type CodexEvent, CodexStream, type ResultEvent } from './codex.ts'
 import { type AgentReply, parseJsonObject, parseReply } from './protocol.ts'
 import type { ApplyRun } from './review-store.ts'
 
@@ -20,17 +20,16 @@ const STATUS_OUTCOME: Record<AgentReply['status'], ApplyRun['outcome']> = {
   answered: 'failed',
 }
 
-export const readEvents = (text: string): ClaudeEvent[] =>
-  text.split('\n').flatMap((line) => {
-    const event = parseStreamLine(line)
-    return event ? [event] : []
-  })
+export const readEvents = (text: string): CodexEvent[] => {
+  const stream = new CodexStream()
+  return text.split('\n').flatMap((line) => stream.feed(line))
+}
 
-const lastResult = (events: readonly ClaudeEvent[]): ResultEvent | undefined =>
+const lastResult = (events: readonly CodexEvent[]): ResultEvent | undefined =>
   [...events].reverse().find((e): e is ResultEvent => e.type === 'result')
-const narration = (events: readonly ClaudeEvent[]): string => events.flatMap((e) => (e.type === 'delta' ? [e.text] : [])).join('')
+const narration = (events: readonly CodexEvent[]): string => events.flatMap((e) => (e.type === 'delta' ? [e.text] : [])).join('')
 
-export function outcomeOf(events: readonly ClaudeEvent[], stopping: boolean): ApplyOutcome {
+export function outcomeOf(events: readonly CodexEvent[], stopping: boolean): ApplyOutcome {
   const result = lastResult(events)
   const text = result?.text || narration(events)
   const none = { reply: null, issues: [] as string[], raw: null }
@@ -46,7 +45,7 @@ export function outcomeOf(events: readonly ClaudeEvent[], stopping: boolean): Ap
   return { outcome: STATUS_OUTCOME[parsed.reply.status], text: parsed.reply.answer, reply: parsed.reply, issues: [], raw }
 }
 
-export function logText(events: readonly ClaudeEvent[]): string {
+export function logText(events: readonly CodexEvent[]): string {
   const streamed = narration(events)
   const result = lastResult(events)
   const answer = result ? parseReply(result.structured ?? parseJsonObject(result.text)).reply?.answer : undefined

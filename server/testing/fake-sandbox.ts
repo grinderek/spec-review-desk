@@ -1,13 +1,13 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { rm } from 'node:fs/promises'
-import { claudeArgs } from '../claude.ts'
+import { codexArgs, prepareCodex } from '../codex.ts'
 import type { RunOptions, Sandbox, SandboxOutcome, SandboxRun, SandboxStatus } from '../sandbox.ts'
-import { FAKE_CLAUDE } from './fake-claude-path.ts'
+import { FAKE_CODEX } from './fake-codex-path.ts'
 
 export const FAKE_TOKEN = 'sk-ant-oat01-fake-sandbox-token-0123456789'
 
-// Spec B §12: the injected container runner of the integration tests — runs the fake claude
-// directly against the room (cwd), the output dir (FAKE_CLAUDE_OUT) and the session dir.
+// Spec B §12: the injected container runner of the integration tests — runs the fake Codex
+// directly against the room (cwd), the output dir (FAKE_CODEX_OUT) and the session dir.
 export class FakeSandbox implements Sandbox {
   readonly runs: SandboxRun[] = []
   readonly cleaned: string[] = []
@@ -16,7 +16,7 @@ export class FakeSandbox implements Sandbox {
   #children = new Map<string, ChildProcess>()
   #stopped = new Set<string>()
 
-  constructor(private readonly claudeBin: string = FAKE_CLAUDE) {}
+  constructor(private readonly codexBin: string = FAKE_CODEX) {}
 
   async status(): Promise<SandboxStatus> {
     return this.statusValue
@@ -32,9 +32,10 @@ export class FakeSandbox implements Sandbox {
     this.#stopped.delete(spec.runId)
     this.runs.push(spec)
     return new Promise((resolve) => {
-      const child = spawn(this.claudeBin, [...claudeArgs(spec.claude), ...(spec.extraArgs ?? [])], {
+      const prepared = prepareCodex({ ...spec.codex, toolsScript: undefined })
+      const child = spawn(this.codexBin, [...codexArgs(prepared.spec), ...(spec.extraArgs ?? [])], {
         cwd: spec.room,
-        env: { ...process.env, FAKE_CLAUDE_OUT: spec.out, FAKE_CLAUDE_SESSIONS: spec.sessions },
+        env: { ...process.env, FAKE_CODEX_OUT: spec.out, FAKE_CODEX_SESSIONS: spec.sessions },
         stdio: ['pipe', 'pipe', 'pipe'],
       })
       this.#children.set(spec.runId, child)
@@ -57,13 +58,14 @@ export class FakeSandbox implements Sandbox {
       child.stderr!.on('data', (d: Buffer) => { stderr += d.toString() })
       child.on('close', (code) => {
         clearTimeout(timer)
+        prepared.dispose()
         this.#children.delete(spec.runId)
         if (buffer.trim()) opts.onLine(buffer)
         const stopped = this.#stopped.delete(spec.runId)
         resolve({ code, timedOut, stopped, error: code === 0 || timedOut || stopped ? null : stderr.trim() || `exit ${code}` })
       })
       child.stdin!.on('error', () => undefined)
-      child.stdin!.end(spec.claude.prompt)
+      child.stdin!.end(spec.codex.prompt)
     })
   }
 

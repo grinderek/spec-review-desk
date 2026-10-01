@@ -127,12 +127,12 @@ describe('prompts', () => {
     const prompt = researchPrompt(doc, 'Intuit reports', 'Which report gives AR ageing?')
     expect(prompt).toContain('Topic: Intuit reports')
     expect(prompt).toContain('Which report gives AR ageing?')
-    expect(prompt).toContain('Already allowed for WebFetch and the browser: docs.stripe.com')
+    expect(prompt).toContain('Already allowed for desk.read_web_page and the browser: docs.stripe.com')
     expect(researchResumeClosing(['docs.stripe.com'])).toBe(
-      'WebFetch is now enabled for: docs.stripe.com. The browser (the mcp__browser__ tools) reaches the same hosts: use it for pages that ' +
-        'WebFetch returns empty. Read the pages you need and reply with the finished document.',
+      'desk.read_web_page is now enabled for: docs.stripe.com. The browser (the browser MCP tools) reaches the same hosts: use it for pages that ' +
+        'desk.read_web_page returns empty. Read the pages you need and reply with the finished document.',
     )
-    expect(researchResumeClosing([])).toBe('WebFetch stays disabled (search only). Write the document from the search results and reply with it.')
+    expect(researchResumeClosing([])).toBe('desk.read_web_page stays disabled (search only). Write the document from the search results and reply with it.')
   })
 
   it('ships agent rules that forbid prose questions and name the output rules', async () => {
@@ -142,7 +142,7 @@ describe('prompts', () => {
     expect(await rules('research.md')).toContain('fetch-domains')
     // Spike 2026-09-28: JavaScript-rendered pages, their asset hosts, and what a blocked host looks like.
     const research = await rules('research.md')
-    for (const text of ['mcp__browser__browser_navigate', 'Content truncated', 'browser_network_requests', 'net::ERR_TUNNEL_CONNECTION_FAILED', 'Cite the URL']) {
+    for (const text of ['browser_navigate', 'Content truncated', 'browser_network_requests', 'net::ERR_TUNNEL_CONNECTION_FAILED', 'Cite the URL']) {
       expect(research).toContain(text)
     }
     for (const name of ['planner.md', 'author.md', 'research.md']) expect(await rules(name)).toContain('never into prose')

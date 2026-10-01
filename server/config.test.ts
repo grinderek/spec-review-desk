@@ -34,7 +34,7 @@ runners:
 
   it('applies defaults', async () => {
     const config = await loadConfig(await writeConfig('repos: [{ name: api, path: api }]'))
-    expect(config).toMatchObject({ port: 4600, model: 'opus', claudeBin: 'claude', questionTimeoutMs: 600_000, runners: [] })
+    expect(config).toMatchObject({ port: 4600, model: 'gpt-5.4', codexBin: 'codex', questionTimeoutMs: 600_000, runners: [] })
   })
 
   it('rejects a config without repos', async () => {
@@ -47,7 +47,7 @@ describe('sandbox settings (spec B §5)', () => {
     const file = await writeConfig('repos: [{ name: api, path: api }]')
     const config = await loadConfig(file)
     expect(config.sandbox).toEqual({
-      image: 'spec-review-agent:2.1.280',
+      image: 'spec-review-codex:0.159.3',
       egressImage: 'spec-review-egress:2',
       browserImage: 'spec-review-browser:0.0.80',
       envFile: path.join(path.dirname(file), '.env'),

@@ -37,7 +37,7 @@ export function App({ sessionError }: { sessionError: string | null }) {
   return (
     <>
       {sessionError || unauthorized ? <div className="banner bad">{sessionError ?? 'Not signed in — open the URL printed in the server console.'}</div> : null}
-      {status.data && !status.data.capabilities.claude ? <div className="banner warn">claude is not on PATH — questions and Apply are disabled.</div> : null}
+      {status.data && !status.data.capabilities.codex ? <div className="banner warn">codex is not on PATH — questions and Apply are disabled.</div> : null}
       <div className={wide ? 'layout wide' : 'layout'}>
         <Sidebar data={changes.data} initiatives={initiatives.data?.initiatives} selected={selected} onSelect={go} />
         <main className="pane main">

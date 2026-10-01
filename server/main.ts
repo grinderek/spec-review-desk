@@ -45,7 +45,7 @@ export async function startServer(opts: StartOptions) {
   const registry = new Registry()
   await discover(config.repos, registry)
   const capabilities = {
-    claude: await available(config.claudeBin, ['--version']),
+    codex: await available(config.codexBin, ['--version']),
     docker: await available('docker', ['version', '--format', '{{.Client.Version}}']),
   }
   const ctx = { config, token, bus, registry }
@@ -93,7 +93,7 @@ export async function startServer(opts: StartOptions) {
   const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: config.port })
   const base = opts.dev ? config.devUiOrigin : `http://127.0.0.1:${config.port}`
   console.log(`Spec Review Desk: ${base}/?t=${token}`)
-  if (!capabilities.claude) console.warn(`${config.claudeBin} not found on PATH — threads and Apply are disabled`)
+  if (!capabilities.codex) console.warn(`${config.codexBin} not found on PATH — threads and Apply are disabled`)
   if (!capabilities.docker) console.warn('docker not found — the corpus runner is disabled')
   return {
     app,

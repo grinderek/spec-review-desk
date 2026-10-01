@@ -6,7 +6,7 @@ import { ApplyService, applyPrompt, DEFAULT_APPLY_DENY, outcomeOf, readEvents, r
 import { listChanges, Registry, discover } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { appendMessage, readReview, recordApproval, updateReview, upsertApplyRun } from './review-store.ts'
-import { FAKE_CLAUDE, resetFakeClaude } from './testing/fake-claude-path.ts'
+import { FAKE_CODEX, resetFakeCodex } from './testing/fake-codex-path.ts'
 import { testConfig } from './testing/http.ts'
 import { makeRepo } from './testing/repo.ts'
 import { approveEverything } from './testing/review.ts'
@@ -24,20 +24,20 @@ async function setup(opts: { approve?: boolean; record?: boolean } = {}) {
   const bus = new EventBus()
   const events: { topic: string; data: unknown }[] = []
   bus.subscribe('*', (e) => events.push(e))
-  const apply = new ApplyService({ config: testConfig(repo, { claudeBin: FAKE_CLAUDE }), bus, pollMs: 50 })
+  const apply = new ApplyService({ config: testConfig(repo, { codexBin: FAKE_CODEX }), bus, pollMs: 50 })
   return { repo, wt, ref, apply, events }
 }
 
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string })
 
 beforeEach(async () => {
-  resetFakeClaude()
+  resetFakeCodex()
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-apply-'))
   fakeLog = path.join(tmp, 'calls.ndjson')
-  process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
-  process.env.FAKE_CLAUDE_LOG = fakeLog
-  process.env.FAKE_CLAUDE_MODE = 'answer'
-  process.env.FAKE_CLAUDE_TEXT = 'All scenarios green.'
+  process.env.FAKE_CODEX_SESSIONS = path.join(tmp, 'sessions')
+  process.env.FAKE_CODEX_LOG = fakeLog
+  process.env.FAKE_CODEX_MODE = 'answer'
+  process.env.FAKE_CODEX_TEXT = 'All scenarios green.'
 })
 
 describe('resolveRunLog', () => {
@@ -60,7 +60,7 @@ describe('apply helpers', () => {
   })
 
   it('builds the prompt and reads outcomes', () => {
-    expect(applyPrompt('c', [])).toBe('/opsx:apply c')
+    expect(applyPrompt('c', [])).toContain('Implement the owner-approved OpenSpec change "c".')
     expect(applyPrompt('c', ['features/x.feature::A'])).toContain('- features/x.feature::A')
     // Final review Important 1(a): the Apply prompt carried no scenario keys at all unless it was
     // a reapply, so a needs_owner decision invented its own key.
@@ -115,7 +115,7 @@ describe('ApplyService', () => {
       resolveExited = resolve
     })
     const isolated = new ApplyService({
-      config: testConfig(repo, { claudeBin: FAKE_CLAUDE }),
+      config: testConfig(repo, { codexBin: FAKE_CODEX }),
       bus: new EventBus(),
       pollMs: 50,
       spawn: () => ({ pid: -1, exited }),
@@ -141,26 +141,27 @@ describe('ApplyService', () => {
     // Final review Important 1(a): the Apply prompt now always lists the change's scenario keys,
     // so a scenario-scoped decision can copy one verbatim instead of inventing it.
     expect(call!.prompt).toBe([
-      '/opsx:apply add-thread-state',
+      'Implement the owner-approved OpenSpec change "add-thread-state".',
+      'Read openspec/changes/add-thread-state/proposal.md, specs/ and features/ before making changes.',
+      'Follow the repository AGENTS.md and the OpenSpec apply skill under .agents/skills/ when present.',
+      'Implement the approved scenarios, run the configured checks and commit the implementation.',
       '',
       '## Scenario keys',
       'Copy one of these verbatim into decisions[].scope.key — never invent one:',
       "- features/thread_state.feature::The founder's reply resolves a waiting thread",
       '- features/thread_state.feature::A waiting thread is weighted by its age',
     ].join('\n'))
-    expect(call!.args).toEqual(expect.arrayContaining([
-      '--permission-mode', 'acceptEdits', '--session-id', run.session, '--strict-mcp-config', '--json-schema',
-      expect.stringMatching(/^--allowedTools=Read,Grep,Glob,Edit,Write,Bash\(git add:\*\)/),
-      expect.stringMatching(/^--disallowedTools=.*Bash\(git push:\*\).*Bash\(rm:\*\).*WebFetch.*WebSearch/),
-    ]))
+    expect(call!.args).toEqual(expect.arrayContaining(['exec', '--json', '--output-schema', 'sandbox_mode="read-only"', 'features.shell_tool=false']))
+    expect(call!.args.find((arg) => arg.startsWith('mcp_servers='))).toContain('git add')
+    expect(call!.args.find((arg) => arg.startsWith('mcp_servers='))).toContain('deniedCommands')
     expect(events.some((e) => e.topic === `run:${run.id}` && (e.data as { type: string }).type === 'event')).toBe(true)
-    expect(await readFile(path.join(wt.path, run.log), 'utf8')).toContain('"type":"result"')
+    expect(await readFile(path.join(wt.path, run.log), 'utf8')).toContain('"type":"turn.completed"')
   })
 
   it('opens an apply thread when the agent needs the owner, and resumes the same session on reply', async () => {
-    process.env.FAKE_CLAUDE_STRUCTURED = 'off'
+    process.env.FAKE_CODEX_STRUCTURED = 'off'
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_TEXT = 'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?'
+    process.env.FAKE_CODEX_TEXT = 'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?'
     const run = await apply.start(wt, ref)
     await apply.settled(run.id)
     let review = await readReview(ref.dir)
@@ -168,7 +169,7 @@ describe('ApplyService', () => {
     const thread = review.threads.find((t) => t.anchor === 'apply')!
     expect(thread).toMatchObject({ ref: run.id, status: 'answered' })
     await updateReview(ref.dir, (d) => appendMessage(d, thread.id, { role: 'owner', at: 'now', text: 'Weight zero.', note: null, patch: null }))
-    process.env.FAKE_CLAUDE_TEXT = 'Done, all green.'
+    process.env.FAKE_CODEX_TEXT = 'Done, all green.'
     await apply.resume(wt, ref, thread.id)
     await apply.settled(run.id)
     review = await readReview(ref.dir)
@@ -178,20 +179,20 @@ describe('ApplyService', () => {
       'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?', 'Weight zero.', 'Done, all green.',
     ])
     const last = (await calls()).at(-1)!
-    expect(last.args).toEqual(expect.arrayContaining(['--resume', run.session]))
+    expect(last.args).toEqual(expect.arrayContaining(['resume', (await readReview(ref.dir)).apply_runs[0]!.session]))
     expect(last.prompt).toBe('Weight zero.')
   })
 
   it("does not resurface the previous attempt's result when a resumed run is stopped before producing its own", async () => {
-    process.env.FAKE_CLAUDE_STRUCTURED = 'off'
+    process.env.FAKE_CODEX_STRUCTURED = 'off'
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_TEXT = 'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?'
+    process.env.FAKE_CODEX_TEXT = 'Stopped before step 3.\nNEEDS_OWNER: Which weight applies to CC threads?'
     const run = await apply.start(wt, ref)
     await apply.settled(run.id)
     let review = await readReview(ref.dir)
     const thread = review.threads.find((t) => t.anchor === 'apply')!
     await updateReview(ref.dir, (d) => appendMessage(d, thread.id, { role: 'owner', at: 'now', text: 'Weight zero.', note: null, patch: null }))
-    process.env.FAKE_CLAUDE_MODE = 'hang'
+    process.env.FAKE_CODEX_MODE = 'hang'
     await apply.resume(wt, ref, thread.id)
     await new Promise((r) => setTimeout(r, 300))
     await apply.stop(wt, ref)
@@ -205,7 +206,7 @@ describe('ApplyService', () => {
 
   it('stops a running apply', async () => {
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_MODE = 'hang'
+    process.env.FAKE_CODEX_MODE = 'hang'
     const run = await apply.start(wt, ref)
     await new Promise((r) => setTimeout(r, 300))
     await apply.stop(wt, ref)
@@ -216,7 +217,7 @@ describe('ApplyService', () => {
   it('gives every apply run a unique id even when two runs start in the same second', async () => {
     const { repo, wt, ref } = await setup()
     const fixedNow = () => new Date('2026-09-23T10:00:00.000Z')
-    const apply = new ApplyService({ config: testConfig(repo, { claudeBin: FAKE_CLAUDE }), bus: new EventBus(), pollMs: 50, now: fixedNow })
+    const apply = new ApplyService({ config: testConfig(repo, { codexBin: FAKE_CODEX }), bus: new EventBus(), pollMs: 50, now: fixedNow })
     const run1 = await apply.start(wt, ref)
     await apply.settled(run1.id)
     const run2 = await apply.start(wt, ref)

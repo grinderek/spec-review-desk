@@ -8,7 +8,7 @@ import { listChanges, Registry, worktreeId } from '../discovery.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import { readReview, setAgentSession, setEntry, updatePatch, updateReview } from '../review-store.ts'
-import { FAKE_CLAUDE, resetFakeClaude } from '../testing/fake-claude-path.ts'
+import { FAKE_CODEX, resetFakeCodex } from '../testing/fake-codex-path.ts'
 import { call, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
 import { registerReadRoutes } from './read.ts'
@@ -30,10 +30,10 @@ async function decisionDiff(repo: string, target = FEATURE): Promise<string> {
 
 async function setup(opts: { applyActive?: boolean; timeoutMs?: number } = {}) {
   const { repo } = await makeRepo()
-  const ctx = testContext(repo, { claudeBin: FAKE_CLAUDE, questionTimeoutMs: opts.timeoutMs ?? 10_000 })
+  const ctx = testContext(repo, { codexBin: FAKE_CODEX, questionTimeoutMs: opts.timeoutMs ?? 10_000 })
   const questions = new QuestionService({ config: ctx.config, bus: ctx.bus })
   const app = createBaseApp(ctx)
-  registerReadRoutes(app, ctx, { claude: true, docker: false })
+  registerReadRoutes(app, ctx, { codex: true, docker: false })
   registerThreadRoutes(app, ctx, { questions, applyActive: () => opts.applyActive ?? false, resumeApply: null })
   const wt = worktreeId(repo)
   await call(app, 'GET', '/api/changes')
@@ -43,13 +43,13 @@ async function setup(opts: { applyActive?: boolean; timeoutMs?: number } = {}) {
 }
 
 beforeEach(async () => {
-  resetFakeClaude()
+  resetFakeCodex()
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-threads-'))
   fakeLog = path.join(tmp, 'calls.ndjson')
-  process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
-  process.env.FAKE_CLAUDE_LOG = fakeLog
-  process.env.FAKE_CLAUDE_MODE = 'answer'
-  delete process.env.FAKE_CLAUDE_TEXT_FILE
+  process.env.FAKE_CODEX_SESSIONS = path.join(tmp, 'sessions')
+  process.env.FAKE_CODEX_LOG = fakeLog
+  process.env.FAKE_CODEX_MODE = 'answer'
+  delete process.env.FAKE_CODEX_TEXT_FILE
 })
 
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string })
@@ -57,7 +57,7 @@ const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').m
 describe('question threads', () => {
   it('asks the agent in a new session and stores its answer with a vetted patch', async () => {
     const { repo, app, questions, dir, base } = await setup()
-    process.env.FAKE_CLAUDE_TEXT = `Rows weigh by business-hour age.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
+    process.env.FAKE_CODEX_TEXT = `Rows weigh by business-hour age.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
     const created = await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: 'Why business hours?' })
     expect(created.status).toBe(201)
     await questions.idle(dir)
@@ -68,31 +68,30 @@ describe('question threads', () => {
     expect(thread.messages[1]!.patch).toMatchObject({ state: 'proposed', error: null })
     expect(review.agent_session).toMatch(/^[0-9a-f-]{36}$/)
     const [first] = await calls()
-    expect(first!.args).toEqual(expect.arrayContaining([
-      '--session-id', review.agent_session, '--allowedTools=Read,Grep,Glob', '--model', 'opus', '--strict-mcp-config',
-      '--disallowedTools=Edit,Write,Bash,NotebookEdit,WebFetch,WebSearch',
-    ]))
+    expect(first!.args).toEqual(expect.arrayContaining(['exec', '--json', '--model', 'gpt-5.4', 'features.shell_tool=false', 'sandbox_mode="read-only"']))
+    expect(first!.args).not.toContain('resume')
+    expect(first!.args.find((arg) => arg.startsWith('mcp_servers='))).toContain('writeRoot\\\":null')
     expect(first!.prompt).toContain('Scenario Outline: A waiting thread is weighted by its age')
     expect(first!.prompt).toContain('Why business hours?')
   })
 
   it('resumes the same session for the next question', async () => {
     const { app, questions, dir, base } = await setup()
-    process.env.FAKE_CLAUDE_TEXT = 'First answer.'
+    process.env.FAKE_CODEX_TEXT = 'First answer.'
     const { json } = await call(app, 'POST', base, { anchor: 'change', ref: '', text: 'Overview?' })
     await questions.idle(dir)
-    process.env.FAKE_CLAUDE_TEXT = 'Second answer.'
+    process.env.FAKE_CODEX_TEXT = 'Second answer.'
     expect((await call(app, 'POST', `${base}/${json.id}/messages`, { text: 'And then?' })).status).toBe(202)
     await questions.idle(dir)
     const session = (await readReview(dir)).agent_session!
-    expect((await calls())[1]!.args).toEqual(expect.arrayContaining(['--resume', session]))
+    expect((await calls())[1]!.args).toEqual(expect.arrayContaining(['resume', session]))
     expect((await readReview(dir)).threads[0]!.messages.map((m) => m.text)).toEqual(['Overview?', 'First answer.', 'And then?', 'Second answer.'])
   })
 
   it('falls back to a fresh session when the stored one is gone', async () => {
     const { app, questions, dir, base } = await setup()
     await updateReview(dir, (d) => setAgentSession(d, '99999999-9999-4999-8999-999999999999'))
-    process.env.FAKE_CLAUDE_TEXT = 'Rebuilt.'
+    process.env.FAKE_CODEX_TEXT = 'Rebuilt.'
     await call(app, 'POST', base, { anchor: 'change', ref: '', text: 'Hi?' })
     await questions.idle(dir)
     const review = await readReview(dir)
@@ -102,7 +101,7 @@ describe('question threads', () => {
 
   it('marks a patch outside the change stale and never applies it', async () => {
     const { repo, app, questions, dir, base } = await setup()
-    process.env.FAKE_CLAUDE_TEXT = `Edit the model.\n\n\`\`\`diff\n${await decisionDiff(repo, 'app/models/thread.rb')}\`\`\`\n`
+    process.env.FAKE_CODEX_TEXT = `Edit the model.\n\n\`\`\`diff\n${await decisionDiff(repo, 'app/models/thread.rb')}\`\`\`\n`
     const { json } = await call(app, 'POST', base, { anchor: 'change', ref: '', text: 'Fix it?' })
     await questions.idle(dir)
     const patch = (await readReview(dir)).threads[0]!.messages[1]!.patch!
@@ -116,7 +115,7 @@ describe('question threads', () => {
     const view = await loadChangeView(wt!, (await listChanges(wt!))[0]!, { withCommits: false })
     const outline = view.features[0]!.scenarios[1]!
     await updateReview(dir, (d) => setEntry(d, 'scenarios', outline.key, { status: 'approved', text_hash: outline.hash, approved_commit: 'x', at: 'now' }))
-    process.env.FAKE_CLAUDE_TEXT = `Rows weigh by age.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
+    process.env.FAKE_CODEX_TEXT = `Rows weigh by age.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
     const { json } = await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: 'Record it?' })
     await questions.idle(dir)
     const applied = await call(app, 'POST', `${base}/${json.id}/patches/1/apply`, { summary: 'rows weigh by business-hour age' })
@@ -131,7 +130,7 @@ describe('question threads', () => {
 
   it('reverts the working tree when the commit fails', async () => {
     const { repo, app, questions, dir, base } = await setup()
-    process.env.FAKE_CLAUDE_TEXT = `Yes.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
+    process.env.FAKE_CODEX_TEXT = `Yes.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
     const { json } = await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: 'Record it?' })
     await questions.idle(dir)
     await writeFile(path.join(repo, '.git/hooks/pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
@@ -144,7 +143,7 @@ describe('question threads', () => {
 
   it('refuses to apply while an Apply run is active', async () => {
     const { repo, app, questions, dir, base } = await setup({ applyActive: true })
-    process.env.FAKE_CLAUDE_TEXT = `Yes.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
+    process.env.FAKE_CODEX_TEXT = `Yes.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
     const { json } = await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: 'Record it?' })
     await questions.idle(dir)
     expect((await call(app, 'POST', `${base}/${json.id}/patches/1/apply`, { summary: 'x' })).json.error.code).toBe('apply_running')
@@ -152,7 +151,7 @@ describe('question threads', () => {
 
   it('records a timeout as an agent message and leaves the thread open', async () => {
     const { app, questions, dir, base } = await setup({ timeoutMs: 300 })
-    process.env.FAKE_CLAUDE_MODE = 'hang'
+    process.env.FAKE_CODEX_MODE = 'hang'
     await call(app, 'POST', base, { anchor: 'change', ref: '', text: 'Slow?' })
     await questions.idle(dir)
     const thread = (await readReview(dir)).threads[0]!
@@ -164,7 +163,7 @@ describe('question threads', () => {
     const { app, questions, dir, base } = await setup()
     expect((await call(app, 'POST', base, { anchor: 'scenario', ref: 'features/x.feature::Nope', text: 'Hm?' })).json.error.code).toBe('unknown_scenario')
     expect((await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: '   ' })).json.error.code).toBe('invalid_body')
-    process.env.FAKE_CLAUDE_TEXT = 'Ok.'
+    process.env.FAKE_CODEX_TEXT = 'Ok.'
     const { json } = await call(app, 'POST', base, { anchor: 'change', ref: '', text: 'Done?' })
     await questions.idle(dir)
     await call(app, 'POST', `${base}/${json.id}/resolve`)
@@ -173,7 +172,7 @@ describe('question threads', () => {
   })
   it('re-checks a stale patch and returns it to proposed once it applies', async () => {
     const { repo, app, questions, dir, base } = await setup()
-    process.env.FAKE_CLAUDE_TEXT = `Yes.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
+    process.env.FAKE_CODEX_TEXT = `Yes.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
     const { json } = await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: 'Record it?' })
     await questions.idle(dir)
     expect((await call(app, 'POST', `${base}/${json.id}/patches/1/recheck`)).json.error.code).toBe('patch_not_stale')

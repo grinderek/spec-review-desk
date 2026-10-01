@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import type { ClaudeRunSpec, ResultEvent } from './claude.ts'
+import type { CodexRunSpec, ResultEvent } from './codex.ts'
 import type { Config } from './config.ts'
 import { pendingBlocking, runDecisions } from './decision-model.ts'
 import type { WorktreeInfo } from './discovery.ts'
@@ -235,10 +235,12 @@ export class InitiativeRunService {
     if (webFetch) await this.#recordReadDomains(target, run.id, doc.research.domains)
     const tools = agentTools(run.kind, webFetch)
     const token = await sandbox.token()
-    const claude: ClaudeRunSpec = {
-      bin: 'claude', cwd: WORK_IN, sessionId: run.session, resume, model: config.model, allowedTools: tools.allowed,
+    const codex: CodexRunSpec = {
+      bin: 'codex', cwd: WORK_IN, sessionId: run.session, resume, model: config.model, allowedTools: tools.allowed,
       disallowedTools: tools.disallowed, permissionMode: tools.permissionMode, appendSystemPrompt: await readFile(RULES[run.kind], 'utf8'),
       jsonSchema: REPLY_SCHEMA_ARGS[run.kind], prompt,
+      toolsScript: '/opt/spec-review/desk-tools.mjs', writeRoot: run.kind === 'author' ? WORK_OUT : undefined,
+      search: run.kind === 'research' && !webFetch, readDomains: webFetch ? doc.research.domains : [],
     }
     const paths = runPaths(target.wt, run)
     await mkdir(path.dirname(paths.log), { recursive: true })
@@ -247,11 +249,16 @@ export class InitiativeRunService {
       timeoutMs: config.sandbox.timeoutMs,
       spec: {
         runId: run.id, runDir: paths.runDir, room: paths.room, out: paths.out, sessions: paths.sessions,
-        domains: webFetch ? doc.research.domains : [], claude, extraArgs: run.kind === 'author' ? ['--add-dir', WORK_OUT] : [],
+        domains: webFetch ? doc.research.domains : [], codex, extraArgs: [],
         // The research read phase reads JavaScript-rendered pages with a sandboxed browser (spike 2026-09-28).
         browser: webFetch,
       },
     })
+    if (resultEvent?.sessionId && !sawSecret) {
+      const session = resultEvent.sessionId
+      const updated = await updateInitiative(target.ini.dir, (d) => upsertRun(d, { ...findRun(d, run.id), session }))
+      run = findRun(updated, run.id)
+    }
     await this.#finish(target, run, paths, resultEvent, outcome, token, sawSecret)
   }
 

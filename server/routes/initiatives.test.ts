@@ -8,7 +8,7 @@ import { git } from '../git.ts'
 import { initiativeDir, type RunRecord, updateInitiative } from '../initiative-store.ts'
 import { FINISHERS } from '../run-kinds.ts'
 import { InitiativeRunService } from '../run-service.ts'
-import { FAKE_OPENSPEC, resetFakeClaude } from '../testing/fake-claude-path.ts'
+import { FAKE_OPENSPEC, resetFakeCodex } from '../testing/fake-codex-path.ts'
 import { FakeSandbox } from '../testing/fake-sandbox.ts'
 import { FEATURE, NEW_STEPS_MD, SPEC_MD } from '../testing/fixtures.ts'
 import { call, callForm, TEST_PORT, TEST_TOKEN, testContext } from '../testing/http.ts'
@@ -27,7 +27,7 @@ async function setup() {
   const sandbox = new FakeSandbox()
   const runs = new InitiativeRunService({ config: ctx.config, bus: ctx.bus, sandbox, finishers: FINISHERS })
   const app = createBaseApp(ctx)
-  registerReadRoutes(app, ctx, { claude: true, docker: true })
+  registerReadRoutes(app, ctx, { codex: true, docker: true })
   registerInitiativeRoutes(app, ctx, { runs, sandbox })
   registerInitiativeDecisionRoutes(app, ctx)
   return { hub, repo, app, runs, sandbox, bus: ctx.bus }
@@ -73,10 +73,10 @@ async function create(app: Awaited<ReturnType<typeof setup>>['app']) {
 }
 
 beforeEach(async () => {
-  resetFakeClaude()
+  resetFakeCodex()
   tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-initiative-routes-'))
-  process.env.FAKE_CLAUDE_LOG = path.join(tmp, 'calls.ndjson')
-  process.env.FAKE_CLAUDE_MODE = 'answer'
+  process.env.FAKE_CODEX_LOG = path.join(tmp, 'calls.ndjson')
+  process.env.FAKE_CODEX_MODE = 'answer'
   process.env.FAKE_OPENSPEC_LOG = path.join(tmp, 'openspec.ndjson')
   delete process.env.FAKE_OPENSPEC_FAIL
 })
@@ -86,7 +86,7 @@ describe('initiative routes', () => {
     const { repo, app, runs } = await setup()
     const created = await create(app)
     expect(created.status).toBe(201)
-    const wt = path.join(repo, '.claude/worktrees/health-score')
+    const wt = path.join(repo, '.codex/worktrees/health-score')
     expect(created.json).toEqual({ worktreeId: worktreeId(wt), name: 'health-score' })
     const url = `/api/initiatives/${created.json.worktreeId}/health-score`
     const listed = (await call(app, 'GET', '/api/initiatives')).json
@@ -106,7 +106,7 @@ describe('initiative routes', () => {
         },
       },
     ]))
-    process.env.FAKE_CLAUDE_REPLIES_FILE = path.join(tmp, 'replies.json')
+    process.env.FAKE_CODEX_REPLIES_FILE = path.join(tmp, 'replies.json')
     await writeFile(path.join(tmp, 'writes.json'), JSON.stringify([{
       match: 'Slice s1',
       files: {
@@ -117,7 +117,7 @@ describe('initiative routes', () => {
         [`openspec/changes/${CHANGE}/features/NEW_STEPS.md`]: NEW_STEPS_MD,
       },
     }]))
-    process.env.FAKE_CLAUDE_WRITES_FILE = path.join(tmp, 'writes.json')
+    process.env.FAKE_CODEX_WRITES_FILE = path.join(tmp, 'writes.json')
 
     const planner = await call(app, 'POST', `${url}/plan/run`)
     expect(planner.status).toBe(202)
@@ -168,7 +168,7 @@ describe('initiative routes', () => {
     expect((await callForm(app, `${url}/inputs`, form)).json).toEqual({ files: ['notes.txt'] })
     expect((await call(app, 'POST', `${url}/inputs`, { from: 'api/features/STEPS.md' })).json).toEqual({ files: ['STEPS-2.md'] })
 
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify({ answer: 'Found it.', patch: null, decisions: [], resolves: [], status: 'done', document: '# AR\n\n## Sources\n- https://x.example\n' })
+    process.env.FAKE_CODEX_REPLY = JSON.stringify({ answer: 'Found it.', patch: null, decisions: [], resolves: [], status: 'done', document: '# AR\n\n## Sources\n- https://x.example\n' })
     const research = await call(app, 'POST', `${url}/research`, { topic: 'AR ageing', questions: 'Which report?' })
     await runs.settled(research.json.run.id)
     const draft = (await call(app, 'GET', url)).json.inputs.find((i: { file: string }) => i.file === 'research-ar-ageing.md')
@@ -206,7 +206,7 @@ describe('initiative routes', () => {
     const { repo, app } = await setup()
     const { json } = await create(app)
     const url = `/api/initiatives/${json.worktreeId}/health-score`
-    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    const dir = initiativeDir(path.join(repo, '.codex/worktrees/health-score'), 'health-score')
     const running: RunRecord = {
       id: 'r_0000ab01', kind: 'planner', slice: null, topic: null, session: 's', container: 'sr-r_0000ab01', log: '.spec-review/runs/r_0000ab01.ndjson',
       started_at: '2026-09-24T10:00:00.000Z', ended_at: null, outcome: 'running', notes: null,
@@ -229,7 +229,7 @@ describe('initiative routes', () => {
     const { app, repo } = await setup()
     const { json } = await create(app)
     const url = `/api/initiatives/${json.worktreeId}/health-score`
-    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    const dir = initiativeDir(path.join(repo, '.codex/worktrees/health-score'), 'health-score')
     const text = await readFile(path.join(dir, 'initiative.yaml'), 'utf8')
     const evil = 'runs:\n  - id: r_0000ab01\n    kind: planner\n    session: s\n    container: c\n    log: ../../../../etc/passwd\n    started_at: x\n    outcome: done\n'
     await writeFile(path.join(dir, 'initiative.yaml'), `${text.replace(/^runs:.*$/m, '')}${evil}`)
@@ -250,7 +250,7 @@ describe('initiative routes', () => {
     bus.subscribe('initiative', (event) => seen.push(event.data))
     const announced = { worktreeId: json.worktreeId, name: 'health-score' }
 
-    process.env.FAKE_CLAUDE_MODE = 'hang'
+    process.env.FAKE_CODEX_MODE = 'hang'
     const planner = await call(app, 'POST', `${url}/plan/run`)
     expect(planner.status).toBe(202)
     expect(seen).toEqual([announced])
@@ -260,13 +260,13 @@ describe('initiative routes', () => {
     expect(seen).toEqual([announced, announced])
     expect((await call(app, 'GET', url)).json.doc.runs[0]).toMatchObject({ outcome: 'stopped' })
 
-    process.env.FAKE_CLAUDE_MODE = 'answer'
+    process.env.FAKE_CODEX_MODE = 'answer'
     const blocking = { id: 'basis', question: 'Business or calendar age?', scope: { kind: 'change' }, options: [option('business'), option('calendar')], recommended: 'business', blocking: true }
     await writeFile(path.join(tmp, 'replies.json'), JSON.stringify([
       { match: 'Slice s1', reply: { answer: 'Need the age basis.', patch: null, decisions: [blocking], resolves: [], status: 'needs_owner', change: CHANGE } },
     ]))
-    process.env.FAKE_CLAUDE_REPLIES_FILE = path.join(tmp, 'replies.json')
-    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    process.env.FAKE_CODEX_REPLIES_FILE = path.join(tmp, 'replies.json')
+    const dir = initiativeDir(path.join(repo, '.codex/worktrees/health-score'), 'health-score')
     await updateInitiative(dir, (d) => ({
       ...d, plan: { status: 'approved', approved_at: '2026-09-28T10:00:00.000Z', slices: [{ id: 's1', title: 'Engine', scope: 'The engine.', depends_on: [], change: null }] },
     }))
@@ -279,7 +279,7 @@ describe('initiative routes', () => {
     expect(waiting.doc.runs[1]).toMatchObject({ outcome: 'needs_owner' })
     expect((await call(app, 'POST', `${url}/decisions/${waiting.decisions[0].id}/dismiss`, { reason: 'Business hours.' })).status).toBe(200)
     const count = seen.length
-    process.env.FAKE_CLAUDE_MODE = 'hang'
+    process.env.FAKE_CODEX_MODE = 'hang'
     expect((await call(app, 'POST', `${url}/runs/${author.json.run.id}/resume`)).status).toBe(202)
     expect(seen).toHaveLength(count + 1)
     expect((await call(app, 'GET', url)).json.doc.runs[1]).toMatchObject({ outcome: 'running' })
@@ -331,7 +331,7 @@ describe('initiative routes', () => {
     const { app, repo } = await setup()
     const { json } = await create(app)
     const url = `/api/initiatives/${json.worktreeId}/health-score`
-    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    const dir = initiativeDir(path.join(repo, '.codex/worktrees/health-score'), 'health-score')
     const pdf = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d, 0x31, 0x2e, 0x34, 0x0a, 0x00, 0xff])
     const form = new FormData()
     form.append('files', new File([pdf], 'score spec.pdf', { type: 'application/pdf' }))
@@ -384,7 +384,7 @@ describe('initiative routes', () => {
     const { app, repo } = await setup()
     const { json } = await create(app)
     const url = `/api/initiatives/${json.worktreeId}/health-score`
-    const dir = initiativeDir(path.join(repo, '.claude/worktrees/health-score'), 'health-score')
+    const dir = initiativeDir(path.join(repo, '.codex/worktrees/health-score'), 'health-score')
     const outside = path.join(tmp, 'outside')
     await mkdir(outside, { recursive: true })
     await writeFile(path.join(outside, 'spec.md'), 'OUTSIDE SECRET\n')
@@ -402,7 +402,7 @@ describe('initiative routes', () => {
     const { app, repo, bus } = await setup()
     const { json } = await create(app)
     const url = `/api/initiatives/${json.worktreeId}/health-score`
-    const wt = path.join(repo, '.claude/worktrees/health-score')
+    const wt = path.join(repo, '.codex/worktrees/health-score')
     const seen: unknown[] = []
     bus.subscribe('initiative', (event) => seen.push(event.data))
 
@@ -439,7 +439,7 @@ describe('initiative routes', () => {
     const { app, repo } = await setup()
     const { json } = await create(app)
     const url = `/api/initiatives/${json.worktreeId}/health-score`
-    const wt = path.join(repo, '.claude/worktrees/health-score')
+    const wt = path.join(repo, '.codex/worktrees/health-score')
     const hooks = path.join(tmp, 'hooks')
     await mkdir(hooks, { recursive: true })
     await writeFile(path.join(hooks, 'pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })

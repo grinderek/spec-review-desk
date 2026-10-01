@@ -49,7 +49,7 @@ export interface ChangeId { wt: string; name: string }
 export interface WorktreeSummary { id: string; path: string; branch: string | null; head: string; changes: (ChangeSummary & { initiative: string | null })[] }
 export interface ChangesResponse { repos: { repo: string; worktrees: WorktreeSummary[] }[] }
 export type Section = 'scenarios' | 'phrases'
-export interface Capabilities { claude: boolean; docker: boolean }
+export interface Capabilities { codex: boolean; docker: boolean }
 export interface NewDecisionBody {
   question: string
   scope: { kind: 'scenario'; key: string } | { kind: 'change' }

@@ -48,7 +48,14 @@ async function isBehaviorDriven(dir: string): Promise<boolean> {
 
 async function newestMtime(dir: string): Promise<number> {
   const entries = await readdir(dir, { recursive: true })
-  const times = await Promise.all(entries.map(async (e) => (await stat(path.join(dir, e))).mtimeMs))
+  const times = await Promise.all(entries.map(async (e) => {
+    try { return (await stat(path.join(dir, e))).mtimeMs }
+    catch (error) {
+      // Atomic review writes can remove a temporary file after readdir saw it.
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
+      throw error
+    }
+  }))
   return Math.max(0, ...times)
 }
 

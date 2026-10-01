@@ -12,7 +12,7 @@ import { readReview } from './review-store.ts'
 import { FINISHERS } from './run-kinds.ts'
 import { InitiativeRunService, runPaths } from './run-service.ts'
 import type { RunOptions, SandboxOutcome, SandboxRun } from './sandbox.ts'
-import { resetFakeClaude } from './testing/fake-claude-path.ts'
+import { resetFakeCodex } from './testing/fake-codex-path.ts'
 import { FAKE_TOKEN, FakeSandbox } from './testing/fake-sandbox.ts'
 import { testConfig } from './testing/http.ts'
 import { INITIATIVE_AT, makeInitiative } from './testing/initiative.ts'
@@ -46,17 +46,17 @@ const resultEvent = (over: Record<string, unknown> = {}): string =>
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string; cwd: string })
 
 beforeEach(async () => {
-  resetFakeClaude()
+  resetFakeCodex()
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-planner-'))
   fakeLog = path.join(tmp, 'calls.ndjson')
-  process.env.FAKE_CLAUDE_LOG = fakeLog
-  process.env.FAKE_CLAUDE_MODE = 'answer'
+  process.env.FAKE_CODEX_LOG = fakeLog
+  process.env.FAKE_CODEX_MODE = 'answer'
 })
 
 describe('planner runs', () => {
   it('runs in the sandbox, writes a committed draft and raises its decisions in the initiative inbox', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply())
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply())
     const run = await startPlanner(s.service, s.target)
     expect(run).toMatchObject({ kind: 'planner', outcome: 'running', container: `sr-${run.id}`, log: `.spec-review/runs/${run.id}.ndjson` })
     await s.service.settled(run.id)
@@ -76,7 +76,7 @@ describe('planner runs', () => {
 
     const [spec] = s.sandbox.runs
     expect(spec).toMatchObject({ runId: run.id, domains: [], extraArgs: [], browser: false })
-    expect(spec!.claude).toMatchObject({ cwd: '/work/in', model: 'opus', allowedTools: ['Read', 'Grep', 'Glob'], permissionMode: 'default', jsonSchema: REPLY_SCHEMA_ARGS.planner })
+    expect(spec!.codex).toMatchObject({ cwd: '/work/in', model: 'gpt-5.4', allowedTools: ['Read', 'Grep', 'Glob'], permissionMode: 'default', jsonSchema: REPLY_SCHEMA_ARGS.planner })
     const [call] = await calls()
     expect(call!.prompt).toContain('Initiative: hs — Health score (repository api).')
     expect(call!.cwd).toBe(runPaths(s.wt, run).room)
@@ -92,22 +92,22 @@ describe('planner runs', () => {
 
   it('retries an invalid reply once in the same session', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply())
-    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-then-valid'
-    process.env.FAKE_CLAUDE_INVALID_REPLY = JSON.stringify(reply({ slices: [] }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply())
+    process.env.FAKE_CODEX_STRUCTURED = 'invalid-then-valid'
+    process.env.FAKE_CODEX_INVALID_REPLY = JSON.stringify(reply({ slices: [] }))
     const run = await startPlanner(s.service, s.target)
     await s.service.settled(run.id)
     const [first, second] = await calls()
     expect(second!.prompt).toBe('Your reply did not pass validation: slices: the planner proposes 1 to 12 slices. Reply again with the same schema.')
-    expect(second!.args).toEqual(expect.arrayContaining(['--resume', run.session]))
-    expect(first!.args).toEqual(expect.arrayContaining(['--session-id', run.session]))
+    expect(second!.args).toEqual(expect.arrayContaining(['resume', (await readInitiative(s.dir)).runs[0]!.session]))
+    expect(first!.args).not.toContain('resume')
     expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done', validation_retry: true })
   })
 
   it('fails after the second invalid reply and keeps the plan', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-twice'
-    process.env.FAKE_CLAUDE_INVALID_REPLY = JSON.stringify(reply({ slices: [] }))
+    process.env.FAKE_CODEX_STRUCTURED = 'invalid-twice'
+    process.env.FAKE_CODEX_INVALID_REPLY = JSON.stringify(reply({ slices: [] }))
     const run = await startPlanner(s.service, s.target)
     await s.service.settled(run.id)
     const doc = await readInitiative(s.dir)
@@ -117,12 +117,12 @@ describe('planner runs', () => {
 
   it('fails a run whose output carries the token, redacts the log and moves nothing', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: `Here: ${FAKE_TOKEN}` }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: `Here: ${FAKE_TOKEN}` }))
     const run = await startPlanner(s.service, s.target)
     await s.service.settled(run.id)
     const doc = await readInitiative(s.dir)
     expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
-    expect(doc.runs[0]!.notes).toContain('claude setup-token')
+    expect(doc.runs[0]!.notes).toContain('OPENAI_API_KEY')
     expect(doc.plan.status).toBe('none')
     const log = await readFile(path.join(s.repo, run.log), 'utf8')
     expect(log).not.toContain(FAKE_TOKEN)
@@ -135,8 +135,8 @@ describe('planner runs', () => {
 
   it('redacts a secret split across small stream chunks even when the terminal result carries no trace of it (review round 2, finding 1)', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: `Here: ${FAKE_TOKEN}` }))
-    process.env.FAKE_CLAUDE_RESULT_SAFE = '1'
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: `Here: ${FAKE_TOKEN}` }))
+    process.env.FAKE_CODEX_RESULT_SAFE = '1'
     const run = await startPlanner(s.service, s.target)
     await s.service.settled(run.id)
     const doc = await readInitiative(s.dir)
@@ -227,7 +227,7 @@ describe('planner runs', () => {
     await s.service.settled(run.id)
     const doc = await readInitiative(s.dir)
     expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
-    expect(doc.runs[0]!.notes).toContain('claude setup-token')
+    expect(doc.runs[0]!.notes).toContain('OPENAI_API_KEY')
     expect(doc.plan.status).toBe('none')
     const surfaces = [
       await readFile(path.join(s.repo, run.log), 'utf8'), (await s.service.log(s.target, run.id)).text,
@@ -270,7 +270,7 @@ describe('planner runs', () => {
     // Round 4: a secret in the container error fails the run as a secret, before any notes are built from it.
     expect(doc.runs[0]).toMatchObject({ outcome: 'failed', problems: ['a secret appeared in the agent output'] })
     expect(doc.runs[0]!.notes).not.toContain(FAKE_TOKEN)
-    expect(doc.runs[0]!.notes).toContain('claude setup-token')
+    expect(doc.runs[0]!.notes).toContain('OPENAI_API_KEY')
     errorSpy.mockRestore()
   })
 
@@ -290,7 +290,7 @@ describe('planner runs', () => {
 
   it('stops a running planner', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_MODE = 'hang'
+    process.env.FAKE_CODEX_MODE = 'hang'
     const run = await startPlanner(s.service, s.target)
     await new Promise((r) => setTimeout(r, 300))
     await s.service.stop(s.target, run.id)
@@ -302,7 +302,7 @@ describe('planner runs', () => {
   it('starts without the research browser image (controller ruling 1)', async () => {
     const s = await setup()
     s.sandbox.statusValue = { ...s.sandbox.statusValue, browserImage: false, browserFix: 'Build the research browser image: npm run agent:build' }
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply())
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply())
     const run = await startPlanner(s.service, s.target)
     await s.service.settled(run.id)
     expect(s.sandbox.runs).toHaveLength(1)

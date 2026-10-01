@@ -2,7 +2,9 @@
   "name": "spec-review",
   "private": true,
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "concurrently -k -n server,ui \"tsx watch server/main.ts --config config.yaml --dev\" \"vite --config ui/vite.config.ts\"",
     "start": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.yaml",
@@ -10,7 +12,8 @@
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "e2e": "vite build --config ui/vite.config.ts && playwright test",
-    "agent:build": "docker build -t spec-review-agent:2.1.280 --build-arg CLAUDE_CODE_VERSION=2.1.280 sandbox/agent && docker build -t spec-review-egress:2 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser"
+    "agent:build": "docker build -t spec-review-codex:0.159.3 --build-arg CODEX_VERSION=0.159.3 -f sandbox/agent/Dockerfile . && docker build -t spec-review-egress:2 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser",
+    "smoke:codex": "tsx scripts/smoke-codex.mts"
   },
   "dependencies": {
     "@cucumber/cucumber-expressions": "^20.1.0",

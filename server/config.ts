@@ -20,8 +20,8 @@ const ConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(4600),
   hubRoot: z.string().default('../..'),
   repos: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) })).min(1),
-  model: z.string().default('opus'),
-  claudeBin: z.string().default('claude'),
+  model: z.string().default('gpt-5.4'),
+  codexBin: z.string().default('codex'),
   commitTrailer: z.string().default(''),
   questionTimeoutMinutes: z.number().positive().default(10),
   devUiOrigin: z.string().default('http://127.0.0.1:5173'),
@@ -57,7 +57,7 @@ export interface Config {
   hubRoot: string
   repos: { name: string; path: string }[]
   model: string
-  claudeBin: string
+  codexBin: string
   commitTrailer: string
   questionTimeoutMs: number
   devUiOrigin: string
@@ -83,7 +83,7 @@ export async function loadConfig(file: string): Promise<Config> {
     hubRoot,
     repos: c.repos.map((r) => ({ name: r.name, path: path.resolve(hubRoot, r.path) })),
     model: c.model,
-    claudeBin: c.claudeBin,
+    codexBin: c.codexBin,
     commitTrailer: c.commitTrailer,
     questionTimeoutMs: c.questionTimeoutMinutes * 60_000,
     devUiOrigin: c.devUiOrigin,

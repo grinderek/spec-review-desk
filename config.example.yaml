@@ -1,0 +1,14 @@
+port: 4600
+hubRoot: ..
+repos:
+  - { name: project, path: my-project }
+model: gpt-5.4
+codexBin: codex
+initiativeBase: main
+commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"
+questionTimeoutMinutes: 10
+sandbox:
+  envFile: .env
+  timeoutMinutes: 30
+# Configure runners for your repository's Cucumber container and allowed Apply commands.
+# See config.yaml for the original workspace's Docker Compose profile.

@@ -7,7 +7,7 @@ import { addDecisions, decisionsFromReply } from '../decision-model.ts'
 import { worktreeId } from '../discovery.ts'
 import { EventBus } from '../events.ts'
 import { updateReview, upsertApplyRun } from '../review-store.ts'
-import { FAKE_CLAUDE } from '../testing/fake-claude-path.ts'
+import { FAKE_CODEX } from '../testing/fake-codex-path.ts'
 import { call, testConfig, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
 import { registerApplyRoutes } from './apply.ts'
@@ -17,10 +17,10 @@ const REL = 'openspec/changes/add-thread-state'
 
 async function setup() {
   const { hub, repo } = await makeRepo()
-  const ctx = testContext(repo, { claudeBin: FAKE_CLAUDE })
-  const apply = new ApplyService({ config: testConfig(repo, { claudeBin: FAKE_CLAUDE }), bus: new EventBus() })
+  const ctx = testContext(repo, { codexBin: FAKE_CODEX })
+  const apply = new ApplyService({ config: testConfig(repo, { codexBin: FAKE_CODEX }), bus: new EventBus() })
   const app = createBaseApp(ctx)
-  registerReadRoutes(app, ctx, { claude: true, docker: false })
+  registerReadRoutes(app, ctx, { codex: true, docker: false })
   registerApplyRoutes(app, ctx, { apply })
   const wt = worktreeId(repo)
   await call(app, 'GET', '/api/changes')

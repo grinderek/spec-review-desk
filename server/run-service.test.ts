@@ -2,7 +2,7 @@ import { mkdtemp, readFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { ClaudeRunSpec } from './claude.ts'
+import type { CodexRunSpec } from './codex.ts'
 import { EventBus } from './events.ts'
 import { readInitiative } from './initiative-store.ts'
 import { startPlanner } from './planner-run.ts'
@@ -10,21 +10,21 @@ import { FINISHERS } from './run-kinds.ts'
 import { InitiativeRunService } from './run-service.ts'
 import type { RunOptions, SandboxOutcome, SandboxRun } from './sandbox.ts'
 import { ROTATE_HINT } from './secret-scan.ts'
-import { resetFakeClaude } from './testing/fake-claude-path.ts'
+import { resetFakeCodex } from './testing/fake-codex-path.ts'
 import { FAKE_TOKEN, FakeSandbox } from './testing/fake-sandbox.ts'
 import { testConfig } from './testing/http.ts'
 import { makeInitiative } from './testing/initiative.ts'
 import { makeRepo } from './testing/repo.ts'
 
-const claude: ClaudeRunSpec = {
-  bin: 'claude', cwd: '/work/in', sessionId: 's-1', resume: false, model: 'opus', allowedTools: ['Read'],
+const claude: CodexRunSpec = {
+  bin: 'claude', cwd: '/work/in', sessionId: 's-1', resume: false, model: 'gpt-5.4', allowedTools: ['Read'],
   disallowedTools: ['Bash'], permissionMode: 'default', appendSystemPrompt: null, prompt: 'Plan the slices.', jsonSchema: null,
 }
 
 beforeEach(() => {
-  resetFakeClaude()
-  delete process.env.FAKE_CLAUDE_LOG
-  process.env.FAKE_CLAUDE_MODE = 'answer'
+  resetFakeCodex()
+  delete process.env.FAKE_CODEX_LOG
+  process.env.FAKE_CODEX_MODE = 'answer'
 })
 
 // Review Minor #4: a stop() issued when no attempt of a run id is in flight (between a validation
@@ -36,7 +36,7 @@ describe('FakeSandbox.run', () => {
     const sandbox = new FakeSandbox()
     await sandbox.stop('r_stale') // no attempt in flight yet — the mark must not linger
     const outcome = await sandbox.run(
-      { runId: 'r_stale', runDir: tmp, room: tmp, out: tmp, sessions: tmp, domains: [], claude },
+      { runId: 'r_stale', runDir: tmp, room: tmp, out: tmp, sessions: tmp, domains: [], codex: claude },
       { timeoutMs: 10_000, onLine: () => undefined },
     )
     expect(outcome).toMatchObject({ stopped: false, code: 0 })

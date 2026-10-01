@@ -3,6 +3,6 @@ ui/dist/
 coverage/
 test-results/
 playwright-report/
-.fake-claude-sessions/
+.fake-codex-sessions/
 .fake-docker/
 .env

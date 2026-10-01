@@ -29,7 +29,7 @@ describe('redactSecrets', () => {
   })
 
   it('tells the owner how to rotate', () => {
-    expect(ROTATE_HINT).toContain('claude setup-token')
+    expect(ROTATE_HINT).toContain('OPENAI_API_KEY')
   })
 })
 
@@ -164,4 +164,11 @@ describe('SecretDetector', () => {
     for (const chunk of OTHER.match(/.{1,3}/g) ?? []) detector.feed(chunk)
     expect(detector.sawSecret).toBe(true)
   })
+})
+
+it('detects and masks OpenAI API keys even when they differ from the configured key', () => {
+  const key = 'sk-proj-abcdefghijklmnopqrstuvwxyz0123456789'
+  expect(findSecrets(key, null)).toContain('an OpenAI API key')
+  expect(redactSecrets(`Key: ${key}`, null)).toBe('Key: [REDACTED]')
+  expect(redactSecrets(`Key: ${key}`, key)).toBe('Key: [REDACTED]')
 })

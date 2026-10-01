@@ -61,19 +61,19 @@ export function researchPrompt(doc: InitiativeDoc, topic: string, questions: str
     '## Questions',
     questions.trim(),
     '',
-    `Already allowed for WebFetch and the browser: ${doc.research.domains.join(', ') || 'none'}`,
-    'You have WebSearch only. When you need to read pages, reply needs_owner with the fetch-domains decision.',
+    `Already allowed for desk.read_web_page and the browser: ${doc.research.domains.join(', ') || 'none'}`,
+    'You have desk.search_web only. When you need to read pages, reply needs_owner with the fetch-domains decision.',
   ].join('\n')
 }
 
 // Review fix 3: the owner answered a later fetch-domains decision (e.g. asset hosts) with search only.
 export const RESEARCH_READING_STOPPED =
-  'The owner chose search only: WebFetch and the browser are now off. Write the document from what you have already read and the ' +
+  'The owner chose search only: desk.read_web_page and the browser are now off. Write the document from what you have already read and the ' +
   'search results, and reply with it.'
 
 export function researchResumeClosing(domains: readonly string[]): string {
   return domains.length
-    ? `WebFetch is now enabled for: ${domains.join(', ')}. The browser (the mcp__browser__ tools) reaches the same hosts: use it for ` +
-      'pages that WebFetch returns empty. Read the pages you need and reply with the finished document.'
-    : 'WebFetch stays disabled (search only). Write the document from the search results and reply with it.'
+    ? `desk.read_web_page is now enabled for: ${domains.join(', ')}. The browser (the browser MCP tools) reaches the same hosts: use it for ` +
+      'pages that desk.read_web_page returns empty. Read the pages you need and reply with the finished document.'
+    : 'desk.read_web_page stays disabled (search only). Write the document from the search results and reply with it.'
 }

@@ -46,7 +46,7 @@ export interface PreviewFields { name: string; repoPath: string; where: 'new' | 
 export function createPreview(f: PreviewFields): string[] {
   if (!f.name) return []
   const first = f.where === 'new'
-    ? `git -C ${f.repoPath} worktree add .claude/worktrees/${f.name} -b plan/${f.name} ${f.base}`
+    ? `git -C ${f.repoPath} worktree add .codex/worktrees/${f.name} -b plan/${f.name} ${f.base}`
     : `use the existing worktree ${f.worktreePath ?? '(pick one)'}`
   return [
     first,

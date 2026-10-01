@@ -4,9 +4,9 @@ repos:
   - { name: api, path: api }
   - { name: mobile, path: mobile }
   - { name: web, path: web }
-model: opus
-claudeBin: claude
-commitTrailer: "Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
+model: gpt-5.4
+codexBin: codex
+commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"
 questionTimeoutMinutes: 10
 devUiOrigin: http://127.0.0.1:5173
 runners:

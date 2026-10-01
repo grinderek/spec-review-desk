@@ -56,7 +56,7 @@ describe('summaries', () => {
 describe('the New feature preview', () => {
   it('shows the git commands Create runs', () => {
     expect(createPreview({ name: 'health-score', repoPath: '/hub/api', where: 'new', base: 'staging', worktreePath: null })).toEqual([
-      'git -C /hub/api worktree add .claude/worktrees/health-score -b plan/health-score staging',
+      'git -C /hub/api worktree add .codex/worktrees/health-score -b plan/health-score staging',
       'write openspec/initiatives/health-score/{initiative.yaml,brief.md,inputs/}',
       'git commit -m "docs(openspec): health-score — initiative"',
     ])

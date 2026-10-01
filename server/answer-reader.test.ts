@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AnswerReader, StructuredStream } from './answer-reader.ts'
-import type { ClaudeEvent } from './claude.ts'
+import type { CodexEvent } from './codex.ts'
 
 const chunks = (text: string, size: number): string[] =>
   Array.from({ length: Math.ceil(text.length / size) }, (_, i) => text.slice(i * size, (i + 1) * size))
@@ -54,7 +54,7 @@ describe('AnswerReader', () => {
 })
 
 describe('StructuredStream', () => {
-  const feedAll = (events: ClaudeEvent[]): ClaudeEvent[] => {
+  const feedAll = (events: CodexEvent[]): CodexEvent[] => {
     const stream = new StructuredStream()
     return events.flatMap((e) => stream.feed(e))
   }

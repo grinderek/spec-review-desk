@@ -8,7 +8,7 @@ import { worktreeId } from '../discovery.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import { readReview, updateReview } from '../review-store.ts'
-import { FAKE_CLAUDE, resetFakeClaude } from '../testing/fake-claude-path.ts'
+import { FAKE_CODEX, resetFakeCodex } from '../testing/fake-codex-path.ts'
 import { call, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
 import { registerDecisionRoutes } from './decisions.ts'
@@ -36,10 +36,10 @@ async function decisionDiff(repo: string): Promise<string> {
 
 async function setup() {
   const { repo } = await makeRepo()
-  const ctx = testContext(repo, { claudeBin: FAKE_CLAUDE })
+  const ctx = testContext(repo, { codexBin: FAKE_CODEX })
   const questions = new QuestionService({ config: ctx.config, bus: ctx.bus })
   const app = createBaseApp(ctx)
-  registerReadRoutes(app, ctx, { claude: true, docker: false })
+  registerReadRoutes(app, ctx, { codex: true, docker: false })
   registerThreadRoutes(app, ctx, { questions, applyActive: () => false, resumeApply: null })
   registerDecisionRoutes(app, ctx, { questions })
   await call(app, 'GET', '/api/changes')
@@ -51,14 +51,14 @@ type Setup = Awaited<ReturnType<typeof setup>>
 // The agent raises a blocking scenario decision; the owner decides it; the agent answers with a
 // patch that resolves it.
 async function raiseAndDecide({ repo, app, questions, dir, change }: Setup) {
-  process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({
+  process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({
     answer: 'Your call.',
     decisions: [{ id: 'age_basis', question: 'Business or calendar age?', scope: { kind: 'scenario', key: OUTLINE }, options: OPTIONS, recommended: 'business', blocking: true }],
   }))
   const thread = await call(app, 'POST', `${change}/threads`, { anchor: 'scenario', ref: OUTLINE, text: 'Which age?' })
   await questions.idle(dir)
   const decisionId = (await readReview(dir)).decisions[0]!.id
-  process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: 'Recorded above the outline.', patch: await decisionDiff(repo), resolves: [decisionId] }))
+  process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: 'Recorded above the outline.', patch: await decisionDiff(repo), resolves: [decisionId] }))
   const decided = await call(app, 'POST', `${change}/decisions/${decisionId}/decide`, { option: 'business', note: 'Weekdays only.' })
   await questions.idle(dir)
   return { threadId: thread.json.id as string, decisionId, decided }
@@ -67,18 +67,18 @@ async function raiseAndDecide({ repo, app, questions, dir, change }: Setup) {
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string })
 
 beforeEach(async () => {
-  resetFakeClaude()
+  resetFakeCodex()
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-decisions-'))
   fakeLog = path.join(tmp, 'calls.ndjson')
-  process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
-  process.env.FAKE_CLAUDE_LOG = fakeLog
-  process.env.FAKE_CLAUDE_MODE = 'answer'
+  process.env.FAKE_CODEX_SESSIONS = path.join(tmp, 'sessions')
+  process.env.FAKE_CODEX_LOG = fakeLog
+  process.env.FAKE_CODEX_MODE = 'answer'
 })
 
 describe('decision routes', () => {
   it('rejects a bad choice before anything changes', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({
       decisions: [{ id: 'age_basis', question: 'Business or calendar age?', scope: { kind: 'scenario', key: OUTLINE }, options: OPTIONS, recommended: 'business', blocking: true }],
     }))
     await call(s.app, 'POST', `${s.change}/threads`, { anchor: 'scenario', ref: OUTLINE, text: 'Which age?' })
@@ -151,7 +151,7 @@ describe('decision routes', () => {
   it('opens a scenario thread for an owner scenario decision and asks the agent', async () => {
     const { app, questions, dir, change } = await setup()
     const { json } = await call(app, 'POST', `${change}/decisions`, { question: 'Business or calendar age?', scope: { kind: 'scenario', key: OUTLINE }, blocking: false, options: OPTIONS })
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: 'Will patch.' }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: 'Will patch.' }))
     const decided = await call(app, 'POST', `${change}/decisions/${json.id}/decide`, { option: 'calendar' })
     await questions.idle(dir)
     const thread = (await readReview(dir)).threads.find((t) => t.id === decided.json.threadId)!

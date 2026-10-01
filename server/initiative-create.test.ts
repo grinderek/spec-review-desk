@@ -23,7 +23,7 @@ const input = (over: Partial<CreateInput> = {}): CreateInput => ({
 describe('createCommands', () => {
   it('previews the worktree command for a new worktree only', () => {
     expect(createCommands(input(), '/hub/api')).toEqual([
-      ['git', '-C', '/hub/api', 'worktree', 'add', '.claude/worktrees/health-score', '-b', 'plan/health-score', 'main'],
+      ['git', '-C', '/hub/api', 'worktree', 'add', '.codex/worktrees/health-score', '-b', 'plan/health-score', 'main'],
     ])
     expect(createCommands(input({ where: { kind: 'existing', worktreeId: 'x' } }), '/hub/api')).toEqual([])
   })
@@ -35,7 +35,7 @@ describe('createInitiative', () => {
     const config = testConfig(repo, { hubRoot: path.dirname(repo) })
     const registry = new Registry()
     const created = await createInitiative(config, registry, input({ fromRepo: ['api/features/STEPS.md'] }), AT)
-    const wt = path.join(repo, '.claude/worktrees/health-score')
+    const wt = path.join(repo, '.codex/worktrees/health-score')
     expect(created).toEqual({ worktreeId: worktreeId(wt), name: 'health-score' })
     expect(registry.get(created.worktreeId)?.branch).toBe('plan/health-score')
     const dir = path.join(wt, 'openspec/initiatives/health-score')
@@ -63,7 +63,7 @@ describe('createInitiative', () => {
     await expect(createInitiative(config, new Registry(), input({ where: { kind: 'new', base: 'nope' } }), AT)).rejects.toMatchObject({ code: 'unknown_base' })
     await expect(createInitiative(config, new Registry(), input({ files: [{ name: 'x.exe', bytes: new Uint8Array(1), source: { kind: 'upload' } }] }), AT))
       .rejects.toMatchObject({ code: 'unsupported_type' })
-    await expect(stat(path.join(repo, '.claude/worktrees/health-score'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(repo, '.codex/worktrees/health-score'))).rejects.toMatchObject({ code: 'ENOENT' })
     sh(repo, 'git', ['branch', 'plan/health-score'])
     await expect(createInitiative(config, new Registry(), input(), AT)).rejects.toMatchObject({ code: 'name_taken' })
     await expect(createInitiative(config, new Registry(), input({ repo: 'web' }), AT)).rejects.toMatchObject({ code: 'unknown_repo' })
@@ -76,8 +76,8 @@ describe('createInitiative', () => {
     await mkdir(path.join(repo, 'hooks'))
     await writeFile(path.join(repo, 'hooks/pre-commit'), '#!/bin/sh\nexit 1\n', { mode: 0o755 })
     await expect(createInitiative(config, new Registry(), input(), AT)).rejects.toMatchObject({
-      code: 'create_failed', message: expect.stringContaining('.claude/worktrees/health-score'),
+      code: 'create_failed', message: expect.stringContaining('.codex/worktrees/health-score'),
     })
-    expect((await stat(path.join(repo, '.claude/worktrees/health-score/openspec/initiatives/health-score/initiative.yaml'))).isFile()).toBe(true)
+    expect((await stat(path.join(repo, '.codex/worktrees/health-score/openspec/initiatives/health-score/initiative.yaml'))).isFile()).toBe(true)
   })
 })
