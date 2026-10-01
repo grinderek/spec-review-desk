@@ -1,7 +1,10 @@
 ## Why
 
-Try a strict event/command DSL for developing Desk through its own review cycle.
+Develop Desk behavior through executable event/command contracts that owners can review in Desk.
 
 ## What
 
-Read YAML contracts, review them by stable id and semantic hash, run them through real HTTP handlers, and persist scenario approvals as replayable events.
+Support strict YAML contracts alongside Gherkin, with stable ids, semantic hashes, case tables,
+response bindings and persisted-state observations. Run the review corpus through real HTTP routes
+and the local self-review runner. Replay scenario, phrase and whole-change approvals from a journal.
+Replace the legacy review route, readiness, store and change-view test files with this corpus.

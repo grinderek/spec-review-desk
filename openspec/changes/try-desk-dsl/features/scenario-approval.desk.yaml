@@ -86,12 +86,21 @@ scenarios:
       response: { status: 404, body: { error: { code: unknown_scenario } } }
 
   - id: reject-archived-change
-    scenario: Reject approval of an archived change
+    scenario: Reject writes to an archived change
+    cases:
+      - { name: approve scenario, operation: scenarios/approve, payload: { key: $key } }
+      - { name: revoke scenario, operation: scenarios/revoke, payload: { key: $key } }
+      - { name: request changes, operation: scenarios/request-changes, payload: { key: $key, reason: Explain. } }
+      - { name: approve phrase, operation: phrases/approve, payload: { key: missing } }
+      - { name: revoke phrase, operation: phrases/revoke, payload: { key: missing } }
+      - { name: approve change, operation: approval, payload: {} }
+      - { name: drop orphan, operation: orphans/drop, payload: { section: scenarios, key: old } }
+      - { name: reattach orphan, operation: orphans/reattach, payload: { section: scenarios, key: old, to: missing } }
     given:
       - ScenarioDiscovered: {}
       - ChangeArchived: {}
     when:
-      ApproveScenario: { key: $key }
+      HttpRequest: { method: POST, path: '$change/$operation', body: $payload }
     then:
       events: []
       response: { status: 409, body: { error: { code: archived } } }
@@ -110,6 +119,7 @@ scenarios:
           features:
             - scenarios:
                 - effective: { status: pending, changedSinceApproval: false, approvedCommit: null }
+          review: { version: 1, agent_session: null, approved_at: null, approved_commit: null, threads: [], decisions: [], apply_runs: [] }
 
   - id: preserve-changes-requested
     scenario: Keep requested changes while the contract is unchanged

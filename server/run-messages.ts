@@ -27,6 +27,7 @@ export function parseRunMessages(ndjson: string): CorpusRun {
   const started = new Map<string, string>()
   const results = new Map<string, { status: RunStatus; failure: ScenarioRun['failure'] }>()
   let finishedAt: string | null = null
+  const deskTotals = { passed: 0, failed: 0, other: 0 }
   const deskScenarios: Record<string, ScenarioRun> = {}
 
   for (const line of ndjson.split('\n')) {
@@ -39,7 +40,14 @@ export function parseRunMessages(ndjson: string): CorpusRun {
     }
     if (envelope.deskScenarioResult) {
       const r = envelope.deskScenarioResult
-      deskScenarios[String(r.key)] = { status: toStatus(r.status), failure: r.message ? { step: 'contract', message: String(r.message) } : null, rows: null }
+      const status = toStatus(r.status)
+      if (status === 'passed') deskTotals.passed++
+      else if (status === 'failed') deskTotals.failed++
+      else deskTotals.other++
+      const previous = deskScenarios[String(r.key)]
+      const rows = Number.isInteger(r.rows) && r.rows > 0 ? [...(previous?.rows ?? Array<RunStatus>(r.rows).fill('unknown'))] : null
+      if (rows && Number.isInteger(r.row) && r.row >= 0 && r.row < rows.length) rows[r.row] = status
+      deskScenarios[String(r.key)] = { status: previous ? worst(previous.status, status) : status, failure: previous?.failure ?? (r.message ? { step: 'contract', message: String(r.message) } : null), rows }
     } else if (envelope.deskRunFinished) { finishedAt = String(envelope.deskRunFinished.at)
     } else if (envelope.gherkinDocument) {
       const doc = envelope.gherkinDocument
@@ -94,9 +102,7 @@ export function parseRunMessages(ndjson: string): CorpusRun {
   }
   for (const [key, scenario] of Object.entries(deskScenarios)) {
     scenarios[key] = scenario
-    if (scenario.status === 'passed') totals.passed++
-    else if (scenario.status === 'failed') totals.failed++
-    else totals.other++
   }
+  totals.passed += deskTotals.passed; totals.failed += deskTotals.failed; totals.other += deskTotals.other
   return { scenarios, totals, finishedAt }
 }

@@ -1,0 +1,135 @@
+version: 1
+feature: A change becomes ready only when every owner obligation is satisfied
+scenarios:
+  - id: ready-change
+    scenario: Mark a change ready when all reviews and discussions are complete
+    given:
+      - ScenarioDiscovered: {}
+      - PhraseProposed: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - PhraseApproved: { key: $phrase, hash: $phraseHash, at: $at }
+      - ReviewThreadOpened: { status: resolved }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          readiness: { ready: true, reasons: [] }
+          uncommittedReview: true
+
+  - id: decision-gate
+    scenario: Block only unresolved decisions marked as blocking
+    cases:
+      - { name: open blocking, decisionStatus: open, blocking: true, ready: false, reasons: [1 blocking decision open] }
+      - { name: decided blocking, decisionStatus: decided, blocking: true, ready: false, reasons: [1 blocking decision open] }
+      - { name: open informational, decisionStatus: open, blocking: false, ready: true, reasons: [] }
+      - { name: recorded blocking, decisionStatus: recorded, blocking: true, ready: true, reasons: [] }
+      - { name: dismissed blocking, decisionStatus: dismissed, blocking: true, ready: true, reasons: [] }
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - DecisionRaised: { status: $decisionStatus, blocking: $blocking }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: $ready, reasons: $reasons } } }
+
+  - id: discussion-gate
+    scenario: Require review discussions to be resolved while ignoring Apply discussions
+    cases:
+      - { name: open review, threadStatus: open, anchor: change, ready: false, reasons: [1 thread not resolved] }
+      - { name: answered review, threadStatus: answered, anchor: change, ready: false, reasons: [1 thread not resolved] }
+      - { name: resolved review, threadStatus: resolved, anchor: change, ready: true, reasons: [] }
+      - { name: open Apply, threadStatus: open, anchor: apply, ready: true, reasons: [] }
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - ReviewThreadOpened: { status: $threadStatus, anchor: $anchor }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: $ready, reasons: $reasons } } }
+
+  - id: phrase-gate
+    scenario: Require every proposed phrase to be approved
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - PhraseProposed: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: false, reasons: [1 phrase not approved] } } }
+
+  - id: empty-change-gate
+    scenario: Refuse readiness without any scenario
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioRemoved: {}
+      - SpecTitlesWritten: { titles: [] }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: false, reasons: [no scenarios] } } }
+
+  - id: join-key-gate
+    scenario: Require matching unique scenario titles in contracts and specs
+    cases:
+      - name: missing spec title
+        titles: []
+        reasons: ['join key: 0 spec titles without a scenario, 1 scenario without a spec line, 0 duplicate titles']
+      - name: extra spec title
+        titles: [Subject contract, Missing contract]
+        reasons: ['join key: 1 spec title without a scenario, 0 scenarios without a spec line, 0 duplicate titles']
+      - name: duplicate spec title
+        titles: [Subject contract, Subject contract]
+        reasons: ['join key: 0 spec titles without a scenario, 0 scenarios without a spec line, 1 duplicate title']
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - SpecTitlesWritten: { titles: $titles }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: false, reasons: $reasons } } }
+
+  - id: parse-error-gate
+    scenario: Keep valid scenarios visible while reporting a malformed feature
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - BrokenFeatureAdded: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          features:
+            - scenarios:
+                - title: Subject contract
+                  effective: { status: approved }
+          errors: [{ file: features/broken.feature }]
+          readiness: { ready: false, reasons: [1 file failed to parse] }
+
+  - id: uncatalogued-phrase-gate
+    scenario: Require legacy Gherkin phrases to be catalogued
+    given:
+      - ScenarioDiscovered: {}
+      - UncataloguedScenarioDiscovered: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          readiness: { ready: false, reasons: [1 scenario not approved, 3 uncatalogued steps] }

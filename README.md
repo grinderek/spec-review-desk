@@ -140,13 +140,13 @@ back to `review.yaml` after that commit, so it can remain modified until the nex
 ## Developing the Desk with Desk DSL
 
 The experimental YAML contract corpus in [features/](features/) runs through real HTTP handlers
-and scenario-review event history. `npm run test:spec` executes it without an LLM; `npm run desk`
+and review approval event history. `npm run test:spec` executes it without an LLM; `npm run desk`
 opens this repository in the Desk using `config.desk.yaml` and its local runner. Proposed contracts
 are in `openspec/changes/try-desk-dsl` for owner review. The UI shows YAML, event/command summaries,
 hash-bound approvals and verification results. Gherkin projects remain supported.
 
-See [the language and migration boundary](docs/method/desk-dsl.md). Scenario review state is now
-replayed from `review.events.jsonl`; other modules still use their existing state. `npm test` runs
+See [the language and migration boundary](docs/method/desk-dsl.md). Scenario, phrase and whole-change approvals are
+replayed from `review.events.jsonl`; discussion, decision and agent-run state keeps its existing storage. `npm test` runs
 both the DSL corpus and the remaining legacy checks. Only checks replaced by the corpus are removed.
 
 ## Checks

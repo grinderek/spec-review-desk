@@ -1,8 +1,7 @@
-# Desk DSL v1: experimental executable contracts
+# Desk DSL v1: executable review contracts
 
-This first slice replaces free-form step phrases with named events and commands in YAML.
-It coexists with Gherkin. The executable corpus is `features/*.desk.yaml`; the proposed change
-under `openspec/changes/try-desk-dsl` contains the same contracts for owner review.
+The YAML DSL uses named events and commands. It coexists with Gherkin. The executable corpus is
+`features/*.desk.yaml`; `openspec/changes/try-desk-dsl` contains the same contracts for owner review.
 
 ```yaml
 version: 1
@@ -20,70 +19,98 @@ scenarios:
       response: { status: 200, body: { ok: true } }
 ```
 
-A scenario has a stable lowercase id, a readable title, prior event/environment facts, one named
-command and an explicit expected event list and response. Each event/command is a single-key
-mapping with a mapping payload. `events: []` expects no appended events. Unknown structural fields,
-duplicate YAML keys, aliases, duplicate ids and multiple commands are rejected. Version 1 does not
-support page assertions, outlines, arbitrary expressions or automatic binding of generated values.
-Those require concrete examples before extending the language.
+Bindings use literal dotted response paths without variable interpolation. For generated fields
+with ordinary property names, use `then.bind: { threadId: response.body.threadId }`, then `$threadId` in later assertions.
+Bindings require nonempty strings and cannot overwrite a different previously bound value.
 
-Response objects match only the listed fields, recursively. Arrays match length and order exactly.
-Events match exact count, order and type, then the listed payload fields. The runner reports the
-scenario and failing field and returns nonzero on any failed scenario. YAML/source errors also fail
-the command; there is no success when the corpus is empty. No LLM or Docker is used to run specs.
+A scenario has a stable lowercase id, a readable title, prior event/environment facts, one command
+and an explicit expected event list and response. Each fact is a single-key mapping with a mapping
+payload. `events: []` expects no new domain events. Unknown structural fields, duplicate YAML keys,
+aliases, duplicate ids and multiple commands are rejected. There are no arbitrary expressions or
+embedded executable code.
 
-## The first application adapter
+## Case tables and observations
 
-`run-desk-specs.mts` creates a clean git repository per scenario, the real Hono app, security
-middleware, discovery and review routes, and the real disk-backed review journal. It dispatches
-ApproveScenario, RevokeScenarioApproval and ReadChange through authenticated HTTP requests.
-A domain adapter is written once for a command/event, not once per wording of a scenario.
+`cases` lists parameter mappings. Each row executes the same rule in a fresh repository. `$name`
+substitutes a typed value when it occupies the entire string; embedded references interpolate
+strings. Fact names and mapping keys can also use variables. Case tables appear as examples in Desk;
+results show each row and aggregate the worst row status for the contract.
 
-ScenarioDiscovered and ScenarioRevised describe the external repository contract: they create or
-change its source before the command. ScenarioReformatted changes presentation alone.
-ContractSourceWritten provides deliberately malformed source. ChangeArchived and ReviewProjectionLost
-pin external conditions. ScenarioApproved and ScenarioChangesRequested enter history through the
-same serialized writer used by production; reading projects through the real application.
-Fixture bindings are $key, $hash, $head, $at and $change. $hash follows the current source contract.
-The production command generates its own approval time; tests do not substitute the clock.
+```yaml
+cases:
+  - { name: new phrase, extension: false }
+  - { name: extended phrase, extension: true }
+given:
+  - ScenarioDiscovered: {}
+  - PhraseProposed: { extension: $extension }
+when:
+  ApprovePhrase: { key: $phrase }
+then:
+  events:
+    - PhraseApproved: { key: $phrase, hash: $phraseHash }
+  response: { status: 200, body: { ok: true } }
+  reads:
+    - path: $change
+      response:
+        status: 200
+        body: { phrases: [{ key: $phrase, effective: { status: approved } }] }
+```
 
-ScenarioApproved, ScenarioChangesRequested and ScenarioReviewRemoved are versioned journal events.
-Their concrete stored payloads are validated in review-store.ts. The first two contain the scenario
-key and review entry; the DSL adapter exposes key/hash/commit/at as a flat contract for comparison.
+Each `then.reads` entry issues a GET, can bind generated fields and compares its response. Observing
+state must not emit events. Optional `then.git` checks head, parent, message and changed files of the
+resulting commit. Responses and event payloads match listed object fields recursively; arrays match
+length and order exactly. Events match exact count, order and type. Status can be an HTTP number or
+a case variable. Failures identify the contract, case and field; empty or malformed corpora fail.
 
-## Persistence and migration boundary
+## The review adapter
 
-Scenario review events live in `review.events.jsonl` beside `review.yaml`. Writers atomically replace
-the journal with its existing history plus new events before updating the YAML projection. Reading
-replays scenario history, including after projection loss. Existing YAML scenario reviews are
-imported when the first scenario-changing update occurs. Once journaled, manual edits to the YAML
-scenario section are not authoritative. Other YAML fields retain their current behavior. Missing
-projection recovery covers scenario reviews, not threads, decisions, phrases or agent runs.
+`scripts/desk-specs/review-world.mts` creates a clean Git repository, real Hono app, security
+middleware, discovery, disk-backed review store and review routes for every execution. Commands
+cover scenario/phrase approvals and revocations, requests for changes, change approval and orphan
+operations. Reads expose change and summary views. A domain adapter is defined once per operation.
 
-Commands and updates are serialized by the existing per-change, per-process lock. Running multiple
-Desk server processes against the same change is not supported. Journal rewrite cost grows with
-history; an append store with process-safe locking is a later storage change. A projection-write
-failure may leave a successful journal write; reads recover the scenario state from that history.
-Git commits and unstaging of review.yaml include its journal. Reviewer patches and author output
-cannot supply review history.
+Given facts prepare source contracts, phrases, prior approvals, discussions, decisions, legacy
+reviews, malformed files and archival conditions. Approvals use the same serialized writer as
+production. Concurrent prior approvals test this writer, followed by a public HTTP read. Fixture
+bindings include `$key`, `$hash`, `$head`, `$at`, `$change`, `$phrase` and `$phraseHash`. Production
+commands generate their own ids and times. The question service uses a deterministic model transport
+while running real reply validation and persistence. No LLM or Docker is required for this corpus.
 
-## Review and run the Desk itself
+## Persistence and compatibility
+
+`review.events.jsonl` stores versioned ScenarioApproved, ScenarioChangesRequested,
+ScenarioReviewRemoved, PhraseApproved, PhraseChangesRequested, PhraseReviewRemoved,
+ChangeApprovalRecorded and ChangeApprovalRemoved events. Entry payloads are stored under `entry`;
+the adapter exposes key/hash/commit/at for assertions. ScenarioChangesRequested can include the
+initial owner thread. Subsequent conversation, decisions and agent runs remain in `review.yaml`.
+
+Writers atomically replace the journal with existing history plus new events before updating the
+YAML projection. Reads replay all approval state after projection loss. Original YAML reviews and
+older scenario-only journals import their prior approval state once through a versioned
+ReviewApprovalHistoryExtended checkpoint. Import checkpoints are excluded from new domain event
+assertions. Journaled approvals override manual YAML approval edits; other fields retain YAML
+behavior. Invalid YAML or history is rejected rather than silently repaired.
+
+The existing per-change, per-process lock serializes updates. Multiple server processes writing
+one change remain unsupported; journal rewrite cost grows with history. A failed projection write
+can leave a successful journal write, from which approval state is recovered. Git commits and
+unstaging of review.yaml include its journal. Agents cannot supply or edit approval history.
+
+## Review and run Desk itself
 
 ```sh
 npm run test:spec
 npm run desk
 ```
 
-`config.desk.yaml` discovers this repository and configures an explicit local runner invoking
-`npm run test:spec`. Run now on the change screen executes it and reads its scenario results.
-Local runners execute the configured argv on the host; configuration is trusted. Existing compose
-runners remain supported. Results are written under gitignored `.spec-review/` and include native
-Desk envelopes in last-run.ndjson alongside support for older Cucumber envelopes.
+`config.desk.yaml` discovers this repository and configures a local runner for `npm run test:spec`.
+Run now executes the corpus and loads its per-contract/per-case results. Local runners execute the
+configured argv on the host; configuration is trusted. Compose runners remain supported. Results
+live in gitignored `.spec-review/`, with native Desk envelopes and support for Cucumber envelopes.
 
-The UI displays the YAML contract, its event/command summary, approvals and contract diffs. Scenario
-keys use file::id. Hashes use canonical structured content: comments, indentation and mapping-key
-order do not invalidate approval; changed expectations do. Corpus comparison uses the same hash.
-
-Only the covered legacy checks have been removed. Other legacy tests and the browser suite remain
-until corresponding executable contracts replace them. Author/reviewer/Apply instructions know
-both formats; end-to-end authoring through a live Codex account is not part of this offline prototype.
+The UI displays YAML contracts, event/command summaries, approvals and diffs. Keys use file::id.
+Hashes include canonical contract content and case tables: comments, indentation and mapping-key
+order preserve approval; changed expectations require approval again. Corpus comparison uses the
+same hash. See [the review migration map](review-migration.md) for removed legacy checks. Other
+legacy domains and browser checks remain. Live authoring through a Codex account is outside these
+offline contracts.
