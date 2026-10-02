@@ -1,3 +1,4 @@
+import { AgentUsage } from './AgentUsage.tsx'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { api, ApiError } from './api.ts'
@@ -38,6 +39,7 @@ export function App({ sessionError }: { sessionError: string | null }) {
     <>
       {sessionError || unauthorized ? <div className="banner bad">{sessionError ?? 'Not signed in — open the URL printed in the server console.'}</div> : null}
       {status.data && !status.data.capabilities.codex ? <div className="banner warn">codex is not on PATH — questions and Apply are disabled.</div> : null}
+      <AgentUsage />
       <div className={wide ? 'layout wide' : 'layout'}>
         <Sidebar data={changes.data} initiatives={initiatives.data?.initiatives} selected={selected} onSelect={go} />
         <main className="pane main">

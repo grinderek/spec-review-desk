@@ -1,3 +1,5 @@
+import { routerStatus } from '../router-runtime.ts'
+import { readUsage } from '../agent-usage.ts'
 import type { Hono } from 'hono'
 import type { AppContext } from '../app.ts'
 import { findScenario, loadChangeView, summarize } from '../change-view.ts'
@@ -13,6 +15,7 @@ import { sseFromBus } from './sse.ts'
 export interface Capabilities { codex: boolean; docker: boolean }
 
 export function registerReadRoutes(app: Hono, ctx: AppContext, capabilities: Capabilities): void {
+  app.get('/api/usage', async c => c.json({ ...await readUsage(ctx.config), router: await routerStatus(ctx.config) }))
   app.get('/api/status', (c) => c.json({ capabilities }))
 
   app.get('/api/changes', async (c) => {

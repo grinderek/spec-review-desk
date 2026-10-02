@@ -3,6 +3,7 @@ import { readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { z } from 'zod'
+import { RoutingDecisionSchema } from './agent-routing.ts'
 import { HttpError } from './errors.ts'
 import { ReviewFileError, withReviewLock } from './review-store.ts'
 
@@ -63,6 +64,7 @@ const RunSchema = z.object({
   change: z.string().regex(CHANGE_NAME).optional(),
   // The one validation retry of sub-project A §4 is running (cleared by an owner resume).
   validation_retry: z.boolean().optional(),
+  routing: RoutingDecisionSchema.optional(),
   // Validation or vetting problems of a failed run.
   problems: z.array(z.string()).optional(),
 }).refine((run) => run.log === runLogPath(run.id), { path: ['log'], message: 'must be .spec-review/runs/<run id>.ndjson' })

@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { CodexRunSpec, ResultEvent } from './codex.ts'
-import { agentProfile, type Config } from './config.ts'
+import { selectAgent } from './agent-routing.ts'
+import { appendAudit, auditId, estimateApiUsd } from './agent-usage.ts'
+import { type Config } from './config.ts'
 import { pendingBlocking, runDecisions } from './decision-model.ts'
 import type { WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
@@ -109,6 +111,7 @@ export class InitiativeRunService {
       id, session: randomUUID(), container: containerName(id), log: runLogPath(id),
       started_at: nowIso(this.#now()), ended_at: null, outcome: 'running',
     }
+    run.routing = await selectAgent(this.deps.config, run.kind, [run.topic, run.questions].filter(Boolean).join('\n') || prompt)
     const paths = runPaths(target.wt, run)
     for (const dir of [paths.room, paths.out, paths.sessions]) await mkdir(dir, { recursive: true })
     // Ruling 6: the agent (uid 10001) writes its output and session store.
@@ -235,8 +238,16 @@ export class InitiativeRunService {
     if (webFetch) await this.#recordReadDomains(target, run.id, doc.research.domains)
     const tools = agentTools(run.kind, webFetch)
     const token = await sandbox.token()
+    if (!run.routing) {
+      run = { ...run, routing: await selectAgent({ ...config, routing: undefined }, run.kind, prompt) }
+      await updateInitiative(target.ini.dir, d => upsertRun(d, { ...findRun(d, run.id), routing: run.routing }))
+    }
+    const routing = run.routing!
+    const audit = { id: auditId(run.id, randomUUID()), role: run.kind, runId: run.id, worktreeId: target.wt.id, target: target.ini.name, resume, routing }
+    const attemptStarted = Date.now()
+    await appendAudit(config, { ...audit, type: 'started', at: new Date().toISOString() })
     const codex: CodexRunSpec = {
-      bin: 'codex', cwd: WORK_IN, sessionId: run.session, resume, ...agentProfile(config, run.kind), allowedTools: tools.allowed,
+      bin: 'codex', cwd: WORK_IN, sessionId: run.session, resume, model: routing.model, reasoningEffort: routing.reasoningEffort, allowedTools: tools.allowed,
       disallowedTools: tools.disallowed, permissionMode: tools.permissionMode, appendSystemPrompt: await readFile(RULES[run.kind], 'utf8'),
       jsonSchema: REPLY_SCHEMA_ARGS[run.kind], prompt,
       toolsScript: '/opt/spec-review/desk-tools.mjs', writeRoot: run.kind === 'author' ? WORK_OUT : undefined,
@@ -244,7 +255,7 @@ export class InitiativeRunService {
     }
     const paths = runPaths(target.wt, run)
     await mkdir(path.dirname(paths.log), { recursive: true })
-    const { outcome, resultEvent, sawSecret } = await streamAttempt({
+    const { outcome, resultEvent, sawSecret, usage, toolCalls } = await streamAttempt({
       sandbox, bus, token, detector: this.#detector(run.id, token), channel: `irun:${run.id}`, logFile: paths.log, resume,
       timeoutMs: config.sandbox.timeoutMs,
       spec: {
@@ -254,6 +265,7 @@ export class InitiativeRunService {
         browser: webFetch,
       },
     })
+    await appendAudit(config, { ...audit, type: 'completed', at: new Date().toISOString(), durationMs: Date.now() - attemptStarted, ok: Boolean(resultEvent?.ok && !outcome.error && !sawSecret), usage, toolCalls, decisionsRaised: typeof resultEvent?.structured === 'object' && resultEvent.structured !== null && 'decisions' in resultEvent.structured && Array.isArray(resultEvent.structured.decisions) ? resultEvent.structured.decisions.length : 0, estimatedApiUsd: estimateApiUsd(routing.model, usage), actualBilledUsd: null })
     if (resultEvent?.sessionId && !sawSecret) {
       const session = resultEvent.sessionId
       const updated = await updateInitiative(target.ini.dir, (d) => upsertRun(d, { ...findRun(d, run.id), session }))

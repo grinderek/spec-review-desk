@@ -1,6 +1,7 @@
 import { appendFile } from 'node:fs/promises'
 import { StructuredStream } from './answer-reader.ts'
 import { CodexStream, type ResultEvent } from './codex.ts'
+import type { TokenUsage } from './agent-usage.ts'
 import type { EventBus } from './events.ts'
 import type { Sandbox, SandboxOutcome, SandboxRun } from './sandbox.ts'
 import { findSecretsInLine, maskDeep, type SecretDetector, SecretHoldback } from './secret-scan.ts'
@@ -51,7 +52,7 @@ export interface AttemptStream {
   timeoutMs: number
   spec: SandboxRun
 }
-export interface AttemptResult { outcome: SandboxOutcome; resultEvent: ResultEvent | null; sawSecret: boolean }
+export interface AttemptResult { outcome: SandboxOutcome; resultEvent: ResultEvent | null; sawSecret: boolean; usage: TokenUsage | null; toolCalls: number }
 
 export async function streamAttempt({ sandbox, bus, token, detector, channel, logFile, resume, timeoutMs, spec }: AttemptStream): Promise<AttemptResult> {
   const stream = new StructuredStream()
@@ -155,7 +156,7 @@ export async function streamAttempt({ sandbox, bus, token, detector, channel, lo
   releaseAnswer(answer.flush())
   if (narration.sawSecret || thinking.sawSecret || answer.sawSecret || detector.sawSecret) sawSecret = true
   await writes
-  return { outcome, resultEvent, sawSecret }
+  return { outcome, resultEvent, sawSecret, usage: codex.usage, toolCalls: codex.toolCalls }
 }
 
 // The run log as the owner reads it: the narration plus only the latest answer — a validation

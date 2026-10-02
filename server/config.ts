@@ -39,6 +39,14 @@ const ConfigSchema = z.object({
     reviewer: AgentProfileSchema.optional(),
     apply: AgentProfileSchema.optional(),
   }).default({}),
+  routing: z.object({
+    enabled: z.boolean().default(false),
+    endpoint: z.string().url().refine((s) => { const u = new URL(s); return u.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(u.hostname) && !u.username && !u.password && u.pathname === '/' && !u.search && !u.hash }, 'routing endpoint must be a loopback HTTP origin').default('http://127.0.0.1:8009'),
+    startCommand: z.array(z.string().min(1)).min(1).optional(),
+    roles: z.array(z.enum(['research', 'apply'])).default(['research', 'apply']),
+    timeoutMs: z.number().int().min(100).max(30000).default(5000),
+    minLunaProbability: z.number().min(0).max(1).default(0.55),
+  }).default({ enabled: false, endpoint: 'http://127.0.0.1:8009', roles: ['research', 'apply'], timeoutMs: 5000, minLunaProbability: 0.55 }),
   codexBin: z.string().default('codex'),
   commitTrailer: z.string().default(''),
   questionTimeoutMinutes: z.number().positive().default(10),
@@ -80,6 +88,8 @@ export interface Config {
   model: string
   reasoningEffort?: ReasoningEffort
   agents?: Partial<Record<AgentRole, AgentProfile>>
+  routing?: { enabled: boolean; endpoint: string; roles: AgentRole[]; startCommand?: string[]; timeoutMs: number; minLunaProbability: number }
+  usageDir?: string
   codexBin: string
   commitTrailer: string
   questionTimeoutMs: number
@@ -116,6 +126,8 @@ export async function loadConfig(file: string): Promise<Config> {
     model: c.model,
     reasoningEffort: c.reasoningEffort,
     agents: c.agents,
+    routing: { ...c.routing, endpoint: c.routing.endpoint.replace(/\/$/, '') },
+    usageDir: path.join(configDir, '.spec-review', 'usage'),
     codexBin: c.codexBin,
     commitTrailer: c.commitTrailer,
     questionTimeoutMs: c.questionTimeoutMinutes * 60_000,

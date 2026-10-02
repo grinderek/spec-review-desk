@@ -1,3 +1,4 @@
+import { RunProfile } from './AgentUsage.tsx'
 import { useState } from 'react'
 import { api, type InitiativeView, initiativeDecisions, type RunRecord } from './api.ts'
 import { DecisionCard } from './DecisionCard.tsx'
@@ -162,6 +163,7 @@ function RunCard({ id, view, run }: { id: TabProps['id']; view: InitiativeView; 
         <span className={`pill p-${run.outcome}`}>{run.outcome}</span>
         <span className="hash">{run.id} · {run.started_at}{run.ended_at ? ` → ${run.ended_at}` : ''}</span>
       </div>
+      <RunProfile routing={run.routing} />
       {run.notes ? <div className="scope">{run.notes}</div> : null}
       {run.problems?.length ? <div className="fail">{run.problems.map((p, i) => <div key={i}>{p}</div>)}</div> : null}
       {run.outcome === 'running' ? <RunStream runId={run.id} /> : null}

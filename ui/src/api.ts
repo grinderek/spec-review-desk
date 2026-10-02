@@ -69,6 +69,7 @@ export interface RepoChoice { name: string; path: string; worktrees: { id: strin
 export interface InitiativesResponse { initiatives: InitiativeSummary[]; repos: RepoChoice[]; defaultBase: string }
 
 export const api = {
+  usage: () => request<Awaited<ReturnType<typeof import('../../server/agent-usage.ts').readUsage>> & { router: { enabled: boolean; ready: boolean; model?: string } }>('GET', '/api/usage'),
   status: () => request<{ capabilities: Capabilities }>('GET', '/api/status'),
   changes: () => request<ChangesResponse>('GET', '/api/changes'),
   change: (id: ChangeId) => request<ChangeView>('GET', base(id)),

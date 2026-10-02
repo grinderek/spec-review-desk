@@ -1,3 +1,4 @@
+import { RunProfile } from './AgentUsage.tsx'
 import { useState } from 'react'
 import type { ChangeView } from '../../server/change-view.ts'
 import type { RunnerState } from '../../server/runner.ts'
@@ -48,6 +49,7 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
               ) : null}
             </div>
             <div className="sbody">
+              <RunProfile routing={run.routing} />
               {run.outcome === 'running' ? <LiveLog runId={run.id} /> : null}
               {logs[run.id] !== undefined ? <pre className="doc">{logs[run.id] || '(no text output)'}</pre> : null}
             </div>

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
+import { startRouter } from './router-runtime.ts'
 import { ApplyService } from './apply.ts'
 import { createBaseApp } from './app.ts'
 import { loadConfig } from './config.ts'
@@ -41,6 +42,7 @@ export async function startServer(opts: StartOptions) {
   const loaded = await loadConfig(opts.configPath)
   const config = opts.port ? { ...loaded, port: opts.port } : loaded
   const token = opts.token ?? randomBytes(24).toString('base64url')
+  const stopRouter = await startRouter(config)
   const bus = new EventBus()
   const registry = new Registry()
   await discover(config.repos, registry)
@@ -99,6 +101,7 @@ export async function startServer(opts: StartOptions) {
     app,
     config,
     close: async () => {
+      stopRouter()
       await stopWatching()
       await stopRunner()
       server.close()

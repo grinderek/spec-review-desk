@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { StructuredStream } from './answer-reader.ts'
 import { parseJsonObject } from './protocol.ts'
+import type { TokenUsage } from './agent-usage.ts'
 import type { ReasoningEffort } from './config.ts'
 
 export interface CodexRunSpec {
@@ -40,7 +41,7 @@ export type CodexEvent =
   | ResultEvent
 export interface CodexOutcome {
   ok: boolean; text: string; sessionId: string; numTurns: number
-  error: string | null; timedOut: boolean; structured: unknown
+  error: string | null; timedOut: boolean; structured: unknown; usage?: TokenUsage | null; toolCalls?: number
 }
 
 // JSON strings and arrays are also TOML values. Objects need TOML inline-table syntax.
@@ -138,6 +139,8 @@ export class CodexStream {
   #text = ''
   #turns = 0
   #index = 0
+  usage: TokenUsage | null = null
+  toolCalls = 0
   feed(line: string): CodexEvent[] {
     let event: Record<string, any>
     try { event = JSON.parse(line) } catch { return [] }
@@ -146,6 +149,7 @@ export class CodexStream {
       return [{ type: 'init', sessionId: this.#session }]
     }
     if (event.type === 'item.started' && event.item?.type !== 'agent_message') {
+      if (['mcp_tool_call', 'command_execution', 'web_search', 'file_change'].includes(event.item?.type)) this.toolCalls += 1
       return [{ type: 'tool_start', index: this.#index++, name: event.item?.tool ?? event.item?.type ?? 'tool' }]
     }
     if (event.type === 'item.completed' && event.item?.type === 'agent_message') {
@@ -158,6 +162,12 @@ export class CodexStream {
       return [{ type: 'delta', text: this.#text }]
     }
     if (event.type === 'turn.completed' || event.type === 'turn.failed') {
+      const u = event.usage
+      if (u && Number.isFinite(u.input_tokens) && Number.isFinite(u.output_tokens) && u.input_tokens >= 0 && u.output_tokens >= 0) {
+        const previous = this.usage ?? { inputTokens: 0, cachedInputTokens: 0, outputTokens: 0 }
+        this.usage = { inputTokens: previous.inputTokens + u.input_tokens, outputTokens: previous.outputTokens + u.output_tokens,
+          cachedInputTokens: previous.cachedInputTokens + Math.min(u.input_tokens, Math.max(0, Number.isFinite(u.cached_input_tokens) ? u.cached_input_tokens : 0)) }
+      }
       this.#turns += 1
       const ok = event.type === 'turn.completed'
       const text = ok ? this.#text : (event.error?.message ?? 'Codex turn failed')
@@ -230,6 +240,7 @@ export function runCodex(spec: CodexRunSpec, opts: { timeoutMs: number; onEvent?
         error,
         timedOut,
         structured: ok ? structured : null,
+        usage: stream.usage, toolCalls: stream.toolCalls,
       })
     })
     child.stdin.on('error', () => undefined)

@@ -239,3 +239,8 @@ h4.inline { margin: 0 6px 0 0; font-size: 13px; color: var(--ink); }
 .p-running { background: var(--accent-soft); color: var(--accent); } .p-needs_owner { background: var(--warn-soft); color: var(--warn); }
 .p-done { background: var(--ok-soft); color: var(--ok); } .p-failed { background: var(--bad-soft); color: var(--bad); } .p-stopped { background: var(--sunk); color: var(--muted); }
 .p-draft { background: var(--decision-soft); color: var(--decision); }
+
+.agent-usage { padding: 8px 16px; margin-bottom: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); }
+.agent-usage summary { cursor: pointer; }
+.agent-usage table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.agent-usage th, .agent-usage td { padding: 8px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; max-width: 240px; overflow-wrap: anywhere; }

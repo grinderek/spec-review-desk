@@ -181,3 +181,36 @@ research search/domain-approval lifecycle is covered by the product contracts.
 `smoke:codex` runs the real CLI against a local Responses API fixture, checks an actual scoped MCP
 call, JSON Schema output and thread resume, and requires no API key or paid model request. It does
 not verify live OpenAI authentication or model behavior.
+
+### Local agent routing and usage
+
+`routing.enabled` enables a host-side, loopback-only Kev router for Research and Apply.
+It chooses Luna/medium, Sol/medium or Sol/high. Other roles keep their configured profiles.
+Known high-impact tasks or descriptions over 12,000 characters choose Sol/high. Luna is
+permitted only above `routing.minLunaProbability` (pilot default 0.55, not an accuracy claim).
+Ambiguous Luna answers fall back to Sol/medium; missing, invalid or timed-out router replies
+to Sol/high. The choice is persisted with the run and reused across retries and resumes.
+Legacy resumed runs adopt their configured role profile instead of being rerouted.
+
+The endpoint defaults to http://127.0.0.1:8009. Optional `routing.startCommand` is an argv
+array for a local launcher. Desk starts it if unavailable and logs runtime output next to
+its configuration in `.spec-review/usage/kev-runtime.log`. This workstation launches the
+isolated Kev-0.8B v1.0 runtime; example configs leave routing disabled.
+
+Open **Agent usage & routing** above the workspace for cumulative totals and the latest
+200 attempts, with a JSON export. The authenticated GET /api/usage serves the same data.
+The full journal is `.spec-review/usage/agents.jsonl` next to the configuration. It records
+roles, worktree/target, pinned model and effort, numeric routing evidence and policy reason,
+task hash (not raw task), physical attempts and resumes, latency, tool starts and CLI-reported
+input/cached/output tokens. Completions are deduplicated by attempt ID, including Apply
+reattachment. Unfinished starts remain visible. Owner decisions retain the existing Decisions
+tab and approval journal; routing never grants approval or changes scoped tools.
+
+Actual billed cost and subscription allowance consumption remain unknown. The separate API
+text-token estimate uses standard rates checked 2026-10-02, per million tokens:
+Sol input $2 / cached $0.10 / output $10; Luna input $0.10 / cached $0.01 / output $0.50.
+Sources: https://developers.openai.com/api/docs/models/gpt-6.1-sol and
+https://developers.openai.com/api/docs/models/gpt-6-luna. Estimates omit cache writes, tool
+fees, long-context, regional and service-tier surcharges; they are not invoices. Missing
+usage and unknown rates remain unknown. Local Kev has no API charge; electricity is not
+measured. Earlier runs are not retrospectively priced.

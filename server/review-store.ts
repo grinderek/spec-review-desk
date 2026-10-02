@@ -3,6 +3,7 @@ import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { z } from 'zod'
+import { RoutingDecisionSchema } from './agent-routing.ts'
 
 const PatchSchema = z.object({
   diff: z.string(),
@@ -48,8 +49,10 @@ const ApplyRunSchema = z.object({
   // writing. Persisted (not just kept in #follow's closure) so a server restart can still
   // finalize a dead resumed process's outcome from its own attempt only, never a previous one's.
   resume_offset: z.number().int().default(0),
+  attempt_started_at: z.string().optional(),
   // True while this attempt is the one validation retry of spec §4; cleared by every owner resume.
   validation_retry: z.boolean().optional(),
+  routing: RoutingDecisionSchema.optional(),
 })
 const DecisionOptionSchema = z.object({ id: z.string(), label: z.string(), consequence: z.string() })
 const DecisionRecordSchema = z.object({

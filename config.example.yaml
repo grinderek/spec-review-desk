@@ -7,6 +7,12 @@ reasoningEffort: high
 agents:
   planner: { model: gpt-6.1-sol, reasoningEffort: high }
   reviewer: { reasoningEffort: medium }
+routing:
+  enabled: false
+  endpoint: http://127.0.0.1:8009
+  roles: [research, apply]
+  timeoutMs: 5000
+  minLunaProbability: 0.55
 codexBin: codex
 initiativeBase: main
 commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"

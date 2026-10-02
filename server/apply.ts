@@ -7,7 +7,9 @@ import { StructuredStream } from './answer-reader.ts'
 import { outcomeOf, readEvents } from './apply-outcome.ts'
 import { allScenarios, loadChangeView } from './change-view.ts'
 import { codexArgs, type CodexRunSpec, CodexStream, prepareCodex } from './codex.ts'
-import { agentProfile, type Config } from './config.ts'
+import { selectAgent } from './agent-routing.ts'
+import { appendAudit, auditId, estimateApiUsd } from './agent-usage.ts'
+import { type Config } from './config.ts'
 import { addDecisions, decisionsFromReply, isActive, pendingBlocking, runDecisions } from './decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
@@ -257,12 +259,20 @@ export class ApplyService {
     const logFile = resolveRunLog(wt.path, run.log)
     await mkdir(path.dirname(logFile), { recursive: true })
     const offset = await sizeOf(logFile)
+    if (!run.routing) {
+      const view = await loadChangeView(wt, ref, { withCommits: false })
+      const task = [view.docs.proposal, ...view.features.map(f => f.scenarios.map(s => s.source).join('\n'))].filter(Boolean).join('\n')
+      run = { ...run, routing: await selectAgent(resume ? { ...config, routing: undefined } : config, 'apply', task || prompt) }
+    }
+    const routing = run.routing!
+    run = { ...run, attempt_started_at: new Date().toISOString() }
+    await appendAudit(config, { id: auditId(run.id, offset), type: 'started', at: new Date().toISOString(), role: 'apply', runId: run.id, worktreeId: wt.id, target: ref.name, resume, routing })
     const spec: CodexRunSpec = {
       bin: config.codexBin,
       cwd: wt.path,
       sessionId: run.session,
       resume,
-      ...agentProfile(config, 'apply'),
+      model: routing.model, reasoningEffort: routing.reasoningEffort,
       allowedTools: config.runners.find((p) => p.worktreePath === wt.path)?.applyAllowedTools ?? DEFAULT_APPLY_TOOLS,
       disallowedTools: DEFAULT_APPLY_DENY,
       permissionMode: 'acceptEdits',
@@ -270,6 +280,7 @@ export class ApplyService {
       jsonSchema: AGENT_REPLY_SCHEMA_ARG,
       prompt,
     }
+    await updateReview(ref.dir, doc => upsertApplyRun(doc, { ...run, pid: null, resume_offset: offset }))
     const proc = (this.deps.spawn ?? spawnDetached)(spec, logFile)
     const started: ApplyRun = { ...run, pid: proc.pid, resume_offset: offset }
     this.#active.set(wt.path, { runId: run.id, changeDir: ref.dir, pid: proc.pid, stopping: false })
@@ -333,6 +344,14 @@ export class ApplyService {
     const current = this.#active.get(wt.path)
     const stopping = current?.runId === run.id && current.stopping
     const events = readEvents(text)
+    const lastResult = events.findLast(e => e.type === 'result')
+    const usageStream = new CodexStream()
+    for (const line of text.split('\n')) usageStream.feed(line)
+    if (run.routing) {
+      await appendAudit(this.deps.config, { id: auditId(run.id, offset), type: 'completed', at: new Date().toISOString(), role: 'apply', runId: run.id, worktreeId: wt.id, target: ref.name, resume: offset > 0, routing: run.routing,
+        durationMs: run.attempt_started_at ? Math.max(0, Date.now() - Date.parse(run.attempt_started_at)) : undefined, ok: !stopping && lastResult?.type === 'result' && lastResult.ok,
+        usage: usageStream.usage, toolCalls: usageStream.toolCalls, estimatedApiUsd: estimateApiUsd(run.routing.model, usageStream.usage), actualBilledUsd: null })
+    }
     const session = events.findLast((e) => e.type === 'init')
     if (session?.type === 'init') run = { ...run, session: session.sessionId }
     const result = outcomeOf(events, stopping)

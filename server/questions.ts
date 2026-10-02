@@ -2,7 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { allScenarios, type ChangeView, findPhrase, findScenario, loadChangeView } from './change-view.ts'
 import { type CodexEvent, type CodexOutcome, type CodexRunSpec, isMissingSession, runCodex } from './codex.ts'
-import { agentProfile, type Config } from './config.ts'
+import { selectAgent } from './agent-routing.ts'
+import { appendAudit, auditId, estimateApiUsd } from './agent-usage.ts'
+import { type Config } from './config.ts'
 import { addDecisions, decisionsFromReply } from './decision-model.ts'
 import { DECISIONS_FILE } from './decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
@@ -122,7 +124,7 @@ export class QuestionService {
 
   async #answer(wt: WorktreeInfo, ref: ChangeRef, threadId: string): Promise<void> {
     const { config, bus } = this.deps
-    const exec = this.deps.runCodex ?? runCodex
+    const execute = this.deps.runCodex ?? runCodex
     const now = this.deps.now ?? (() => new Date())
     const topic = `thread:${threadId}`
     const view = await loadChangeView(wt, ref, { withCommits: false })
@@ -137,13 +139,23 @@ export class QuestionService {
       decisions: view.review.decisions,
       scenarioKeys: allScenarios(view).map((s) => s.key),
     })
+    const routing = await selectAgent(config, 'reviewer', prompt)
+    const exec: typeof runCodex = async (spec, options) => {
+      const started = Date.now()
+      const audit = { id: auditId(threadId, randomUUID()), role: 'reviewer' as const, runId: threadId, worktreeId: wt.id, target: ref.name, resume: spec.resume, routing }
+      await appendAudit(config, { ...audit, type: 'started', at: new Date().toISOString() })
+      const outcome = await execute(spec, options)
+      const usage = outcome.usage ?? null
+      await appendAudit(config, { ...audit, type: 'completed', at: new Date().toISOString(), durationMs: Date.now() - started, ok: outcome.ok, usage, toolCalls: outcome.toolCalls, estimatedApiUsd: estimateApiUsd(routing.model, usage), actualBilledUsd: null })
+      return outcome
+    }
     const rules = await readFile(REVIEWER_RULES, 'utf8')
     const spec = (sessionId: string, resume: boolean, text: string): CodexRunSpec => ({
       bin: config.codexBin,
       cwd: wt.path,
       sessionId,
       resume,
-      ...agentProfile(config, 'reviewer'),
+      model: routing.model, reasoningEffort: routing.reasoningEffort,
       allowedTools: QUESTION_TOOLS.allowed,
       disallowedTools: QUESTION_TOOLS.disallowed,
       permissionMode: 'default',
