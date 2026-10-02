@@ -84,7 +84,9 @@ async function appliedChange(wt: WorktreeInfo, ref: ChangeRef): Promise<boolean>
   const view = await loadChangeView(wt, ref, { withCommits: false })
   const latest = view.review.apply_runs.at(-1)
   if (latest?.outcome !== 'done') return false
-  return (await corpusReport(wt, view)).drift.length === 0
+  const corpus = await corpusReport(wt, view)
+  const states = Object.values(corpus.states)
+  return view.errors.length === 0 && corpus.errors.length === 0 && states.length > 0 && states.every(state => state === 'same')
 }
 
 async function sliceFacts(wt: WorktreeInfo, doc: InitiativeDoc, changes: readonly ChangeRef[], slice: Slice) {

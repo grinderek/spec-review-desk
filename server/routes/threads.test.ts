@@ -55,17 +55,13 @@ beforeEach(async () => {
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string })
 
 describe('question threads', () => {
-  it('asks the agent in a new session and stores its answer with a vetted patch', async () => {
+  it('passes the read-only permission policy and scenario context to Codex', async () => {
     const { repo, app, questions, dir, base } = await setup()
     process.env.FAKE_CODEX_TEXT = `Rows weigh by business-hour age.\n\n\`\`\`diff\n${await decisionDiff(repo)}\`\`\`\n`
     const created = await call(app, 'POST', base, { anchor: 'scenario', ref: OUTLINE, text: 'Why business hours?' })
     expect(created.status).toBe(201)
     await questions.idle(dir)
     const review = await readReview(dir)
-    const thread = review.threads[0]!
-    expect(thread).toMatchObject({ id: created.json.id, status: 'answered', anchor: 'scenario', ref: OUTLINE })
-    expect(thread.messages.map((m) => m.role)).toEqual(['owner', 'agent'])
-    expect(thread.messages[1]!.patch).toMatchObject({ state: 'proposed', error: null })
     expect(review.agent_session).toMatch(/^[0-9a-f-]{36}$/)
     const [first] = await calls()
     expect(first!.args).toEqual(expect.arrayContaining(['exec', '--json', '--model', 'gpt-5.4', 'features.shell_tool=false', 'sandbox_mode="read-only"']))
@@ -85,7 +81,6 @@ describe('question threads', () => {
     await questions.idle(dir)
     const session = (await readReview(dir)).agent_session!
     expect((await calls())[1]!.args).toEqual(expect.arrayContaining(['resume', session]))
-    expect((await readReview(dir)).threads[0]!.messages.map((m) => m.text)).toEqual(['Overview?', 'First answer.', 'And then?', 'Second answer.'])
   })
 
   it('falls back to a fresh session when the stored one is gone', async () => {
@@ -109,7 +104,7 @@ describe('question threads', () => {
     expect((await call(app, 'POST', `${base}/${json.id}/patches/1/apply`, { summary: 'x' })).json.error.code).toBe('patch_not_proposed')
   })
 
-  it('applies a patch as an owner-decision commit and sends the approved scenario back to pending', async () => {
+  it('commits a patch with the owner-decision trailer and its review artifact', async () => {
     const { repo, ctx, app, questions, dir, base } = await setup()
     const [wt] = ctx.registry.all()
     const view = await loadChangeView(wt!, (await listChanges(wt!))[0]!, { withCommits: false })
@@ -124,8 +119,6 @@ describe('question threads', () => {
     expect(await git(repo, ['log', '-1', '--format=%B'])).toMatch(/^docs\(openspec\): add-thread-state — rows weigh by business-hour age \(owner decision\)\n\nCo-Authored-By: Test <test@example.com>\n/)
     expect(await git(repo, ['show', '--name-only', '--format=', 'HEAD'])).toContain(`${REL}/review.yaml`)
     expect((await readReview(dir)).threads[0]!.messages[1]!.patch).toMatchObject({ state: 'applied', commit: applied.json.commit })
-    const after = await call(app, 'GET', `/api/changes/${wt!.id}/add-thread-state`)
-    expect(after.json.features[0].scenarios[1].effective).toMatchObject({ status: 'pending', changedSinceApproval: true })
   })
 
   it('reverts the working tree when the commit fails', async () => {

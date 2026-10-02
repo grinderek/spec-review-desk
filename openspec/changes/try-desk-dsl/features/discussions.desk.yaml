@@ -1,0 +1,66 @@
+version: 1
+feature: Discuss contracts and record the agreed correction
+scenarios:
+  - id: resolve-discussion
+    scenario: Resolve a discussion after the agent answers
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { text: Explain the contract., answer: The response confirms success. }
+    when:
+      ResolveDiscussion: { thread: $thread }
+    then:
+      events: []
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - status: resolved
+                    messages: [{ role: owner, text: Explain the contract. }, { role: agent, text: The response confirms success. }]
+  - id: commit-contract-correction
+    scenario: Commit a proposed correction and require approval of its new meaning
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - DiscussionAnswered: { patch: true }
+    when:
+      ApplyReviewPatch: { thread: $thread, summary: Correct the response. }
+    then:
+      bind: { correction: response.body.commit }
+      events: []
+      response: { status: 200, body: { commit: $correction } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              features: [{ scenarios: [{ effective: { status: pending, changedSinceApproval: true } }] }]
+              review: { threads: [{ messages: [{ role: owner }, { patch: { state: applied, commit: $correction } }] }] }
+  - id: continue-discussion
+    scenario: Continue the same discussion with the owner's follow-up question
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { text: Explain the contract., answer: The response confirms success. }
+      - AgentReplyPrepared: { answer: The revised response expresses acceptance. }
+    when:
+      ReplyToDiscussion: { thread: $thread, text: What does the revision mean? }
+    then:
+      events: []
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - id: $thread
+                    status: answered
+                    messages:
+                      - { role: owner, text: Explain the contract. }
+                      - { role: agent, text: The response confirms success. }
+                      - { role: owner, text: What does the revision mean? }
+                      - { role: agent, text: The revised response expresses acceptance. }

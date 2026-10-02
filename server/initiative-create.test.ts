@@ -48,13 +48,6 @@ describe('createInitiative', () => {
     expect(await readFile(path.join(repo, '.git/info/exclude'), 'utf8')).toContain('.spec-review/')
   })
 
-  it('uses an existing worktree when asked', async () => {
-    const { repo } = await makeRepo()
-    const config = testConfig(repo)
-    const created = await createInitiative(config, new Registry(), input({ where: { kind: 'existing', worktreeId: worktreeId(repo) } }), AT)
-    expect(created.worktreeId).toBe(worktreeId(repo))
-    expect((await git(repo, ['log', '-1', '--format=%s'])).trim()).toBe('docs(openspec): health-score — initiative')
-  })
 
   it('refuses a bad name, a taken name or branch, an unknown base and a bad input before touching git', async () => {
     const { repo } = await makeRepo()

@@ -21,7 +21,8 @@ The four old review route, readiness, store and change-view files remain retired
 rules are expressed in the DSL, and their technical boundaries are exercised by the integration
 file. Pure helper immutability and patch indexing checks were retired rather than mirrored.
 Discussion patch and decision operations retain their separate route coverage. Other domains
-keep their existing tests until deliberately migrated.
+retain distinct technical checks; their primary workflows now have contracts. See
+[the application testing map](testing.md).
 
 Run `npm test` to verify both kinds of checks. The local Desk runner executes the owner contract
 corpus; passing that corpus alone does not claim technical or browser verification.

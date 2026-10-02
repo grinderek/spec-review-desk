@@ -82,84 +82,8 @@ beforeEach(async () => {
 })
 
 describe('initiative routes', () => {
-  it('New feature → planner draft → edit → approve → propose s1 → the change exists, committed and tagged', async () => {
-    const { repo, app, runs } = await setup()
-    const created = await create(app)
-    expect(created.status).toBe(201)
-    const wt = path.join(repo, '.codex/worktrees/health-score')
-    expect(created.json).toEqual({ worktreeId: worktreeId(wt), name: 'health-score' })
-    const url = `/api/initiatives/${created.json.worktreeId}/health-score`
-    const listed = (await call(app, 'GET', '/api/initiatives')).json
-    expect(listed.initiatives[0]).toMatchObject({ name: 'health-score', planStatus: 'none', total: 0 })
-    expect(listed.defaultBase).toBe('main')
-    expect(listed.repos[0]).toMatchObject({ name: 'api', path: repo })
-    expect(listed.repos[0].worktrees.map((w: { branch: string }) => w.branch).sort()).toEqual(['main', 'plan/health-score'])
 
-    await writeFile(path.join(tmp, 'replies.json'), JSON.stringify([
-      { match: 'Slice s1', reply: { answer: 'Wrote s1.', patch: null, decisions: [], resolves: [], status: 'done', change: CHANGE } },
-      {
-        match: 'Propose how to slice',
-        reply: {
-          answer: 'Two slices.', patch: null, resolves: [], status: 'done',
-          decisions: [{ id: 'flag', question: 'Behind a flag?', scope: { kind: 'change' }, options: [option('yes'), option('no')], recommended: 'yes', blocking: true }],
-          slices: [{ title: 'Engine', scope: 'The engine.', depends_on: [] }, { title: 'Delivery', scope: 'Delivery.', depends_on: [1] }],
-        },
-      },
-    ]))
-    process.env.FAKE_CODEX_REPLIES_FILE = path.join(tmp, 'replies.json')
-    await writeFile(path.join(tmp, 'writes.json'), JSON.stringify([{
-      match: 'Slice s1',
-      files: {
-        [`openspec/changes/${CHANGE}/.openspec.yaml`]: 'schema: behavior-driven\n',
-        [`openspec/changes/${CHANGE}/proposal.md`]: '## Why\n',
-        [`openspec/changes/${CHANGE}/specs/thread-state/spec.md`]: SPEC_MD,
-        [`openspec/changes/${CHANGE}/features/thread_state.feature`]: FEATURE,
-        [`openspec/changes/${CHANGE}/features/NEW_STEPS.md`]: NEW_STEPS_MD,
-      },
-    }]))
-    process.env.FAKE_CODEX_WRITES_FILE = path.join(tmp, 'writes.json')
-
-    const planner = await call(app, 'POST', `${url}/plan/run`)
-    expect(planner.status).toBe(202)
-    await runs.settled(planner.json.run.id)
-    const draft = (await call(app, 'GET', url)).json
-    expect(draft.doc.plan.status).toBe('draft')
-    expect(draft.blockingDecisions).toBe(1)
-
-    const edited = await call(app, 'PUT', `${url}/plan`, { slices: [
-      { id: 's1', title: 'Engine', scope: 'The pure engine.', depends_on: [] },
-      { id: 's2', title: 'Delivery', scope: 'Delivery.', depends_on: ['s1'] },
-      { id: null, title: 'History', scope: 'History.', depends_on: ['s2'] },
-    ] })
-    expect(edited.json.plan.slices.map((s: { id: string }) => s.id)).toEqual(['s1', 's2', 's3'])
-    expect((await git(wt, ['status', '--porcelain'])).trim()).toBe('M openspec/initiatives/health-score/initiative.yaml')
-
-    expect((await call(app, 'POST', `${url}/plan/approve`)).json.error.code).toBe('decisions_pending')
-    const decisionId = draft.decisions[0].id
-    const decided = await call(app, 'POST', `${url}/decisions/${decisionId}/decide`, { option: 'yes', note: 'Staging first.' })
-    expect(decided.json).toMatchObject({ status: 'recorded' })
-    expect(await readFile(path.join(wt, 'openspec/initiatives/health-score/decisions.md'), 'utf8')).toContain('## ')
-    const approved = await call(app, 'POST', `${url}/plan/approve`)
-    expect(approved.status).toBe(200)
-    expect((await git(wt, ['log', '-1', '--format=%s'])).trim()).toBe('docs(openspec): health-score — slice plan approved (3 slices)')
-
-    expect((await call(app, 'POST', `${url}/slices/s2/propose`, {})).json.error.code).toBe('slice_not_ready')
-    const author = await call(app, 'POST', `${url}/slices/s1/propose`, { notes: 'Small.', change: CHANGE })
-    expect(author.status).toBe(202)
-    await runs.settled(author.json.run.id)
-    const view = (await call(app, 'GET', url)).json
-    expect(view.statuses).toEqual({ s1: 'proposed', s2: 'planned', s3: 'planned' })
-    expect(view.blockers.s2).toBe('waiting for s1')
-    const changes = (await call(app, 'GET', '/api/changes')).json.repos[0].worktrees.find((w: { path: string }) => w.path === wt)
-    expect(changes.changes.find((c: { name: string }) => c.name === CHANGE)).toMatchObject({ initiative: 'health-score · s1' })
-
-    const log = await call(app, 'GET', `${url}/runs/${author.json.run.id}/log`)
-    expect(log.json.text).toContain('Wrote s1.')
-    expect((await call(app, 'POST', `${url}/runs/${author.json.run.id}/resume`)).json.error.code).toBe('run_not_waiting')
-    expect((await call(app, 'POST', `${url}/runs/${author.json.run.id}/stop`)).json.error.code).toBe('run_not_running')
-  })
-
-  it('adds inputs, runs research to a draft, accepts it and edits the domains', async () => {
+  it('uploads and copies inputs and validates research domain syntax', async () => {
     const { app, runs } = await setup()
     const { json } = await create(app)
     const url = `/api/initiatives/${json.worktreeId}/health-score`
@@ -168,12 +92,6 @@ describe('initiative routes', () => {
     expect((await callForm(app, `${url}/inputs`, form)).json).toEqual({ files: ['notes.txt'] })
     expect((await call(app, 'POST', `${url}/inputs`, { from: 'api/features/STEPS.md' })).json).toEqual({ files: ['STEPS-2.md'] })
 
-    process.env.FAKE_CODEX_REPLY = JSON.stringify({ answer: 'Found it.', patch: null, decisions: [], resolves: [], status: 'done', document: '# AR\n\n## Sources\n- https://x.example\n' })
-    const research = await call(app, 'POST', `${url}/research`, { topic: 'AR ageing', questions: 'Which report?' })
-    await runs.settled(research.json.run.id)
-    const draft = (await call(app, 'GET', url)).json.inputs.find((i: { file: string }) => i.file === 'research-ar-ageing.md')
-    expect(draft).toMatchObject({ draft: true, present: true })
-    expect((await call(app, 'POST', `${url}/inputs/research-ar-ageing.md/accept`)).status).toBe(200)
     expect((await call(app, 'PUT', `${url}/research/domains`, { domains: ['developer.intuit.com'] })).json).toEqual({ domains: ['developer.intuit.com'] })
     expect((await call(app, 'PUT', `${url}/research/domains`, { domains: ['http://x'] })).json.error.code).toBe('invalid_domain')
   })

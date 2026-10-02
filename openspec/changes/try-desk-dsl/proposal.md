@@ -1,10 +1,12 @@
 ## Why
 
-Develop Desk through a small corpus of product contracts that owners can read and approve.
+Develop Desk through a compact owner corpus of product rules while keeping technical boundaries
+in normal TypeScript checks.
 
 ## What
 
-Support strict YAML contracts alongside Gherkin, with stable ids, semantic hashes, case tables,
-response bindings and public-state observations. Keep the review corpus to 14 owner rules and
-execute it through the local self-review runner. Use TypeScript integration tests for storage,
-compatibility, technical errors and Git artifacts. Replay approval state from a journal.
+Support YAML contracts alongside Gherkin with stable ids, semantic hashes, case tables, response
+bindings and public-state observations. Cover the primary review, discussion, owner-decision,
+initiative, research, implementation and verification workflows. Run them through Desk itself.
+Keep approval replay and compatibility in the existing journal, and retain technical/browser
+coverage instead of translating every check into DSL.

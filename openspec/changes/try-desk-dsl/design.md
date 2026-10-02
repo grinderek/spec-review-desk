@@ -31,3 +31,19 @@ The old review route, readiness, store and change-view files are retired. Produc
 three DSL files; technical coverage lives in server/review.integration.test.ts. See
 `docs/method/review-migration.md`. Other domains retain their tests. The Desk runner verifies
 product contracts; npm test verifies both contracts and technical checks.
+
+## Application workflows
+
+The review slice remains 14 rules. The complete primary workflow corpus adds 23 rules across
+four domain files. A shared DeskWorld composes the real routes and services. Existing fake Codex
+and sandbox transports provide deterministic replies and source output; actual finishers vet
+and move changes, owner commands approve them, and Apply writes a matching implemented corpus.
+Dependency availability is checked after prerequisite approval, while applied status additionally
+requires a completed run, every implemented contract matching, and no corpus parse errors.
+A successful run with absent scenarios no longer marks a slice applied. Research checks approved reading and search-only
+choices. Verification uses a real local subprocess.
+
+Nine superseded product checks are retired; mixed tests keep their distinct technical assertions.
+Parsers, security, process recovery, network permissions, serialization and UI/browser checks
+remain. `docs/method/testing.md` maps this boundary across the app. Contract event assertions refer
+to the approval journal; other state is observed through public views. The DSL gains no syntax.

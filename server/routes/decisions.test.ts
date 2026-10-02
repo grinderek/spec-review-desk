@@ -94,23 +94,10 @@ describe('decision routes', () => {
     expect(findDecision(await readReview(s.dir), id).status).toBe('open')
   })
 
-  it('decides a scenario decision in its thread, and records it when the resolving patch is committed', async () => {
+  it('passes the recorded owner choice into the resumed Codex prompt', async () => {
     const s = await setup()
     const { threadId, decisionId, decided } = await raiseAndDecide(s)
-    expect(decided.json).toEqual({ status: 'decided', threadId })
-    const review = await readReview(s.dir)
-    const messages = review.threads[0]!.messages
-    expect(messages.map((m) => m.role)).toEqual(['owner', 'agent', 'owner', 'agent'])
-    expect(messages[2]!.text).toContain(`Owner decided ${decisionId} ("Business or calendar age?"): Business hours.`)
     expect((await calls()).at(-1)!.prompt).toContain(`Owner decided ${decisionId}`)
-    expect(messages[3]).toMatchObject({ resolves: [decisionId], patch: { state: 'proposed' } })
-    expect(findDecision(review, decisionId).status).toBe('decided')
-    expect((await call(s.app, 'POST', `${s.change}/decisions/${decisionId}/decide`, { option: 'calendar' })).json.error.code).toBe('decision_not_open')
-
-    const applied = await call(s.app, 'POST', `${s.change}/threads/${threadId}/patches/3/apply`, { summary: 'business-hour age' })
-    expect(applied.status).toBe(200)
-    expect(findDecision(await readReview(s.dir), decisionId)).toMatchObject({ status: 'recorded', recorded: { how: 'patch', commit: applied.json.commit } })
-    expect((await call(s.app, 'GET', s.change)).json.readiness.reasons.join(' ')).not.toContain('blocking decision')
   })
 
   it('leaves the resolved decision decided when the patch commit fails', async () => {
@@ -148,16 +135,6 @@ describe('decision routes', () => {
     expect((await call(app, 'POST', `${change}/decisions`, { question: ' ', scope: { kind: 'change' }, blocking: false })).status).toBe(400)
   })
 
-  it('opens a scenario thread for an owner scenario decision and asks the agent', async () => {
-    const { app, questions, dir, change } = await setup()
-    const { json } = await call(app, 'POST', `${change}/decisions`, { question: 'Business or calendar age?', scope: { kind: 'scenario', key: OUTLINE }, blocking: false, options: OPTIONS })
-    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: 'Will patch.' }))
-    const decided = await call(app, 'POST', `${change}/decisions/${json.id}/decide`, { option: 'calendar' })
-    await questions.idle(dir)
-    const thread = (await readReview(dir)).threads.find((t) => t.id === decided.json.threadId)!
-    expect(thread).toMatchObject({ anchor: 'scenario', ref: OUTLINE, status: 'answered' })
-    expect(thread.messages[0]!.text).toContain(`Owner decided ${json.id}`)
-  })
 
   it('dismisses with a reason, once', async () => {
     const { app, dir, change } = await setup()

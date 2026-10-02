@@ -8,14 +8,16 @@ technical assertion. The language is described in `docs/method/desk-dsl.md`.
 Use ordinary TypeScript integration tests for file formats, migration, concurrency, malformed input
 and protocol details. Prefer real HTTP, disk and Git boundaries. Reuse `server/testing/review-world.ts`
 for review fixtures. Avoid repeating the same behavior in DSL and implementation tests; keep
-browser and compiler checks. Other domains retain their tests until deliberately migrated.
+browser and compiler checks. Technical tests include focused parser and data-integrity checks;
+do not remove valuable checks just to eliminate the unit-test label. The main application workflows
+now have owner contracts; see `docs/method/testing.md` for the coverage boundary.
 
 Start an OpenSpec change with `schema: behavior-driven`, put proposed contracts under `features/`
 and keep `specs/**/spec.md` titles equal to those contracts. Use stable scenario ids. Do not rewrite
 approved contracts to make an implementation pass.
 
 Given facts prepare prior history and environment; When executes one public command; Then checks
-new domain events and public responses. Use response bindings for generated values and subsequent
+new approval-journal events and public responses. Use response bindings for generated values and subsequent
 GET observations for persisted state. Keep domain adapters small and add them for operations,
 not scenario wording. Discussion, decision and agent-run state retains its existing persistence.
 

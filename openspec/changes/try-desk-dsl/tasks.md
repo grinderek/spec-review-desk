@@ -4,4 +4,7 @@
 - [x] Exercise technical boundaries with ordinary integration tests
 - [x] Remove unused Git and observation-binding DSL syntax
 - [x] Provide and verify a local self-review runner
+- [x] Cover discussions, owner decisions, initiatives, research, Apply and verification
+- [x] Verify planner → authored change → owner review → Apply → matching corpus
+- [x] Retire duplicate product checks and retain technical boundaries
 - [ ] Owner review and approval through Desk

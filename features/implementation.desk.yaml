@@ -1,0 +1,107 @@
+version: 1
+feature: Implement reviewed changes and expose their verification results
+scenarios:
+  - id: require-recorded-approval
+    scenario: Require recorded owner approval before implementation starts
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ApplyReplyPrepared: {}
+    when:
+      StartApply: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: approval_not_recorded } } }
+  - id: apply-reviewed-slice
+    scenario: Recognize a slice as applied only when its implementation matches
+    cases:
+      - { name: matching corpus, deliver: true, sliceStatus: applied }
+      - { name: missing corpus, deliver: false, sliceStatus: approved }
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+      - PlanApproved: {}
+      - ApprovedSliceProposed: { change: slice-contract }
+      - ApplyReplyPrepared: { status: done, deliver: $deliver, answer: The reviewed slice is implemented. }
+    when:
+      StartApply: {}
+    then:
+      events: []
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { statuses: { s1: $sliceStatus, s2: planned }, blockers: { s2: null } } }
+        - path: $change
+          response: { status: 200, body: { review: { apply_runs: [{ outcome: done }] } } }
+  - id: resume-after-owner-choice
+    scenario: Resume implementation after recording the requested owner choice
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ApplyWaitingOnOwner: {}
+      - ApplyDecisionRecorded: {}
+      - ApplyReplyPrepared: { status: done }
+    when:
+      ResumeApply: { run: $applyRun }
+    then:
+      events: []
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { apply_runs: [{ outcome: done }] }, decisions: [{ status: recorded }] } }
+  - id: display-verification-result
+    scenario: Show the actual verification result for a reviewed contract
+    cases:
+      - { name: passing run, status: passed, totals: { passed: 1, failed: 0, other: 0 } }
+      - { name: failing run, status: failed, totals: { passed: 0, failed: 1, other: 0 } }
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: $status }
+    when:
+      RunVerification: {}
+    then:
+      events: []
+      response: { status: 202 }
+      reads:
+        - path: $runner
+          response:
+            status: 200
+            body:
+              state:
+                execution: local
+                running: false
+                result:
+                  totals: $totals
+                  scenarios:
+                    'subject.desk.yaml::Subject contract': { status: $status }
+  - id: require-current-approval
+    scenario: Require renewed approval when a contract changes before implementation
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ScenarioRevised: { status: 201 }
+      - ApplyReplyPrepared: {}
+    when:
+      StartApply: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: not_ready } } }
+  - id: restore-approved-corpus
+    scenario: Reapply approved contracts when their implemented corpus drifts
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - CorpusDrifted: {}
+      - ApplyReplyPrepared: {}
+    when:
+      ReapplyContract: {}
+    then:
+      events: []
+      response: { status: 202 }
+      reads:
+        - path: $change/corpus
+          response: { status: 200, body: { states: { $key: same }, drift: [] } }

@@ -1,0 +1,69 @@
+version: 1
+feature: Owner choices are recorded before their obligations are complete
+scenarios:
+  - id: record-change-choice
+    scenario: Record a whole-change choice in the owner decision log
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { question: Ship behind a flag? }
+    when:
+      DecideOwnerQuestion: { id: $decision, note: 'Yes, behind a flag.' }
+    then:
+      bind: { decisionCommit: response.body.commit }
+      events: []
+      response: { status: 200, body: { status: recorded } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              decisions: [{ status: recorded, recorded: { how: decisions_md, commit: $decisionCommit } }]
+              decisionLog: [{ question: Ship behind a flag?, note: 'Yes, behind a flag.' }]
+  - id: choose-scenario-contract
+    scenario: Send a scenario choice to the agent for a resolving patch
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { scope: { kind: scenario, key: $key } }
+      - AgentReplyPrepared: { patch: true, resolves: [$decision] }
+    when:
+      DecideOwnerQuestion: { id: $decision, note: Use the revised response. }
+    then:
+      bind: { decisionThread: response.body.threadId }
+      events: []
+      response: { status: 200, body: { status: decided, threadId: $decisionThread } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              decisions: [{ status: decided, recorded: null }]
+              review: { threads: [{ id: $decisionThread, messages: [{ role: owner }, { resolves: [$decision], patch: { state: proposed } }] }] }
+  - id: record-scenario-choice
+    scenario: Complete a scenario choice only after committing its resolving patch
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { scope: { kind: scenario, key: $key } }
+      - AgentReplyPrepared: { patch: true, resolves: [$decision] }
+      - ScenarioDecisionChosen: { note: Use the revised response. }
+    when:
+      ApplyReviewPatch: { thread: $thread, summary: Record the choice. }
+    then:
+      bind: { choiceCommit: response.body.commit }
+      events: []
+      response: { status: 200 }
+      reads:
+        - path: $change
+          response: { status: 200, body: { decisions: [{ status: recorded, recorded: { how: patch, commit: $choiceCommit } }] } }
+  - id: dismiss-owner-question
+    scenario: Dismiss an owner question with an explicit reason
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: {}
+    when:
+      DismissOwnerQuestion: { id: $decision, reason: Outside this change. }
+    then:
+      events: []
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response: { status: 200, body: { decisions: [{ status: dismissed, dismissed: { reason: Outside this change. } }] } }

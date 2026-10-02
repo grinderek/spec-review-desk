@@ -34,7 +34,9 @@ embedded executable code.
 Keep the owner corpus small: a scenario describes a product rule someone can read and approve.
 File formats, import compatibility, concurrency, corrupt state and invalid HTTP input belong in
 ordinary TypeScript integration tests. Do not extend the language to express every technical check.
-The review corpus has 14 product contracts; technical coverage is in `server/review.integration.test.ts`.
+The review corpus retains its 14 rules. Discussions, owner decisions, initiatives, research,
+implementation and verification add 23 core rules: 37 contracts / 50 executions across the app.
+See [the application testing map](testing.md) for the retained technical coverage.
 
 ## Case tables and observations
 
@@ -65,22 +67,32 @@ then:
 
 Each `then.reads` entry issues a GET and compares its response. Observations must not emit events.
 Responses and event payloads match listed object fields recursively; arrays match length and order
-exactly. Events match exact count, order and type. Response status is an HTTP number. Failures
+exactly. Approval-journal events match exact count, order and type. Response status is an HTTP number. Failures
 identify the contract, case and field; empty or malformed corpora fail.
 
 ## The review adapter
 
-`server/testing/review-world.ts` creates a clean Git repository, real Hono app, security
+`server/testing/desk-world.ts` composes the domain adapters around
+`server/testing/review-world.ts`, which creates a clean Git repository, real Hono app, security
 middleware, discovery, disk-backed review store and review routes for every execution. Commands
-cover scenario/phrase approvals and revocations, requests for changes, change approval and orphan
-operations. Reads expose change and summary views. A domain adapter is defined once per operation.
+cover review, discussions and patches, owner decisions, planning, research, authored changes, Apply
+and verification. Reads observe actual change, initiative, corpus and runner views. A domain adapter
+is defined once per operation; expectations stay in the contracts.
 
 Given facts prepare source contracts, phrases, prior approvals, discussions and decisions.
 Approvals use the same serialized writer as production. Storage compatibility, malformed input,
 concurrency and Git artifact details use ordinary integration tests. Fixture
 bindings include `$key`, `$hash`, `$head`, `$at`, `$change`, `$phrase` and `$phraseHash`. Production
 commands generate their own ids and times. The question service uses a deterministic model transport
-while running real reply validation and persistence. No LLM or Docker is required for this corpus.
+while running real reply validation and persistence. Initiative and Apply workflows use the existing
+fake Codex CLI and sandbox transport, with real protocol parsing, services, finishers, vetting and
+Git writes. Local verification executes a real subprocess with a controlled workload. No live LLM
+or Docker is required for this corpus.
+
+Other domains retain their existing storage: `then.events` checks the approval journal, not every
+notification on the event bus. Their product contracts observe persisted state through public
+views; `events: []` ensures they do not accidentally write approvals. No domain events are invented
+from expected states, and this migration does not claim event sourcing for the entire application.
 
 ## Persistence and compatibility
 

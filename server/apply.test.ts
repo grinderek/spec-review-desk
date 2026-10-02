@@ -79,12 +79,6 @@ describe('apply helpers', () => {
 })
 
 describe('ApplyService', () => {
-  it('refuses to start before approval is recorded or while not ready', async () => {
-    const unrecorded = await setup({ record: false })
-    await expect(unrecorded.apply.start(unrecorded.wt, unrecorded.ref)).rejects.toMatchObject({ code: 'approval_not_recorded' })
-    const unapproved = await setup({ approve: false })
-    await expect(unapproved.apply.start(unapproved.wt, unapproved.ref)).rejects.toMatchObject({ code: 'not_ready' })
-  })
 
   it('reserves the worktree synchronously so concurrent starts cannot race', async () => {
     const { wt, ref, apply } = await setup()

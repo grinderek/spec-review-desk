@@ -83,11 +83,11 @@ function chooseReply() {
 }
 
 // Spec B: the sandboxed author writes files. FAKE_CODEX_WRITES_FILE is a JSON array of
-// {match, files}; the first entry whose match is in the prompt is written under FAKE_CODEX_OUT.
-if (process.env.FAKE_CODEX_WRITES_FILE && process.env.FAKE_CODEX_OUT) {
+// {match, files}; sandbox runs write under FAKE_CODEX_OUT, host Apply under its fixture cwd.
+if (process.env.FAKE_CODEX_WRITES_FILE) {
   const hit = JSON.parse(readFileSync(process.env.FAKE_CODEX_WRITES_FILE, 'utf8')).find((entry) => prompt.includes(entry.match))
   for (const [rel, body] of Object.entries(hit?.files ?? {})) {
-    const file = path.join(process.env.FAKE_CODEX_OUT, rel)
+    const file = path.join(process.env.FAKE_CODEX_OUT ?? process.cwd(), rel)
     mkdirSync(path.dirname(file), { recursive: true })
     writeFileSync(file, body)
   }

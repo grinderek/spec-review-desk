@@ -53,26 +53,6 @@ describe('discovery of initiatives', () => {
 })
 
 describe('loadInitiativeView', () => {
-  it('derives slice statuses from changes, reviews, Apply runs and author runs', async () => {
-    const { repo, wt, dir } = await setup()
-    const view = await loadInitiativeView(wt, await findInitiative(wt, 'hs'))
-    expect(view.statuses).toEqual({ s1: 'proposed', s2: 'proposing', s3: 'planned' })
-    expect(view.blockers).toEqual({ s1: 's1 is proposed', s2: 's2 is proposing', s3: 'waiting for s2' })
-    expect(view.brief).toBe('# Health score\n')
-
-    const change = path.join(repo, 'openspec/changes/add-thread-state')
-    await updateReview(change, (d) => recordApproval(d, AT, 'abc1234'))
-    expect((await loadInitiativeView(wt, await findInitiative(wt, 'hs'))).statuses.s1).toBe('approved')
-    await updateReview(change, (d) => upsertApplyRun(d, {
-      id: 'r_apply', session: 's', pid: null, log: 'x', started_at: AT, ended_at: AT, outcome: 'done', resume_offset: 0,
-    }))
-    await mkdir(path.join(repo, 'features'), { recursive: true })
-    await writeFile(path.join(repo, 'features/thread_state.feature'), FEATURE.replace('count against the inbox', 'count against it'))
-    expect((await loadInitiativeView(wt, await findInitiative(wt, 'hs'))).statuses.s1).toBe('applied')
-    await writeFile(path.join(repo, 'features/thread_state.feature'), FEATURE.replace('| 100 |', '| 99 |'))
-    expect((await loadInitiativeView(wt, await findInitiative(wt, 'hs'))).statuses.s1).toBe('approved')
-    expect(dir).toContain('hs')
-  })
 
   it('keeps a slice proposing while its author waits for the owner (final review I2)', async () => {
     const { wt, dir } = await setup()

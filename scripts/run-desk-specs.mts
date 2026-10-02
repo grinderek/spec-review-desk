@@ -4,7 +4,7 @@ import path from 'node:path'
 import { parseDeskDsl } from '../server/desk-dsl.ts'
 import { corpusKey } from '../server/run-messages.ts'
 import type { ReviewEvent } from '../server/review-store.ts'
-import { ReviewWorld } from '../server/testing/review-world.ts'
+import { DeskWorld } from '../server/testing/desk-world.ts'
 
 const root = path.resolve('features')
 const files = (await readdir(root, { recursive: true })).filter((file) => file.endsWith('.desk.yaml')).sort()
@@ -21,7 +21,7 @@ function subset(expected: unknown, actual: unknown, field = 'response'): void {
     for (const [key, value] of Object.entries(expected)) subset(value, (actual as Record<string, unknown>)[key], `${field}.${key}`)
   } else assert.deepEqual(actual, expected, field)
 }
-function bind(world: ReviewWorld, bindings: Record<string, string> | undefined, response: unknown): void {
+function bind(world: DeskWorld, bindings: Record<string, string> | undefined, response: unknown): void {
   for (const [name, selector] of Object.entries(bindings ?? {})) {
     const value = selector.split('.').reduce<any>((object, key) => object?.[key], { response })
     assert.ok(typeof value === 'string' && value.length > 0, `${selector}: expected a generated non-empty string`)
@@ -40,7 +40,7 @@ for (const file of files) {
   for (const scenario of doc.scenarios) {
     const cases = scenario.cases ?? [{}]
     for (const [row, parameters] of cases.entries()) {
-      const world = await ReviewWorld.create()
+      const world = await DeskWorld.create()
       const label = scenario.cases ? `${scenario.scenario} [${parameters.name ?? row + 1}]` : scenario.scenario
       const result = { file: `features/${file}`, id: scenario.id, title: scenario.scenario, row: scenario.cases ? row : null, rows: scenario.cases?.length ?? null }
       try {

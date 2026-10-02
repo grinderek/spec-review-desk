@@ -21,16 +21,17 @@ import { sh, writeFiles } from './repo.ts'
 export class ReviewWorld {
   readonly vars: Record<string, unknown>
   private readonly subject: DeskScenario = { id: 'subject', scenario: 'Subject contract', given: [], when: { Inspect: {} }, then: { events: [], response: { status: 200 } } }
-  private readonly app: Hono
-  private readonly ctx: AppContext
-  private readonly questions: QuestionService
+  readonly app: Hono
+  readonly ctx: AppContext
+  readonly questions: QuestionService
+  agentReply: Record<string, unknown> = { answer: 'Noted.', patch: null, decisions: [], resolves: [], status: 'answered' }
   private subjectRel = 'features/subject.desk.yaml'
   private constructor(readonly repo: string, head: string) {
     this.ctx = testContext(repo, { commitTrailer: '' })
     this.app = createBaseApp(this.ctx)
     this.questions = new QuestionService({ config: this.ctx.config, bus: this.ctx.bus,
       // The external LLM is deterministic; the real service still validates and persists its reply.
-      runCodex: async () => ({ ok: true, text: 'Noted.', structured: { answer: 'Noted.', patch: null, decisions: [], resolves: [], status: 'answered' },
+      runCodex: async () => ({ ok: true, text: String(this.agentReply.answer), structured: this.agentReply,
         sessionId: '00000000-0000-4000-8000-000000000001', numTurns: 1, error: null, timedOut: false }),
     })
     registerReadRoutes(this.app, this.ctx, { codex: false, docker: false })
@@ -88,6 +89,7 @@ export class ReviewWorld {
     } else if (name === 'ReviewThreadOpened') {
       await updateReview(this.dir, (review) => addThread(review, { id: data.id ?? 't_fixture', anchor: data.anchor ?? 'change', ref: data.ref ?? '', status: data.status ?? 'open', messages: data.messages ?? [] }))
     } else if (name === 'DecisionRaised') {
+      this.vars.decision = data.id ?? 'd_fixture'
       const decision: DecisionRecord = { id: data.id ?? 'd_fixture', agent_id: data.agent_id ?? null, source: data.source ?? { kind: 'owner' }, question: data.question ?? 'Owner choice?',
         scope: data.scope ?? { kind: 'change' }, options: data.options ?? [], recommended: data.recommended ?? null, blocking: data.blocking ?? true, status: data.status ?? 'open',
         choice: data.choice ?? null, recorded: data.recorded ?? null, dismissed: data.dismissed ?? null, created_at: String(this.vars.at),
