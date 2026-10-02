@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { z } from 'zod'
@@ -113,7 +113,7 @@ export const emptyReview = (): ReviewDoc => ReviewSchema.parse({ version: 1 })
 export const newId = (prefix: string): string => `${prefix}_${randomBytes(4).toString('hex')}`
 export const nowIso = (date: Date = new Date()): string => date.toISOString()
 
-export async function readReview(changeDir: string): Promise<ReviewDoc> {
+async function readReviewSnapshot(changeDir: string): Promise<ReviewDoc> {
   const file = path.join(changeDir, REVIEW_FILE)
   let text: string
   try {
@@ -135,11 +135,96 @@ export async function readReview(changeDir: string): Promise<ReviewDoc> {
   return result.data
 }
 
-export async function writeReview(changeDir: string, doc: ReviewDoc): Promise<void> {
-  const file = path.join(changeDir, REVIEW_FILE)
+export const REVIEW_EVENTS_FILE = 'review.events.jsonl'
+const ReviewEventSchema = z.discriminatedUnion('type', [
+  z.object({ version: z.literal(1), type: z.literal('ScenarioApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('ScenarioChangesRequested'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('changes_requested') }), thread: ThreadSchema.optional() }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('ScenarioReviewRemoved'), key: z.string() }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('PhraseApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('PhraseChangesRequested'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('changes_requested') }) }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('PhraseReviewRemoved'), key: z.string() }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('ChangeApprovalRecorded'), at: z.string(), commit: z.string() }).strict(),
+  z.object({ version: z.literal(1), type: z.literal('ChangeApprovalRemoved') }).strict(),
+  // A marker imports phrase/whole-change state from pre-extension journals once.
+  z.object({ version: z.literal(1), type: z.literal('ReviewApprovalHistoryExtended'), scenarios: z.record(z.string(), EntrySchema).default({}), phrases: z.record(z.string(), EntrySchema).default({}), approved_at: z.string().nullable().default(null), approved_commit: z.string().nullable().default(null) }).strict(),
+])
+export type ReviewEvent = z.infer<typeof ReviewEventSchema>
+async function readReviewHistory(changeDir: string): Promise<ReviewEvent[]> {
+  const file = path.join(changeDir, REVIEW_EVENTS_FILE)
+  let text: string
+  try { text = await readFile(file, 'utf8') } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
+    throw error
+  }
+  try { return text.split('\n').filter((line) => line.trim()).map((line) => ReviewEventSchema.parse(JSON.parse(line))) }
+  catch (error) { throw new ReviewFileError(file, [error instanceof Error ? error.message : String(error)]) }
+}
+export async function readReviewEvents(changeDir: string): Promise<ReviewEvent[]> {
+  return (await readReviewHistory(changeDir)).filter((event) => event.type !== 'ReviewApprovalHistoryExtended')
+}
+export function replayScenarioReviews(events: readonly ReviewEvent[]): ReviewDoc['scenarios'] {
+  const scenarios: ReviewDoc['scenarios'] = {}
+  for (const event of events) {
+    if (event.type === 'ReviewApprovalHistoryExtended') Object.assign(scenarios, event.scenarios)
+    else if (event.type === 'ScenarioReviewRemoved') delete scenarios[event.key]
+    else if (event.type === 'ScenarioApproved' || event.type === 'ScenarioChangesRequested') scenarios[event.key] = event.entry
+  }
+  return scenarios
+}
+export async function readReview(changeDir: string): Promise<ReviewDoc> {
+  const doc = await readReviewSnapshot(changeDir)
+  const events = await readReviewHistory(changeDir)
+  if (!events.length) return doc
+  const next = { ...doc, scenarios: replayScenarioReviews(events) }
+  if (events.some((event) => event.type === 'ReviewApprovalHistoryExtended')) {
+    next.phrases = {}; next.approved_at = null; next.approved_commit = null
+    for (const event of events) {
+      if (event.type === 'ReviewApprovalHistoryExtended') { next.phrases = { ...event.phrases }; next.approved_at = event.approved_at; next.approved_commit = event.approved_commit }
+      else if (event.type === 'PhraseReviewRemoved') delete next.phrases[event.key]
+      else if (event.type === 'PhraseApproved' || event.type === 'PhraseChangesRequested') next.phrases[event.key] = event.entry
+      else if (event.type === 'ChangeApprovalRecorded') { next.approved_at = event.at; next.approved_commit = event.commit }
+      else if (event.type === 'ChangeApprovalRemoved') { next.approved_at = null; next.approved_commit = null }
+    }
+  }
+  return next
+}
+async function replaceFile(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
-  await writeFile(tmp, stringify(ReviewSchema.parse(doc), { lineWidth: 0 }))
-  await rename(tmp, file)
+  try { await writeFile(tmp, text); await rename(tmp, file) }
+  finally { await rm(tmp, { force: true }) }
+}
+export async function writeReview(changeDir: string, doc: ReviewDoc): Promise<void> {
+  const next = ReviewSchema.parse(doc)
+  const previous = await readReview(changeDir)
+  const history = await readReviewHistory(changeDir)
+  const events: ReviewEvent[] = []
+  const baseline: ReviewEvent[] = []
+  const entryEvent = (section: Section, key: string, entry: Entry): ReviewEvent => {
+    const type = `${section === 'scenarios' ? 'Scenario' : 'Phrase'}${entry.status === 'approved' ? 'Approved' : 'ChangesRequested'}`
+    const thread = section === 'scenarios' && entry.status === 'changes_requested'
+      ? next.threads.find((t) => t.anchor === 'scenario' && t.ref === key && !previous.threads.some((old) => old.id === t.id)) : undefined
+    return ReviewEventSchema.parse({ version: 1, type, key, entry, ...(thread ? { thread } : {}) })
+  }
+  for (const section of ['scenarios', 'phrases'] as const) {
+    for (const key of new Set([...Object.keys(previous[section]), ...Object.keys(next[section])])) {
+      if (JSON.stringify(previous[section][key]) === JSON.stringify(next[section][key])) continue
+      const entry = next[section][key]
+      events.push(entry ? entryEvent(section, key, entry) : { version: 1, type: section === 'scenarios' ? 'ScenarioReviewRemoved' : 'PhraseReviewRemoved', key })
+    }
+  }
+  if (next.approved_at !== previous.approved_at || next.approved_commit !== previous.approved_commit) {
+    if (next.approved_at && next.approved_commit) events.push({ version: 1, type: 'ChangeApprovalRecorded', at: next.approved_at, commit: next.approved_commit })
+    else events.push({ version: 1, type: 'ChangeApprovalRemoved' })
+  }
+  if (events.length) {
+    if (!history.some((event) => event.type === 'ReviewApprovalHistoryExtended')) {
+      baseline.push({ version: 1, type: 'ReviewApprovalHistoryExtended', scenarios: history.length ? {} : previous.scenarios,
+        phrases: previous.phrases, approved_at: previous.approved_at, approved_commit: previous.approved_commit })
+    }
+    await replaceFile(path.join(changeDir, REVIEW_EVENTS_FILE), [...history, ...baseline, ...events].map((event) => JSON.stringify(event)).join('\n') + '\n')
+  }
+  // The journal commits first. If projection writing fails, replay retains approval state.
+  await replaceFile(path.join(changeDir, REVIEW_FILE), stringify(next, { lineWidth: 0 }))
 }
 
 const locks = new Map<string, Promise<unknown>>()

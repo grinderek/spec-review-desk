@@ -1,5 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { deskFeature } from './desk-dsl.ts'
 import type { ChangeView } from './change-view.ts'
 import type { WorktreeInfo } from './discovery.ts'
 import { FeatureParseError, type FeatureView, parseFeature, type StepView, unclassified } from './gherkin.ts'
@@ -14,7 +15,7 @@ export async function loadCorpus(worktreePath: string): Promise<{ features: Feat
   const root = path.join(worktreePath, 'features')
   let files: string[]
   try {
-    files = (await readdir(root, { recursive: true })).filter((f) => f.endsWith('.feature')).sort()
+    files = (await readdir(root, { recursive: true })).filter((f) => f.endsWith('.feature') || f.endsWith('.desk.yaml')).sort()
   } catch {
     return { features: [], errors: [] }
   }
@@ -23,7 +24,8 @@ export async function loadCorpus(worktreePath: string): Promise<{ features: Feat
   for (const rel of files) {
     const file = `features/${rel.split(path.sep).join('/')}`
     try {
-      features.push(parseFeature(await readFile(path.join(worktreePath, file), 'utf8'), file, unclassified))
+      const source = await readFile(path.join(worktreePath, file), 'utf8')
+      features.push(file.endsWith('.desk.yaml') ? deskFeature(source, file) : parseFeature(source, file, unclassified))
     } catch (error) {
       if (!(error instanceof FeatureParseError)) throw error
       errors.push({ file, message: error.message })
@@ -37,7 +39,7 @@ function canonical(features: readonly FeatureView[]): Map<string, string> {
     features.flatMap((f) =>
       f.scenarios.map((s) => [
         corpusKey(f.file, s.title),
-        JSON.stringify({ background: f.background.map(canonStep), steps: s.steps.map(canonStep), examples: s.examples }),
+        s.tags.includes('desk-dsl') ? s.hash : JSON.stringify({ background: f.background.map(canonStep), steps: s.steps.map(canonStep), examples: s.examples }),
       ]),
     ),
   )

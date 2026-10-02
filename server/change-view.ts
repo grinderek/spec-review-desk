@@ -1,6 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { type Catalog, emptyCatalog, makeClassifier, parseCatalog, type Phrase } from './catalog.ts'
+import { deskFeature } from './desk-dsl.ts'
 import { isActive } from './decision-model.ts'
 import { DECISIONS_FILE, type DecisionLogEntry, parseDecisionLog } from './decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
@@ -108,10 +109,11 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
   const relDir = toPosix(path.relative(wt.path, ref.dir))
 
   const parsed: FeatureView[] = []
-  for (const rel of await listFiles(path.join(ref.dir, 'features'), '.feature')) {
+  for (const rel of [...await listFiles(path.join(ref.dir, 'features'), '.feature'), ...await listFiles(path.join(ref.dir, 'features'), '.desk.yaml')]) {
     const file = `features/${rel}`
     try {
-      parsed.push(parseFeature(await readFile(path.join(ref.dir, file), 'utf8'), file, classify))
+      const source = await readFile(path.join(ref.dir, file), 'utf8')
+      parsed.push(file.endsWith('.desk.yaml') ? deskFeature(source, file) : parseFeature(source, file, classify))
     } catch (error) {
       if (!(error instanceof FeatureParseError)) throw error
       errors.push({ file, message: error.message })

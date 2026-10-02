@@ -7,8 +7,11 @@
   },
   "scripts": {
     "dev": "concurrently -k -n server,ui \"tsx watch server/main.ts --config config.yaml --dev\" \"vite --config ui/vite.config.ts\"",
+    "desk": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.desk.yaml",
     "start": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.yaml",
-    "test": "vitest run",
+    "test": "npm run test:spec && npm run test:technical",
+    "test:spec": "tsx scripts/run-desk-specs.mts",
+    "test:legacy": "npm run test:technical",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "e2e": "vite build --config ui/vite.config.ts && playwright test",
@@ -17,7 +20,9 @@
     "agent:auth-status": "tsx scripts/agent-auth.mts status",
     "agent:build": "docker build -t spec-review-codex:0.159.3-auth1 --build-arg CODEX_VERSION=0.159.3 -f sandbox/agent/Dockerfile . && docker build -t spec-review-egress:2 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser",
     "smoke:agent-auth": "tsx scripts/smoke-agent-auth.mts",
-    "smoke:codex": "tsx scripts/smoke-codex.mts"
+    "smoke:codex": "tsx scripts/smoke-codex.mts",
+    "test:technical": "vitest run",
+    "test:self": "tsx scripts/verify-desk-self.mts"
   },
   "dependencies": {
     "@cucumber/cucumber-expressions": "^20.1.0",

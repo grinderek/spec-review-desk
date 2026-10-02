@@ -1,0 +1,158 @@
+version: 1
+feature: Owners review scenarios, phrases and changes through the public API
+scenarios:
+  - id: request-scenario-changes
+    scenario: Request changes and open an owner discussion
+    given:
+      - ScenarioDiscovered: {}
+    when:
+      RequestScenarioChanges: { key: $key, reason: The expected response looks wrong. }
+    then:
+      bind: { thread: response.body.threadId }
+      events:
+        - ScenarioChangesRequested:
+            key: $key
+            hash: $hash
+            commit: null
+            thread:
+              id: $thread
+              anchor: scenario
+              ref: $key
+              status: open
+              messages: [{ role: owner, text: The expected response looks wrong. }]
+      response: { status: 200, body: { threadId: $thread } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              features:
+                - scenarios:
+                    - effective: { status: changes_requested }
+              review:
+                threads:
+                  - id: $thread
+                    anchor: scenario
+                    ref: $key
+                    messages:
+                      - { role: owner, text: The expected response looks wrong. }
+                      - { role: agent, text: Noted. }
+
+  - id: approve-proposed-phrase
+    scenario: Approve a phrase by its current meaning
+    cases:
+      - { name: new phrase, extension: false }
+      - { name: extended phrase, extension: true }
+    given:
+      - ScenarioDiscovered: {}
+      - PhraseProposed: { extension: $extension }
+    when:
+      ApprovePhrase: { key: $phrase }
+    then:
+      events:
+        - PhraseApproved: { key: $phrase, hash: $phraseHash, commit: null }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              phrases:
+                - key: $phrase
+                  effective: { status: approved }
+              readiness: { ready: false, reasons: [1 scenario not approved] }
+
+  - id: revoke-phrase-approval
+    scenario: Revoke approval of a proposed phrase
+    given:
+      - ScenarioDiscovered: {}
+      - PhraseProposed: {}
+      - PhraseApproved: { key: $phrase, hash: $phraseHash, at: $at }
+    when:
+      RevokePhraseApproval: { key: $phrase }
+    then:
+      events:
+        - PhraseReviewRemoved: { key: $phrase }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              phrases:
+                - effective: { status: pending, changedSinceApproval: false }
+
+  - id: record-ready-change
+    scenario: Commit owner approval and its event history
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+    when:
+      RecordChangeApproval: {}
+    then:
+      bind: { newCommit: response.body.commit }
+      events:
+        - ChangeApprovalRecorded: { commit: $head }
+      response: { status: 200, body: { commit: $newCommit } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review: { approved_commit: $head }
+              readiness: { ready: true, reasons: [] }
+
+  - id: refuse-unready-change
+    scenario: Refuse to record a change with an unapproved scenario
+    given:
+      - ScenarioDiscovered: {}
+    when:
+      RecordChangeApproval: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: not_ready } } }
+
+  - id: drop-orphan-review
+    scenario: Drop an orphaned review entry
+    cases:
+      - { name: scenario, section: scenarios, removedEvent: ScenarioReviewRemoved }
+      - { name: phrase, section: phrases, removedEvent: PhraseReviewRemoved }
+    given:
+      - ScenarioDiscovered: {}
+      - ReviewEntryRecorded: { section: $section, key: old, hash: obsolete, at: $at }
+    when:
+      DropOrphanReview: { section: $section, key: old }
+    then:
+      events:
+        - $removedEvent: { key: old }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response: { status: 200, body: { orphans: { scenarios: [], phrases: [] } } }
+
+  - id: reattach-orphan-review
+    scenario: Reattach a review entry without approving different content
+    cases:
+      - { name: scenario, section: scenarios, removedEvent: ScenarioReviewRemoved, recordedEvent: ScenarioApproved, target: scenario }
+      - { name: phrase, section: phrases, removedEvent: PhraseReviewRemoved, recordedEvent: PhraseApproved, target: phrase }
+    given:
+      - ScenarioDiscovered: {}
+      - PhraseProposed: {}
+      - ReviewEntryRecorded: { section: $section, key: old, hash: obsolete, commit: $head, at: $at }
+    when:
+      ReattachOrphanReview: { section: $section, key: old, to: $targetKey }
+    then:
+      events:
+        - $removedEvent: { key: old }
+        - $recordedEvent: { key: $targetKey, hash: obsolete }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              orphans: { scenarios: [], phrases: [] }
+              review:
+                $section:
+                  $targetKey: { status: approved, text_hash: obsolete }
+              readiness: { ready: false }

@@ -1,0 +1,11 @@
+- [x] Parse and display DSL contracts with case tables
+- [x] Replay scenario, phrase and whole-change approvals
+- [x] Keep the owner corpus to core product rules
+- [x] Remove the standalone technical suite without adding replacement contracts
+- [x] Remove unused Git and observation-binding DSL syntax
+- [x] Provide and verify a local self-review runner
+- [x] Cover discussions, owner decisions, initiatives, research, Apply and verification
+- [x] Verify planner → authored change → owner review → Apply → matching corpus
+- [x] Require an explicit owner request for unit/technical integration tests
+- [x] Retain Vitest infrastructure while leaving the old suite deleted
+- [ ] Owner review and approval through Desk

@@ -1,0 +1,156 @@
+version: 1
+feature: Turn a brief into an approved plan and independently reviewed changes
+scenarios:
+  - id: create-initiative
+    scenario: Create an initiative with the owner's brief
+    given:
+      - ScenarioDiscovered: {}
+    when:
+      OpenInitiative: { name: new-feature, title: New feature, brief: Describe the intended behavior. }
+    then:
+      bind: { initiativeWorktree: response.body.worktreeId }
+      events: []
+      response: { status: 201, body: { name: new-feature } }
+      reads:
+        - path: /api/initiatives/$initiativeWorktree/new-feature
+          response: { status: 200, body: { brief: "Describe the intended behavior.\n", doc: { plan: { status: none, slices: [] } } } }
+  - id: revise-brief
+    scenario: Save the revised brief for future agent runs
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+    when:
+      EditBrief: { brief: The revised feature scope. }
+    then:
+      events: []
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "The revised feature scope.\n" } }
+  - id: draft-slice-plan
+    scenario: Keep an agent's slice plan as a draft until owner approval
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlannerReplyPrepared: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+    when:
+      RunPlanner: {}
+    then:
+      events: []
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response:
+            status: 200
+            body: { doc: { plan: { status: draft, slices: [{ id: s1, depends_on: [] }, { id: s2, depends_on: [s1] }] } }, statuses: { s1: planned, s2: planned } }
+  - id: approve-slice-plan
+    scenario: Approve the slice plan before proposing changes
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }] }
+    when:
+      ApprovePlan: {}
+    then:
+      events: []
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { plan: { status: approved } }, statuses: { s1: planned } } }
+  - id: block-plan-approval
+    scenario: Resolve blocking owner questions before approving the plan
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }] }
+      - InitiativeDecisionRaised: {}
+    when:
+      ApprovePlan: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: decisions_pending } } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { plan: { status: draft } }, blockingDecisions: 1 } }
+  - id: propose-independent-slice
+    scenario: Propose a ready slice as a change that still needs owner review
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+      - PlanApproved: {}
+      - AuthorOutputPrepared: { change: slice-contract }
+    when:
+      ProposeSlice: { slice: s1, change: slice-contract }
+    then:
+      events: []
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { statuses: { s1: proposed, s2: planned }, blockers: { s2: waiting for s1 } } }
+  - id: respect-slice-dependencies
+    scenario: Refuse a dependent slice while its prerequisite is unfinished
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+      - PlanApproved: {}
+    when:
+      ProposeSlice: { slice: s2, change: dependent-contract }
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: slice_not_ready } } }
+  - id: accept-research-input
+    scenario: Accept a research draft before agents can use it as an input
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchDrafted: { topic: Contract }
+    when:
+      AcceptResearch: { file: research-contract.md }
+    then:
+      events: []
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [{ file: research-contract.md, draft: false, present: true }] } }
+  - id: propose-after-prerequisite-approval
+    scenario: Propose a dependent slice once its prerequisite is owner approved
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+      - PlanApproved: {}
+      - ApprovedSliceProposed: { change: slice-contract }
+      - AuthorOutputPrepared: { change: dependent-contract }
+    when:
+      ProposeSlice: { slice: s2, change: dependent-contract }
+    then:
+      events: []
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { statuses: { s1: approved, s2: proposed } } }
+  - id: respect-research-permission
+    scenario: Resume research with the reading permission chosen by the owner
+    cases:
+      - { name: approved reading, choice: allow_all, webFetch: true, domains: [docs.example.com] }
+      - { name: search only, choice: search_only, webFetch: false, domains: [] }
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchWaitingForDomains: {}
+      - ResearchPermissionRecorded: { choice: $choice }
+      - ResearchReplyPrepared: {}
+    when:
+      ResumeResearch: { run: $researchRun }
+    then:
+      events: []
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response:
+            status: 200
+            body:
+              doc: { research: { domains: $domains }, runs: [{ outcome: done, web_fetch: $webFetch }] }
+              inputs: [{ draft: true, source: { domains: $domains } }]

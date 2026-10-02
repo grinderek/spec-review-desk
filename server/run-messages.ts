@@ -27,6 +27,8 @@ export function parseRunMessages(ndjson: string): CorpusRun {
   const started = new Map<string, string>()
   const results = new Map<string, { status: RunStatus; failure: ScenarioRun['failure'] }>()
   let finishedAt: string | null = null
+  const deskTotals = { passed: 0, failed: 0, other: 0 }
+  const deskScenarios: Record<string, ScenarioRun> = {}
 
   for (const line of ndjson.split('\n')) {
     if (!line.trim()) continue
@@ -36,7 +38,18 @@ export function parseRunMessages(ndjson: string): CorpusRun {
     } catch {
       continue
     }
-    if (envelope.gherkinDocument) {
+    if (envelope.deskScenarioResult) {
+      const r = envelope.deskScenarioResult
+      const status = toStatus(r.status)
+      if (status === 'passed') deskTotals.passed++
+      else if (status === 'failed') deskTotals.failed++
+      else deskTotals.other++
+      const previous = deskScenarios[String(r.key)]
+      const rows = Number.isInteger(r.rows) && r.rows > 0 ? [...(previous?.rows ?? Array<RunStatus>(r.rows).fill('unknown'))] : null
+      if (rows && Number.isInteger(r.row) && r.row >= 0 && r.row < rows.length) rows[r.row] = status
+      deskScenarios[String(r.key)] = { status: previous ? worst(previous.status, status) : status, failure: previous?.failure ?? (r.message ? { step: 'contract', message: String(r.message) } : null), rows }
+    } else if (envelope.deskRunFinished) { finishedAt = String(envelope.deskRunFinished.at)
+    } else if (envelope.gherkinDocument) {
       const doc = envelope.gherkinDocument
       const children: any[] = doc.feature?.children ?? []
       const scenarios = children.flatMap((c) => (c.rule ? c.rule.children : [c])).flatMap((c: any) => (c.scenario ? [c.scenario] : []))
@@ -87,5 +100,9 @@ export function parseRunMessages(ndjson: string): CorpusRun {
       rows,
     }
   }
+  for (const [key, scenario] of Object.entries(deskScenarios)) {
+    scenarios[key] = scenario
+  }
+  totals.passed += deskTotals.passed; totals.failed += deskTotals.failed; totals.other += deskTotals.other
   return { scenarios, totals, finishedAt }
 }

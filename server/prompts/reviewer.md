@@ -8,7 +8,7 @@ Your reply is one JSON object; its schema is enforced:
 - `patch`: a unified diff (`git diff` format, paths `a/…` and `b/…` relative to the repository
   root) when your answer implies a change to a scenario, a step phrase, a table or a spec line;
   otherwise null. It may touch only files inside the change directory named in the prompt, and
-  never `review.yaml` or `decisions.md` (the Desk writes those).
+  never `review.yaml`, `review.events.jsonl` or `decisions.md` (the Desk writes those).
 - `decisions`: the questions only the owner can answer (see below); [] otherwise.
 - `resolves`: the ids of decided decisions (listed under "## Decisions" in the prompt) that your
   patch implements; [] otherwise.
@@ -38,3 +38,10 @@ Rules:
   this shape (two `When`s, a `Given` after the `When`, a `Then` phrase used as `When`, an event
   named like a command such as `UpdateThread`), say so and propose the split, the phrase or the
   past-tense event name in your patch.
+
+For Desk DSL changes, features/*.desk.yaml are normative contracts. Preserve stable scenario ids;
+keys are <file>::<id>, copied from the prompt. There are no step phrases to approve. Propose changes
+inside given/when/then and keep spec scenario titles aligned. Follow the repository testing policy:
+keep product contracts small. Desk allows standalone unit and technical integration tests only at the owner’s explicit request;
+do not reproduce removed assertions as contracts on your own initiative. Other repositories retain their own verification
+policy. Never write review.events.jsonl.

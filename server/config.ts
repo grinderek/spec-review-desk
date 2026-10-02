@@ -6,15 +6,16 @@ import { AGENT_IMAGE, BROWSER_IMAGE, EGRESS_IMAGE } from './sandbox-args.ts'
 
 const RunnerSchema = z.object({
   worktree: z.string().min(1),
+  execution: z.enum(['compose', 'local']).default('compose'),
   compose: z.object({
     project: z.string().min(1),
     files: z.array(z.string().min(1)).min(1),
     service: z.string().min(1),
-  }),
+  }).optional(),
   command: z.array(z.string().min(1)).min(1),
   watch: z.array(z.string().min(1)).min(1),
   applyAllowedTools: z.array(z.string().min(1)).min(1),
-})
+}).refine((r) => r.execution === 'local' || r.compose !== undefined, 'compose settings are required for a compose runner')
 
 const ConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(4600),
@@ -48,7 +49,8 @@ export interface SandboxConfig { auth?: 'chatgpt' | 'api'; authVolume?: string; 
 export interface RunnerProfile {
   name: string
   worktreePath: string
-  compose: { project: string; files: string[]; service: string }
+  execution?: 'compose' | 'local'
+  compose?: { project: string; files: string[]; service: string }
   command: string[]
   watch: string[]
   applyAllowedTools: string[]
@@ -92,7 +94,8 @@ export async function loadConfig(file: string): Promise<Config> {
     runners: Object.entries(c.runners).map(([name, r]) => ({
       name,
       worktreePath: path.resolve(hubRoot, r.worktree),
-      compose: { ...r.compose, files: r.compose.files.map((f) => path.resolve(configDir, f)) },
+      execution: r.execution,
+      compose: r.compose ? { ...r.compose, files: r.compose.files.map((f) => path.resolve(configDir, f)) } : undefined,
       command: r.command,
       watch: r.watch,
       applyAllowedTools: r.applyAllowedTools,
