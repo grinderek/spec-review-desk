@@ -7,7 +7,7 @@ repos:
 model: gpt-6.1-sol
 reasoningEffort: high
 agents:
-  planner: { model: gpt-6-astra, reasoningEffort: high }
+  planner: { model: gpt-6.1-sol, reasoningEffort: high }
   reviewer: { reasoningEffort: medium }
 codexBin: codex
 commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"

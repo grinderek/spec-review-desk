@@ -30,8 +30,8 @@ BDD worktree. Use `config.example.yaml` for another workspace. `model` defaults 
 
 `agents` overrides the model and/or reasoning effort for `research`, `planner`, `author`,
 `reviewer`, and `apply`; omitted fields inherit the top-level settings. The supplied configs use
-Astra/high for planning, Sol/medium for review questions, and Sol/high for research, specification
-authoring and implementation. These are starting profiles, not an evaluated quality ranking.
+Sol/medium for review questions, and Sol/high for planning, research, specification authoring
+and implementation. These are starting profiles, not an evaluated quality ranking.
 Luna/medium is a candidate for narrowly scoped extraction or summaries; none of the current roles
 is limited to those operations, so it is not the default for an entire role. Supported effort
 values are `low`, `medium`, `high`, `xhigh`, and `max`; effort is passed explicitly to Codex.
