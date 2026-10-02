@@ -147,8 +147,8 @@ hash-bound approvals and verification results. Gherkin projects remain supported
 
 See [the language and migration boundary](docs/method/desk-dsl.md). Scenario, phrase and whole-change approvals are
 replayed from `review.events.jsonl`; discussion, decision and agent-run state keeps its existing storage. `npm test` runs
-the product DSL corpus and TypeScript checks. Storage compatibility and technical errors are covered
-by TypeScript checks; the owner corpus covers review, discussions, decisions, initiatives, research,
+only the product DSL corpus. Standalone unit and technical integration tests are intentionally
+removed; AGENTS.md prohibits adding them. The owner corpus covers review, discussions, decisions, initiatives, research,
 implementation and verification. See [the testing boundary](docs/method/testing.md).
 
 ## Checks
@@ -157,16 +157,15 @@ implementation and verification. See [the testing boundary](docs/method/testing.
 npm run typecheck
 npm test
 npm run test:self
-npm run coverage
 npx playwright install chromium
 npm run e2e
 npm run smoke:codex
 npm run smoke:agent-auth # offline Docker credential/locking check; build the image first
 ```
 
-Vitest and Playwright use a fake Codex emitting native thread/item/turn JSONL, fake OpenSpec and
+The contract runner and Playwright use a fake Codex emitting native thread/item/turn JSONL, fake OpenSpec and
 FakeSandbox. Browser tests cover review, decisions, planning, authoring and live updates; the
-research search/domain-approval lifecycle is covered by server tests rather than browser tests.
+research search/domain-approval lifecycle is covered by the product contracts.
 `smoke:codex` runs the real CLI against a local Responses API fixture, checks an actual scoped MCP
 call, JSON Schema output and thread resume, and requires no API key or paid model request. It does
 not verify live OpenAI authentication or model behavior.

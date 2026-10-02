@@ -1,28 +1,14 @@
-# Product contracts and technical review checks
+# Review contracts and repository verification policy
 
-The owner corpus contains 14 rules in three files, reduced from 40 contracts in six files.
-Case tables produce 24 executions instead of 65. A rule belongs here when a product owner needs
-to understand and approve its behavior. Removing unit tests is not a goal by itself.
+The review corpus contains 14 rules in three files with 24 executions. It remains a compact set of
+owner-readable rules: scenario and phrase approvals, semantic changes, readiness, discussions and
+orphan handling. The complete application corpus contains 37 contracts / 50 executions.
 
-| Place | Responsibility |
-| --- | --- |
-| `features/scenario-approval.desk.yaml` | Approve/revoke a scenario; require new approval after a semantic change; preserve approval after formatting. |
-| `features/review-actions.desk.yaml` | Request changes, approve/revoke phrases, approve a ready change, refuse an unready one, drop or reattach orphan reviews. |
-| `features/review-readiness.desk.yaml` | Blocking decisions, unresolved discussions and proposed phrases gate readiness. |
-| `server/review.integration.test.ts` | Legacy imports, replay and projection loss, escaped keys, external metadata, concurrent writes, corrupt state, invalid HTTP input, archival protection, parser errors, spec-title consistency, legacy views and approval Git artifacts. |
-| Browser suite | Rendering, approvals, live updates and contract diffs. |
+The old standalone TypeScript suite, including review.integration.test.ts, has been removed.
+AGENTS.md explicitly prohibits writing unit or technical integration tests or recreating their
+assertions in another format. Product rules remain in DSL; existing browser workflows and compiler
+checks remain available. No replacement technical corpus was added.
 
-The technical tests use real disk, HTTP and Git with a shared review fixture. They are ordinary
-TypeScript: no second declarative language and no technical scenario corpus for owner approval.
-Git artifact assertions and observation bindings were removed from the DSL; response bindings
-remain for generated ids and commits needed by product workflows.
-
-The four old review route, readiness, store and change-view files remain retired. Their product
-rules are expressed in the DSL, and their technical boundaries are exercised by the integration
-file. Pure helper immutability and patch indexing checks were retired rather than mirrored.
-Discussion patch and decision operations retain their separate route coverage. Other domains
-retain distinct technical checks; their primary workflows now have contracts. See
-[the application testing map](testing.md).
-
-Run `npm test` to verify both kinds of checks. The local Desk runner executes the owner contract
-corpus; passing that corpus alone does not claim technical or browser verification.
+Run `npm test` for the product corpus, `npm run test:self` for execution through Desk itself,
+`npm run typecheck` for types and `npm run e2e` for browser workflows. See
+[the repository verification policy](testing.md) for the boundary and coverage limits.

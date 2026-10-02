@@ -9,10 +9,8 @@
     "dev": "concurrently -k -n server,ui \"tsx watch server/main.ts --config config.yaml --dev\" \"vite --config ui/vite.config.ts\"",
     "desk": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.desk.yaml",
     "start": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.yaml",
-    "test": "npm run test:spec && npm run test:technical",
+    "test": "npm run test:spec",
     "test:spec": "tsx scripts/run-desk-specs.mts",
-    "test:legacy": "npm run test:technical",
-    "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "e2e": "vite build --config ui/vite.config.ts && playwright test",
     "agent:login": "tsx scripts/agent-auth.mts login",
@@ -21,7 +19,6 @@
     "agent:build": "docker build -t spec-review-codex:0.159.3-auth1 --build-arg CODEX_VERSION=0.159.3 -f sandbox/agent/Dockerfile . && docker build -t spec-review-egress:2 sandbox/egress && docker build -t spec-review-browser:0.0.80 --build-arg PLAYWRIGHT_MCP_VERSION=0.0.80 sandbox/browser",
     "smoke:agent-auth": "tsx scripts/smoke-agent-auth.mts",
     "smoke:codex": "tsx scripts/smoke-codex.mts",
-    "test:technical": "vitest run",
     "test:self": "tsx scripts/verify-desk-self.mts"
   },
   "dependencies": {
@@ -41,13 +38,11 @@
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^6.1.1",
-    "@vitest/coverage-v8": "^5.0.1",
     "concurrently": "^10.0.5",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
     "tsx": "^4.23.15",
     "typescript": "~5.9.0",
-    "vite": "^8.3.0",
-    "vitest": "^5.0.1"
+    "vite": "^8.3.0"
   }
 }

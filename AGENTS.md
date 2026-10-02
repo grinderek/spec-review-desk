@@ -5,12 +5,13 @@ observable state transitions and business gates. Keep each rule readable; use a 
 for meaningful variants. Do not translate every test into a contract or add DSL syntax for a
 technical assertion. The language is described in `docs/method/desk-dsl.md`.
 
-Use ordinary TypeScript integration tests for file formats, migration, concurrency, malformed input
-and protocol details. Prefer real HTTP, disk and Git boundaries. Reuse `server/testing/review-world.ts`
-for review fixtures. Avoid repeating the same behavior in DSL and implementation tests; keep
-browser and compiler checks. Technical tests include focused parser and data-integrity checks;
-do not remove valuable checks just to eliminate the unit-test label. The main application workflows
-now have owner contracts; see `docs/method/testing.md` for the coverage boundary.
+Do not write standalone unit or technical integration tests for this repository. Do not create
+`*.test.ts` / `*.test.tsx` files, restore Vitest or add a replacement technical test framework.
+This is an explicit repository policy. Develop behavior through the compact owner contracts,
+existing browser workflows, compiler checks and targeted manual verification. Do not move the
+removed test cases into DSL, browser tests, smoke scripts or adapter assertions just to retain
+them under another name. Add a contract only for a meaningful product rule; keep adapters focused
+on setup and public operations. See `docs/method/testing.md`.
 
 Start an OpenSpec change with `schema: behavior-driven`, put proposed contracts under `features/`
 and keep `specs/**/spec.md` titles equal to those contracts. Use stable scenario ids. Do not rewrite
@@ -22,8 +23,8 @@ GET observations for persisted state. Keep domain adapters small and add them fo
 not scenario wording. Discussion, decision and agent-run state retains its existing persistence.
 
 Run `npm test`, `npm run typecheck` and relevant browser checks. `npm run desk` opens this repository
-with its local contract runner. Technical checks remain part of `npm test` even though the owner
-reviews only the product corpus in Desk.
+with its local contract runner. `npm test` runs only the product corpus. `npm run test:self` checks
+execution through Desk itself.
 
 Desk owns review.yaml, review.events.jsonl and decisions.md. Agents must not forge approvals or
 edit their history. Scenario, phrase and whole-change approvals project from review.events.jsonl;

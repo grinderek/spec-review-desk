@@ -2,15 +2,15 @@
 
 The DSL covers owner workflows and business gates: approvals, semantic changes, requests for
 changes, readiness and orphan operations. Fourteen readable rules use small case tables for
-meaningful variants. Source formats, migration, concurrency, corrupt state, invalid API input and
-Git artifacts use ordinary TypeScript integration tests. Do not extend the language for those checks.
+meaningful variants. Do not write standalone unit or technical integration tests. The complete Vitest suite is removed;
+do not extend the language or another verification script to reproduce it. Existing browser flows,
+compiler checks and targeted manual verification remain.
 
 ## Execution
 
 A shared fixture creates a fresh Git repository and real Hono app. The DSL adapter prepares prior
 facts and executes one authenticated public command. Then checks exact new domain events, the
-response and subsequent GET observations. Generated values bind from command responses. Technical
-tests use the same fixture with direct disk/HTTP assertions. The question service uses a deterministic
+response and subsequent GET observations. Generated values bind from command responses. There is no separate technical assertion suite. The question service uses a deterministic
 model transport while running real validation and persistence. UI behavior retains browser coverage.
 
 ## Persistence
@@ -27,10 +27,10 @@ Journal replacement cost grows with history. Approval commits include the journa
 
 ## Coverage
 
-The old review route, readiness, store and change-view files are retired. Product rules live in
-three DSL files; technical coverage lives in server/review.integration.test.ts. See
-`docs/method/review-migration.md`. Other domains retain their tests. The Desk runner verifies
-product contracts; npm test verifies both contracts and technical checks.
+Product contracts cover the primary workflows: 37 rules and 50 executions. `npm test` runs only
+this corpus; `test:self` verifies execution through Desk. All 58 Vitest suite files (488 checks),
+Vitest configuration/dependencies and unused helpers are removed. Browser workflows and typecheck
+remain. See `docs/method/testing.md` for verification limits.
 
 ## Application workflows
 
@@ -43,7 +43,6 @@ requires a completed run, every implemented contract matching, and no corpus par
 A successful run with absent scenarios no longer marks a slice applied. Research checks approved reading and search-only
 choices. Verification uses a real local subprocess.
 
-Nine superseded product checks are retired; mixed tests keep their distinct technical assertions.
-Parsers, security, process recovery, network permissions, serialization and UI/browser checks
-remain. `docs/method/testing.md` maps this boundary across the app. Contract event assertions refer
-to the approval journal; other state is observed through public views. The DSL gains no syntax.
+AGENTS.md and agent prompts explicitly prohibit standalone unit/technical integration tests and
+recreating deleted assertions elsewhere. The DSL gains no syntax or scenarios from this removal.
+Contract event assertions refer to the approval journal; other state is observed through public views.

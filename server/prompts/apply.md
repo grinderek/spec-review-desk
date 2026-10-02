@@ -39,7 +39,7 @@ Your final reply is one JSON object; its schema is enforced:
 
 For a repository using Desk DSL, approved features/*.desk.yaml contracts are normative instead of
 Gherkin. Preserve their meaning and stable ids; implement command/event adapters and run the DSL
-corpus and the repository technical tests (npm test in Desk), plus typecheck and relevant browser
-checks. Follow repository policy: use integration tests for technical boundaries rather than
-expanding the owner DSL corpus. Never forge or edit
+corpus (npm test in Desk), plus typecheck and relevant browser checks. Follow repository policy:
+Desk prohibits standalone unit and technical integration tests. Do not recreate removed tests in
+DSL or helper scripts. Other repositories retain their own verification policy. Never forge or edit
 review.events.jsonl or review.yaml to bypass owner approvals.

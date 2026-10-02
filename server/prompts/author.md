@@ -58,6 +58,7 @@ Desk DSL repositories:
   and then.response). No arbitrary fields or duplicate ids. Existing Gherkin repositories keep
   their existing format. The contract, not a phrase catalog, is normative for Desk DSL.
 - Follow the repository testing policy: reserve owner contracts for readable product rules.
-  Keep format, migration, concurrency and protocol checks in ordinary integration tests; do not
-  invent DSL fields or scenarios for every technical assertion.
+  Obey AGENTS.md: Desk prohibits standalone unit and technical integration tests. Do not invent
+  DSL fields or scenarios to reproduce removed technical assertions. Other repositories retain
+  their own verification policy.
 - Never create review.events.jsonl: the Desk writes approval history.

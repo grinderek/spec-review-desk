@@ -32,11 +32,11 @@ embedded executable code.
 ## What belongs in a contract
 
 Keep the owner corpus small: a scenario describes a product rule someone can read and approve.
-File formats, import compatibility, concurrency, corrupt state and invalid HTTP input belong in
-ordinary TypeScript integration tests. Do not extend the language to express every technical check.
+Do not write standalone unit or technical integration tests in this repository. Do not extend
+the language or add cases to reproduce removed implementation checks.
 The review corpus retains its 14 rules. Discussions, owner decisions, initiatives, research,
 implementation and verification add 23 core rules: 37 contracts / 50 executions across the app.
-See [the application testing map](testing.md) for the retained technical coverage.
+See [the application testing map](testing.md) for the repository verification policy.
 
 ## Case tables and observations
 
@@ -80,8 +80,8 @@ and verification. Reads observe actual change, initiative, corpus and runner vie
 is defined once per operation; expectations stay in the contracts.
 
 Given facts prepare source contracts, phrases, prior approvals, discussions and decisions.
-Approvals use the same serialized writer as production. Storage compatibility, malformed input,
-concurrency and Git artifact details use ordinary integration tests. Fixture
+Approvals use the same serialized writer as production. Technical details are verified with compiler checks and targeted manual inspection, without a
+separate test suite or additional technical contracts. Fixture
 bindings include `$key`, `$hash`, `$head`, `$at`, `$change`, `$phrase` and `$phraseHash`. Production
 commands generate their own ids and times. The question service uses a deterministic model transport
 while running real reply validation and persistence. Initiative and Apply workflows use the existing
@@ -129,6 +129,5 @@ live in gitignored `.spec-review/`, with native Desk envelopes and support for C
 The UI displays YAML contracts, event/command summaries, approvals and diffs. Keys use file::id.
 Hashes include canonical contract content and case tables: comments, indentation and mapping-key
 order preserve approval; changed expectations require approval again. Corpus comparison uses the
-same hash. See [the testing boundary](review-migration.md) for the split between product rules and technical
-checks. Other domains and browser checks retain their coverage. Live authoring through a Codex account is outside these
+same hash. See [the testing boundary](review-migration.md) for the verification policy. Browser workflows remain available. Live authoring through a Codex account is outside these
 offline contracts.
