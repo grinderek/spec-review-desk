@@ -17,10 +17,10 @@ describe('normalizeDomain', () => {
 describe('egressFilter', () => {
   // Review fix 1: tinyproxy runs with FilterURLs On, so a line matches the whole request target:
   // `host:443` for CONNECT, `http://host/…` for plain HTTP — only HTTPS to port 443 passes.
-  it('always allows the Anthropic API, one anchored, escaped host:443 line per extra domain, no duplicates', () => {
-    expect(egressFilter([])).toBe('^api\\.anthropic\\.com:443$\n')
-    expect(egressFilter(['developer.intuit.com', 'docs.stripe.com', 'developer.intuit.com', 'api.anthropic.com'])).toBe(
-      '^api\\.anthropic\\.com:443$\n^developer\\.intuit\\.com:443$\n^docs\\.stripe\\.com:443$\n',
+  it('always allows the OpenAI API, one anchored, escaped host:443 line per extra domain, no duplicates', () => {
+    expect(egressFilter([])).toBe('^api\\.openai\\.com:443$\n^www\\.bing\\.com:443$\n')
+    expect(egressFilter(['developer.intuit.com', 'docs.stripe.com', 'developer.intuit.com', 'api.openai.com'])).toBe(
+      '^api\\.openai\\.com:443$\n^www\\.bing\\.com:443$\n^developer\\.intuit\\.com:443$\n^docs\\.stripe\\.com:443$\n',
     )
   })
 
@@ -30,8 +30,8 @@ describe('egressFilter', () => {
 })
 
 describe('browserFilter (controller ruling 2)', () => {
-  it('lists only the approved research domains — never the Anthropic API', () => {
-    expect(browserFilter(['developer.intuit.com', 'uxfabric.intuitcdn.net', 'developer.intuit.com', 'API.Anthropic.com'])).toBe(
+  it('lists only the approved research domains — never the OpenAI API', () => {
+    expect(browserFilter(['developer.intuit.com', 'uxfabric.intuitcdn.net', 'developer.intuit.com', 'API.OpenAI.com'])).toBe(
       '^developer\\.intuit\\.com:443$\n^uxfabric\\.intuitcdn\\.net:443$\n',
     )
     expect(browserFilter([])).toBe('')
@@ -57,4 +57,10 @@ describe('approvedDomains', () => {
     expect(approvedDomains(requested, { option: 'search_only', note: 'docs.stripe.com' })).toEqual([])
     expect(approvedDomains(requested, null)).toEqual([])
   })
+})
+
+
+it('allows ChatGPT inference and refresh only on the agent proxy, even when requested as browser domains', () => {
+  expect(egressFilter([], 'chatgpt')).toBe('^chatgpt\\.com:443$\n^auth\\.openai\\.com:443$\n^www\\.bing\\.com:443$\n')
+  expect(browserFilter(['chatgpt.com', 'auth.openai.com', 'api.openai.com', 'www.bing.com', 'docs.stripe.com'])).toBe('^docs\\.stripe\\.com:443$\n')
 })

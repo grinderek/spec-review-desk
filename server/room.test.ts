@@ -128,3 +128,16 @@ describe('extractSection', () => {
     expect(extractSection('# Nothing\n', 'Spec-driven work')).toBeNull()
   })
 })
+
+it('prefers Codex instructions and makes curated snapshots readable by the container uid', async () => {
+  const { wt, ini, doc, statuses } = await world()
+  await writeFiles(wt, { 'AGENTS.md': '# Codex\n\n## Spec-driven work\n\nCodex scenarios first.\n', '.agents/rules/testing.md': '# Codex testing\n' })
+  const room = path.join(wt, 'room')
+  await assembleRoom(room, { worktree: wt, initiativeDir: ini, doc, kind: 'planner', statuses })
+  expect(await readFile(path.join(room, 'method/spec-driven-work.md'), 'utf8')).toContain('Codex scenarios first.')
+  expect(await readFile(path.join(room, 'method/testing.md'), 'utf8')).toBe('# Codex testing\n')
+  const { stat } = await import('node:fs/promises')
+  expect((await stat(room)).mode & 0o777).toBe(0o755)
+  expect((await stat(path.join(room, 'corpus/features/inbox'))).mode & 0o777).toBe(0o755)
+  expect((await stat(path.join(room, 'corpus/features/inbox/threads.feature'))).mode & 0o777).toBe(0o644)
+})

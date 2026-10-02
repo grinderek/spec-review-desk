@@ -9,7 +9,7 @@ import { initiativeTags } from '../initiatives.ts'
 import { resolveChange } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
 
-export interface Capabilities { claude: boolean; docker: boolean }
+export interface Capabilities { codex: boolean; docker: boolean }
 
 export function registerReadRoutes(app: Hono, ctx: AppContext, capabilities: Capabilities): void {
   app.get('/api/status', (c) => c.json({ capabilities }))

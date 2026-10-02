@@ -2,7 +2,7 @@ import { z } from 'zod'
 import { extractPatch } from './patch.ts'
 
 // The one reply protocol of every agent the Desk runs (spec §4). The zod schema is the source of
-// truth: its JSON Schema goes to the CLI as `--json-schema`, and the server validates again, because
+// truth: its JSON Schema goes to the CLI as `--output-schema`, and the server validates again, because
 // JSON Schema cannot express the cross-field rules of validateReply (spike 2026-09-24:
 // `recommended: "sqlite"` while the option ids were `sqlite_path`/…).
 export const SLUG = /^[a-z0-9][a-z0-9_-]{0,39}$/
@@ -41,11 +41,7 @@ export interface KnownDecision { id: string; status: 'open' | 'decided' | 'recor
 export interface ReplyContext { agent: AgentKind; scenarioKeys: readonly string[]; decisions: readonly KnownDecision[] }
 
 export const agentReplyJsonSchema = z.toJSONSchema(AgentReplySchema)
-// The real `claude` CLI's --json-schema validator rejects the top-level "$schema" dialect key
-// z.toJSONSchema() emits (verified 2026-09-27 against the real CLI: "no schema with key or ref
-// https://json-schema.org/draft/2020-12/schema"). Strip it — immutably — for the arg the CLI sees;
-// agentReplyJsonSchema itself (used by tests and anything else that wants the full JSON Schema)
-// keeps it.
+// Keep the CLI schema payload dialect-neutral; Codex receives it as a temporary file.
 const { $schema: _agentReplySchemaDialect, ...agentReplyJsonSchemaForCli } = agentReplyJsonSchema
 export const AGENT_REPLY_SCHEMA_ARG = JSON.stringify(agentReplyJsonSchemaForCli)
 

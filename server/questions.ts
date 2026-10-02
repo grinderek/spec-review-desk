@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { allScenarios, type ChangeView, findPhrase, findScenario, loadChangeView } from './change-view.ts'
-import { type ClaudeEvent, type ClaudeOutcome, type ClaudeRunSpec, isMissingSession, runClaude } from './claude.ts'
+import { type CodexEvent, type CodexOutcome, type CodexRunSpec, isMissingSession, runCodex } from './codex.ts'
 import type { Config } from './config.ts'
 import { addDecisions, decisionsFromReply } from './decision-model.ts'
 import { DECISIONS_FILE } from './decisions-md.ts'
@@ -74,7 +74,7 @@ export function replyContext(agent: AgentKind, view: ChangeView): ReplyContext {
 
 export interface CheckedReply { reply: AgentReply | null; issues: string[]; raw: string }
 
-export async function checkReply(wt: WorktreeInfo, ref: ChangeRef, agent: AgentKind, outcome: ClaudeOutcome): Promise<CheckedReply> {
+export async function checkReply(wt: WorktreeInfo, ref: ChangeRef, agent: AgentKind, outcome: CodexOutcome): Promise<CheckedReply> {
   const raw = outcome.structured === null || outcome.structured === undefined ? outcome.text : JSON.stringify(outcome.structured, null, 2)
   const parsed = parseReply(outcome.structured)
   if (!parsed.reply) return { reply: null, issues: parsed.issues, raw }
@@ -85,7 +85,7 @@ export async function checkReply(wt: WorktreeInfo, ref: ChangeRef, agent: AgentK
 export interface QuestionDeps {
   config: Config
   bus: EventBus
-  runClaude?: typeof runClaude
+  runCodex?: typeof runCodex
   now?: () => Date
 }
 
@@ -120,7 +120,7 @@ export class QuestionService {
 
   async #answer(wt: WorktreeInfo, ref: ChangeRef, threadId: string): Promise<void> {
     const { config, bus } = this.deps
-    const exec = this.deps.runClaude ?? runClaude
+    const exec = this.deps.runCodex ?? runCodex
     const now = this.deps.now ?? (() => new Date())
     const topic = `thread:${threadId}`
     const view = await loadChangeView(wt, ref, { withCommits: false })
@@ -136,8 +136,8 @@ export class QuestionService {
       scenarioKeys: allScenarios(view).map((s) => s.key),
     })
     const rules = await readFile(REVIEWER_RULES, 'utf8')
-    const spec = (sessionId: string, resume: boolean, text: string): ClaudeRunSpec => ({
-      bin: config.claudeBin,
+    const spec = (sessionId: string, resume: boolean, text: string): CodexRunSpec => ({
+      bin: config.codexBin,
       cwd: wt.path,
       sessionId,
       resume,
@@ -151,7 +151,7 @@ export class QuestionService {
     })
     const options = {
       timeoutMs: config.questionTimeoutMs,
-      onEvent: (e: ClaudeEvent) => {
+      onEvent: (e: CodexEvent) => {
         if (e.type === 'answer_delta') bus.publish(topic, { type: 'delta', text: e.text })
         if (e.type === 'answer_reset') bus.publish(topic, { type: 'reset' })
       },
@@ -160,7 +160,7 @@ export class QuestionService {
 
     const stored = view.review.agent_session
     let session = stored ?? ''
-    let outcome: ClaudeOutcome | null = stored ? await exec(spec(stored, true, prompt), options) : null
+    let outcome: CodexOutcome | null = stored ? await exec(spec(stored, true, prompt), options) : null
     let note: string | null = null
     if (!outcome || isMissingSession(outcome)) {
       if (outcome) {
@@ -180,6 +180,8 @@ export class QuestionService {
       checked = outcome.ok ? await checkReply(wt, ref, 'question', outcome) : null
     }
 
+    if (outcome.sessionId) await updateReview(ref.dir, (doc) => setAgentSession(doc, outcome.sessionId))
+
     const { message, decisions } = await this.#compose(wt.path, view.relDir, threadId, outcome, checked, note, nowIso(now()))
     const ok = Boolean(checked?.reply)
     await updateReview(ref.dir, (doc) => setThreadStatus(appendMessage(addDecisions(doc, decisions), threadId, message), threadId, ok ? 'answered' : 'open'))
@@ -191,7 +193,7 @@ export class QuestionService {
     cwd: string,
     relDir: string,
     threadId: string,
-    outcome: ClaudeOutcome,
+    outcome: CodexOutcome,
     checked: CheckedReply | null,
     note: string | null,
     at: string,

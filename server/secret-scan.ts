@@ -1,15 +1,21 @@
-// Spec B §5.2: the OAuth token lives in the claude process environment inside the container, so
+// Spec B §5.2: the API key lives in the Codex process environment inside the container, so
 // every reply, streamed text, log and output file of a run is scanned for it before anything is
 // moved, committed or shown.
 const SK_ANT = /sk-ant-[A-Za-z0-9_-]{20,}/g
+const SK_OPENAI = /sk-(?!ant-)(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}/g
+// Also mask JWT prefixes cut off mid-stream; credentials never reach scoped file tools.
+const JWT = /eyJ[A-Za-z0-9_-]{12,}(?:\.[A-Za-z0-9_-]+){0,2}/g
+const KEYS = new RegExp(`${SK_ANT.source}|${SK_OPENAI.source}|${JWT.source}`, 'g')
 
 export const ROTATE_HINT =
-  'A secret appeared in the agent output. Nothing was moved or committed and the log was redacted. Rotate the token: run `claude setup-token` and put the new value into tools/spec-review/.env.'
+  'A secret appeared in the agent output. Nothing was moved or committed and the log was redacted. For ChatGPT run npm run agent:logout and npm run agent:login; for API mode rotate the key and update OPENAI_API_KEY in .env.'
 
 export function findSecrets(text: string, token: string | null): string[] {
   return [
     ...(token && text.includes(token) ? ['the OAuth token'] : []),
     ...(new RegExp(SK_ANT.source).test(text) ? ['an sk-ant- key'] : []),
+    ...(new RegExp(SK_OPENAI.source).test(text) ? ['an OpenAI API key'] : []),
+    ...(new RegExp(JWT.source).test(text) ? ['a JWT credential'] : []),
   ]
 }
 
@@ -20,8 +26,8 @@ const MIN_PIECE = 8
 const MASK = '[REDACTED]'
 // The shape prefix every OAuth token shares ("sk-ant-oat01-"): masked like any piece, but a piece
 // lying wholly inside it reveals nothing, so it does not count as the run having seen a secret.
-const PUBLIC_PREFIX = /^sk-ant-(?:[a-z]+\d*-)?/
-const PARTIAL_KEY_AT_END = /sk-ant-[A-Za-z0-9_-]*$/
+const PUBLIC_PREFIX = /^sk-(?:ant-(?:[a-z]+\d*-)?|proj-|svcacct-)?/
+const PARTIAL_KEY_AT_END = /sk-(?:proj-|svcacct-|ant-)?[A-Za-z0-9_-]*$/
 interface Range { start: number; end: number; secret: boolean }
 
 function publicPart(text: string): string {
@@ -55,7 +61,7 @@ function tokenRanges(text: string, token: string): Range[] {
 function secretRanges(text: string, token: string | null, final: boolean): Range[] {
   const found: Range[] = [
     ...(token ? tokenRanges(text, token) : []),
-    ...[...text.matchAll(SK_ANT)].map((m) => ({ start: m.index, end: m.index + m[0].length, secret: true })),
+    ...[...text.matchAll(KEYS)].map((m) => ({ start: m.index, end: m.index + m[0].length, secret: true })),
   ]
   const partial = final ? PARTIAL_KEY_AT_END.exec(text) : null
   if (partial) found.push({ start: partial.index, end: text.length, secret: partial[0].length > publicPart(partial[0]).length })
@@ -162,6 +168,8 @@ export class SecretHoldback {
     if (ranges.some((r) => r.secret)) this.#sawSecret = true
     if (cut <= 0) return ''
     for (const range of ranges) if (range.start < cut && range.end > cut) cut = range.start
+    // Keep an unterminated JWT until its delimiter arrives, even beyond the normal window.
+    for (const match of this.#raw.matchAll(JWT)) if (match.index + match[0].length === this.#raw.length) cut = Math.min(cut, match.index)
     return this.#release(cut, ranges.filter((r) => r.end <= cut))
   }
 

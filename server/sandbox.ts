@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process'
-import { readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { claudeArgs, type ClaudeRunSpec } from './claude.ts'
+import { codexArgs, type CodexRunSpec } from './codex.ts'
 import type { SandboxConfig } from './config.ts'
 import { browserFilter, egressFilter } from './egress.ts'
 import { run } from './git.ts'
 import {
-  agentRunArgs, browserName, browserNetworkCreateArgs, browserOutNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs,
+  AUTH_STORE, AUTH_VOLUME, agentRunArgs, browserName, browserNetworkCreateArgs, browserOutNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs,
   cleanupArgs, containerName, egressRunArgs, networkConnectArgs, networkCreateArgs, outNetworkCreateArgs, teardownArgs,
 } from './sandbox-args.ts'
 
@@ -18,7 +18,7 @@ export interface SandboxRun {
   out: string
   sessions: string
   domains: readonly string[]
-  claude: ClaudeRunSpec
+  codex: CodexRunSpec
   extraArgs?: readonly string[]
   // The research read phase: a headless browser (Playwright MCP) next to the agent, behind its own
   // proxy (approved domains only), loaded as the agent's one MCP server.
@@ -52,17 +52,17 @@ export const FIXES = {
   docker: 'Install Docker and make sure `docker version` works',
   image: 'Build the sandbox images: npm run agent:build',
   browser: 'Build the research browser image: npm run agent:build',
-  token: 'Create a token with `claude setup-token` and put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env',
+  token: 'Run npm run agent:login to sign in with ChatGPT (or set sandbox.auth: api and OPENAI_API_KEY in .env)',
 } as const
 
-const TOKEN_LINE = /^\s*(?:export\s+)?CLAUDE_CODE_OAUTH_TOKEN\s*=\s*(.*)$/
+const TOKEN_LINE = /^\s*(?:export\s+)?OPENAI_API_KEY\s*=\s*(.*)$/
 // The Playwright MCP server's first line (on stderr) once its HTTP endpoint accepts connections. The
 // CLI connects to its MCP servers once, at startup: the agent must not start before this.
 const BROWSER_LISTENING = 'Listening on '
 const STOPPED: SandboxOutcome = { code: null, timedOut: false, stopped: true, error: null }
 
 // Reads only the token line of the gitignored .env; the value is never logged or served.
-export async function readOAuthToken(envFile: string): Promise<string | null> {
+export async function readApiKey(envFile: string): Promise<string | null> {
   let text: string
   try {
     text = await readFile(envFile, 'utf8')
@@ -106,7 +106,16 @@ export class DockerSandbox implements Sandbox {
   }
 
   token(): Promise<string | null> {
-    return readOAuthToken(this.config.envFile)
+    return this.config.auth === 'api' ? readApiKey(this.config.envFile) : Promise.resolve(null)
+  }
+
+  async #chatgptReady(): Promise<boolean> {
+    // Presence only; never return credentials to the Desk process or logs.
+    return this.#ok(['run', '--rm', '--network', 'none', '--read-only', '--user', '10001:10001',
+      '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
+      '--mount', `type=volume,src=${this.config.authVolume ?? AUTH_VOLUME},dst=${AUTH_STORE},readonly`,
+      this.config.image, 'node', '-e',
+      `try { const a = JSON.parse(require('fs').readFileSync('${AUTH_STORE}/auth.json', 'utf8')); process.exit(a.tokens?.access_token && a.tokens?.refresh_token && a.tokens?.id_token && a.auth_mode !== 'apikey' && !a.OPENAI_API_KEY ? 0 : 1) } catch { process.exit(1) }`])
   }
 
   async status(): Promise<SandboxStatus> {
@@ -114,7 +123,7 @@ export class DockerSandbox implements Sandbox {
     const image = docker && (await this.#ok(['image', 'inspect', this.config.image]))
     const egressImage = docker && (await this.#ok(['image', 'inspect', this.config.egressImage]))
     const browserImage = docker && (await this.#ok(['image', 'inspect', this.config.browserImage]))
-    const token = (await this.token()) !== null
+    const token = this.config.auth === 'api' ? (await this.token()) !== null : image && await this.#chatgptReady()
     const fixes = [...(docker ? [] : [FIXES.docker]), ...(docker && !(image && egressImage) ? [FIXES.image] : []), ...(token ? [] : [FIXES.token])]
     const browserFix = docker && !browserImage ? FIXES.browser : null
     return { docker, image, egressImage, browserImage, browserFix, token, ready: fixes.length === 0, fixes }
@@ -124,12 +133,15 @@ export class DockerSandbox implements Sandbox {
     // A stop() between two attempts of the same run id (a validation retry, an owner resume) must
     // not mark THIS attempt stopped: clear any stale mark before the attempt begins.
     this.#stopped.delete(spec.runId)
+    const chatgpt = this.config.auth !== 'api'
     const token = await this.token()
-    if (!token) return { code: null, timedOut: false, stopped: false, error: `no CLAUDE_CODE_OAUTH_TOKEN in ${this.config.envFile}` }
+    if (chatgpt && !await this.#chatgptReady()) return { code: null, timedOut: false, stopped: false, error: FIXES.token }
+    if (!chatgpt && !token) return { code: null, timedOut: false, stopped: false, error: `no OPENAI_API_KEY in ${this.config.envFile}` }
     const envFile = path.join(spec.runDir, 'agent.env')
     const filterFile = path.join(spec.runDir, 'egress.filter')
-    await writeFile(envFile, `CLAUDE_CODE_OAUTH_TOKEN=${token}\n`, { mode: 0o600 })
-    await writeFile(filterFile, egressFilter(spec.domains), { mode: 0o644 })
+    if (token) await writeFile(envFile, `CODEX_API_KEY=${token}\n`, { mode: 0o600 })
+    await writeFile(filterFile, egressFilter(spec.domains, chatgpt ? 'chatgpt' : 'api'), { mode: 0o644 })
+    await chmod(filterFile, 0o644)
     try {
       try {
         await this.#docker(networkCreateArgs(spec.runId))
@@ -148,19 +160,27 @@ export class DockerSandbox implements Sandbox {
         // The same for a stop while the browser came up: the agent never starts.
         if (this.#stopped.delete(spec.runId)) return STOPPED
       }
+      const schemaFile = path.join(spec.runDir, 'reply-schema.json')
+      if (spec.codex.jsonSchema) {
+        await writeFile(schemaFile, spec.codex.jsonSchema, { mode: 0o644 })
+        await chmod(schemaFile, 0o644)
+      }
       const args = agentRunArgs({
         runId: spec.runId,
         image: this.config.image,
-        envFile,
+        envFile: chatgpt ? undefined : envFile,
+        authVolume: chatgpt ? this.config.authVolume ?? AUTH_VOLUME : undefined,
+        schemaFile: spec.codex.jsonSchema ? schemaFile : undefined,
         room: spec.room,
         out: spec.out,
         sessions: spec.sessions,
-        claudeArgs: [...claudeArgs(spec.claude), ...(spec.extraArgs ?? [])],
+        codexArgs: [...codexArgs({ ...spec.codex, schemaFile: '/work/reply-schema.json', toolsScript: '/opt/spec-review/desk-tools.mjs' }), ...(spec.extraArgs ?? [])],
         browser: spec.browser === true,
       })
       return await this.#attach(spec, args, opts)
     } finally {
       await rm(envFile, { force: true })
+      if (chatgpt) await rm(path.join(spec.sessions, 'auth.json'), { force: true })
       for (const args of teardownArgs(spec.runId)) await this.#ok(args)
     }
   }
@@ -172,6 +192,7 @@ export class DockerSandbox implements Sandbox {
     const filterFile = path.join(spec.runDir, 'browser.filter')
     try {
       await writeFile(filterFile, browserFilter(spec.domains), { mode: 0o644 })
+      await chmod(filterFile, 0o644)
       await this.#docker(browserNetworkCreateArgs(runId))
       await this.#docker(browserOutNetworkCreateArgs(runId))
       await this.#docker(browserProxyRunArgs(runId, this.config.egressImage, filterFile))
@@ -223,7 +244,7 @@ export class DockerSandbox implements Sandbox {
         resolve({ code, timedOut, stopped, error: failed ? stderr.trim().slice(0, 2000) || `docker exited with code ${code}` : null })
       })
       child.stdin.on('error', () => undefined)
-      child.stdin.end(spec.claude.prompt)
+      child.stdin.end(spec.codex.prompt)
     })
   }
 

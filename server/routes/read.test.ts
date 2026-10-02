@@ -15,7 +15,7 @@ async function setup() {
   const { repo } = await makeRepo()
   const ctx = testContext(repo)
   const app = createBaseApp(ctx)
-  registerReadRoutes(app, ctx, { claude: true, docker: false })
+  registerReadRoutes(app, ctx, { codex: true, docker: false })
   return { repo, ctx, app, wt: worktreeId(repo) }
 }
 

@@ -2,20 +2,21 @@ import { chmod, mkdir, mkdtemp, readFile, stat, writeFile } from 'node:fs/promis
 import os from 'node:os'
 import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { ClaudeRunSpec } from './claude.ts'
+import type { CodexRunSpec } from './codex.ts'
 import type { SandboxConfig } from './config.ts'
-import { DockerSandbox, readOAuthToken, type SandboxRun } from './sandbox.ts'
+import { DockerSandbox, readApiKey, type SandboxRun } from './sandbox.ts'
 import {
   browserNetworkCreateArgs, browserOutNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs, egressRunArgs, networkConnectArgs,
   networkCreateArgs, outNetworkCreateArgs,
 } from './sandbox-args.ts'
-import { FAKE_DOCKER } from './testing/fake-claude-path.ts'
+import { FAKE_DOCKER } from './testing/fake-codex-path.ts'
 
 let tmp = ''
 let dockerLog = ''
 const TOKEN = 'sk-ant-oat01-test-token-value-1234567890'
 
 const config = (over: Partial<SandboxConfig> = {}): SandboxConfig => ({
+  auth: 'api',
   image: 'spec-review-agent:test',
   egressImage: 'spec-review-egress:test',
   browserImage: 'spec-review-browser:test',
@@ -24,14 +25,14 @@ const config = (over: Partial<SandboxConfig> = {}): SandboxConfig => ({
   dockerBin: FAKE_DOCKER,
   ...over,
 })
-const claude: ClaudeRunSpec = {
-  bin: 'claude', cwd: '/work/in', sessionId: 's-1', resume: false, model: 'opus', allowedTools: ['Read'], disallowedTools: ['Bash'],
+const claude: CodexRunSpec = {
+  bin: 'claude', cwd: '/work/in', sessionId: 's-1', resume: false, model: 'gpt-5.4', allowedTools: ['Read'], disallowedTools: ['Bash'],
   permissionMode: 'default', appendSystemPrompt: null, prompt: 'Plan the slices.', jsonSchema: null,
 }
 async function runSpec(): Promise<SandboxRun> {
   const runDir = path.join(tmp, 'runs', 'r_0000abcd')
   for (const d of ['room', 'out', 'sessions']) await mkdir(path.join(runDir, d), { recursive: true })
-  return { runId: 'r_0000abcd', runDir, room: path.join(runDir, 'room'), out: path.join(runDir, 'out'), sessions: path.join(runDir, 'sessions'), domains: ['docs.stripe.com'], claude }
+  return { runId: 'r_0000abcd', runDir, room: path.join(runDir, 'room'), out: path.join(runDir, 'out'), sessions: path.join(runDir, 'sessions'), domains: ['docs.stripe.com'], codex: claude }
 }
 const TEARDOWN = [
   'sr-r_0000abcd', 'sr-browser-r_0000abcd', 'sr-bproxy-r_0000abcd', 'sr-egress-r_0000abcd',
@@ -46,20 +47,20 @@ beforeEach(async () => {
   await chmod(FAKE_DOCKER, 0o755)
   process.env.FAKE_DOCKER_LOG = dockerLog
   process.env.FAKE_DOCKER_STATE = path.join(tmp, 'state')
-  for (const v of ['FAKE_DOCKER_DOWN', 'FAKE_DOCKER_MISSING', 'FAKE_DOCKER_EGRESS_FAIL', 'FAKE_DOCKER_BROWSER_FAIL', 'FAKE_DOCKER_BPROXY_FAIL', 'FAKE_DOCKER_BROWSER_SILENT', 'FAKE_DOCKER_HANG']) {
+  for (const v of ['FAKE_DOCKER_NO_AUTH', 'FAKE_DOCKER_DOWN', 'FAKE_DOCKER_MISSING', 'FAKE_DOCKER_EGRESS_FAIL', 'FAKE_DOCKER_BROWSER_FAIL', 'FAKE_DOCKER_BPROXY_FAIL', 'FAKE_DOCKER_BROWSER_SILENT', 'FAKE_DOCKER_HANG']) {
     delete process.env[v]
   }
-  await writeFile(path.join(tmp, '.env'), `# comment\nOTHER=1\nexport CLAUDE_CODE_OAUTH_TOKEN="${TOKEN}"\n`)
+  await writeFile(path.join(tmp, '.env'), `# comment\nOTHER=1\nexport OPENAI_API_KEY="${TOKEN}"\n`)
 })
 
-describe('readOAuthToken', () => {
-  it('reads only CLAUDE_CODE_OAUTH_TOKEN, quoted or not, and null when absent', async () => {
-    expect(await readOAuthToken(path.join(tmp, '.env'))).toBe(TOKEN)
-    await writeFile(path.join(tmp, 'plain.env'), 'CLAUDE_CODE_OAUTH_TOKEN=abc\n')
-    expect(await readOAuthToken(path.join(tmp, 'plain.env'))).toBe('abc')
-    expect(await readOAuthToken(path.join(tmp, 'missing.env'))).toBeNull()
-    await writeFile(path.join(tmp, 'empty.env'), 'CLAUDE_CODE_OAUTH_TOKEN=\n')
-    expect(await readOAuthToken(path.join(tmp, 'empty.env'))).toBeNull()
+describe('readApiKey', () => {
+  it('reads only OPENAI_API_KEY, quoted or not, and null when absent', async () => {
+    expect(await readApiKey(path.join(tmp, '.env'))).toBe(TOKEN)
+    await writeFile(path.join(tmp, 'plain.env'), 'OPENAI_API_KEY=abc\n')
+    expect(await readApiKey(path.join(tmp, 'plain.env'))).toBe('abc')
+    expect(await readApiKey(path.join(tmp, 'missing.env'))).toBeNull()
+    await writeFile(path.join(tmp, 'empty.env'), 'OPENAI_API_KEY=\n')
+    expect(await readApiKey(path.join(tmp, 'empty.env'))).toBeNull()
   })
 })
 
@@ -73,7 +74,7 @@ describe('DockerSandbox.status', () => {
     expect(missing).toMatchObject({ docker: true, image: false, egressImage: true, browserImage: true, token: false, ready: false })
     expect(missing.fixes).toEqual([
       'Build the sandbox images: npm run agent:build',
-      'Create a token with `claude setup-token` and put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env',
+      'Run npm run agent:login to sign in with ChatGPT (or set sandbox.auth: api and OPENAI_API_KEY in .env)',
     ])
     process.env.FAKE_DOCKER_DOWN = '1'
     expect((await new DockerSandbox(config()).status()).fixes[0]).toBe('Install Docker and make sure `docker version` works')
@@ -110,11 +111,13 @@ describe('DockerSandbox.run', () => {
     expect(agent.stdin).toBe('Plan the slices.')
     expect(agent.args).toEqual(expect.arrayContaining(['--network', 'sr-net-r_0000abcd', '--env-file', path.join(spec.runDir, 'agent.env')]))
     expect(agent.args.slice(-2)).toEqual(['--add-dir', '/work/out'])
-    expect(agent.args.join(' ')).not.toMatch(/--mcp-config|NO_PROXY/)
+    expect(agent.args).toContain('NO_PROXY=')
+    expect(agent.args).toContain('no_proxy=')
     expect(all.slice(5).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
     await expect(stat(path.join(spec.runDir, 'browser.filter'))).rejects.toMatchObject({ code: 'ENOENT' })
     expect(agent.args.join(' ')).not.toContain(TOKEN)
-    expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^api\\.anthropic\\.com:443$\n^docs\\.stripe\\.com:443$\n')
+    expect((await stat(path.join(spec.runDir, 'egress.filter'))).mode & 0o777).toBe(0o644)
+    expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^api\\.openai\\.com:443$\n^www\\.bing\\.com:443$\n^docs\\.stripe\\.com:443$\n')
     await expect(stat(path.join(spec.runDir, 'agent.env'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -137,14 +140,15 @@ describe('DockerSandbox.run', () => {
       browserProxyConnectArgs('r_0000abcd'),
       browserRunArgs('r_0000abcd', 'spec-review-browser:test'),
     ])
-    // Controller ruling 2: the agent's proxy allows the Anthropic API, the browser's proxy never does;
+    // Controller ruling 2: the agent's proxy allows the OpenAI API, the browser's proxy never does;
     // review fix 1: both allow HTTPS to port 443 only.
-    expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^api\\.anthropic\\.com:443$\n^docs\\.stripe\\.com:443$\n')
+    expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^api\\.openai\\.com:443$\n^www\\.bing\\.com:443$\n^docs\\.stripe\\.com:443$\n')
     expect(await readFile(browserFilter, 'utf8')).toBe('^docs\\.stripe\\.com:443$\n')
+    expect((await stat(browserFilter)).mode & 0o777).toBe(0o644)
     const agent = all[10]!
     expect(agent.args).toContain('NO_PROXY=sr-browser-r_0000abcd')
     expect(agent.args).toEqual(expect.arrayContaining(['--network', 'sr-net-r_0000abcd', '--network', 'sr-bnet-r_0000abcd']))
-    expect(agent.args.at(-1)).toBe('--mcp-config={"mcpServers":{"browser":{"type":"http","url":"http://sr-browser-r_0000abcd:8931/mcp"}}}')
+    expect(agent.args).toContain('mcp_servers.browser.url="http://sr-browser-r_0000abcd:8931/mcp"')
     expect(all.slice(11).map((c) => c.args.at(-1))).toEqual(TEARDOWN)
   })
 
@@ -196,7 +200,7 @@ describe('DockerSandbox.run', () => {
 
   it('refuses to run without a token', async () => {
     const outcome = await new DockerSandbox(config({ envFile: path.join(tmp, 'none.env') })).run(await runSpec(), { timeoutMs: 10_000, onLine: () => undefined })
-    expect(outcome.error).toMatch(/CLAUDE_CODE_OAUTH_TOKEN/)
+    expect(outcome.error).toMatch(/OPENAI_API_KEY/)
     await expect(readFile(dockerLog, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
   })
 
@@ -252,5 +256,32 @@ describe('DockerSandbox.cleanup', () => {
     const cleanup = (await calls()).find((c) => c.args.includes('none'))!
     expect(cleanup.args).toEqual(expect.arrayContaining(['--user', '10001:10001', `${spec.out}:/clean/0`, `${spec.sessions}:/clean/1`]))
     await expect(stat(spec.runDir)).rejects.toMatchObject({ code: 'ENOENT' })
+  })
+})
+
+
+describe('ChatGPT container authentication', () => {
+  it('requires the ChatGPT credential volume even when an API key exists', async () => {
+    process.env.FAKE_DOCKER_NO_AUTH = '1'
+    const sandbox = new DockerSandbox(config({ auth: 'chatgpt' }))
+    expect(await sandbox.token()).toBeNull()
+    expect(await sandbox.status()).toMatchObject({ token: false, ready: false })
+    expect(await sandbox.run(await runSpec(), { timeoutMs: 1000, onLine: () => undefined })).toMatchObject({ error: expect.stringContaining('agent:login') })
+    expect((await calls()).some((c) => c.args.includes('-i'))).toBe(false)
+  })
+
+  it('mounts only dedicated credentials, permits refresh endpoints and leaves no credential link or env file', async () => {
+    const sandbox = new DockerSandbox(config({ auth: 'chatgpt', authVolume: 'my-auth' }))
+    const spec = await runSpec()
+    expect(await sandbox.status()).toMatchObject({ token: true, ready: true })
+    expect(await sandbox.run(spec, { timeoutMs: 1000, onLine: () => undefined })).toMatchObject({ code: 0 })
+    const agent = (await calls()).find((c) => c.args.includes('-i'))!
+    expect(agent.args).toContain('type=volume,src=my-auth,dst=/opt/spec-review-auth')
+    expect(agent.args).toContain('DESK_CHATGPT_AUTH=1')
+    expect(agent.args).not.toContain('--env-file')
+    expect(agent.args.join(' ')).not.toContain(TOKEN)
+    expect(await readFile(path.join(spec.runDir, 'egress.filter'), 'utf8')).toBe('^chatgpt\\.com:443$\n^auth\\.openai\\.com:443$\n^www\\.bing\\.com:443$\n^docs\\.stripe\\.com:443$\n')
+    await expect(stat(path.join(spec.sessions, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' })
+    await expect(stat(path.join(spec.runDir, 'agent.env'))).rejects.toMatchObject({ code: 'ENOENT' })
   })
 })

@@ -14,7 +14,7 @@ import { type IncomingFile, planInputs, readRepoFile, writeInputs } from './inpu
 export type Where = { kind: 'new'; base: string } | { kind: 'existing'; worktreeId: string }
 export interface CreateInput { name: string; repo: string; where: Where; title: string; brief: string; files: IncomingFile[]; fromRepo: string[] }
 
-export const worktreeRel = (name: string): string => `.claude/worktrees/${name}`
+export const worktreeRel = (name: string): string => `.codex/worktrees/${name}`
 
 // The argv Create runs on the host (the dialog previews the same commands).
 export function createCommands(input: Pick<CreateInput, 'name' | 'where'>, repoPath: string): string[][] {

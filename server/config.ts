@@ -20,8 +20,8 @@ const ConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(4600),
   hubRoot: z.string().default('../..'),
   repos: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) })).min(1),
-  model: z.string().default('opus'),
-  claudeBin: z.string().default('claude'),
+  model: z.string().default('gpt-5.4'),
+  codexBin: z.string().default('codex'),
   commitTrailer: z.string().default(''),
   questionTimeoutMinutes: z.number().positive().default(10),
   devUiOrigin: z.string().default('http://127.0.0.1:5173'),
@@ -32,16 +32,18 @@ const ConfigSchema = z.object({
       image: z.string().min(1).default(AGENT_IMAGE),
       egressImage: z.string().min(1).default(EGRESS_IMAGE),
       browserImage: z.string().min(1).default(BROWSER_IMAGE),
+      auth: z.enum(['chatgpt', 'api']).default('chatgpt'),
+      authVolume: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9_.-]+$/).default('spec-review-codex-auth'),
       envFile: z.string().min(1).default('.env'),
       timeoutMinutes: z.number().positive().default(30),
       dockerBin: z.string().min(1).default('docker'),
     })
-    .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, browserImage: BROWSER_IMAGE, envFile: '.env', timeoutMinutes: 30, dockerBin: 'docker' }),
+    .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, browserImage: BROWSER_IMAGE, envFile: '.env', auth: 'chatgpt', authVolume: 'spec-review-codex-auth', timeoutMinutes: 30, dockerBin: 'docker' }),
   openspecBin: z.string().min(1).default('openspec'),
   initiativeBase: z.string().min(1).default('staging'),
 })
 
-export interface SandboxConfig { image: string; egressImage: string; browserImage: string; envFile: string; timeoutMs: number; dockerBin: string }
+export interface SandboxConfig { auth?: 'chatgpt' | 'api'; authVolume?: string; image: string; egressImage: string; browserImage: string; envFile: string; timeoutMs: number; dockerBin: string }
 
 export interface RunnerProfile {
   name: string
@@ -57,7 +59,7 @@ export interface Config {
   hubRoot: string
   repos: { name: string; path: string }[]
   model: string
-  claudeBin: string
+  codexBin: string
   commitTrailer: string
   questionTimeoutMs: number
   devUiOrigin: string
@@ -83,7 +85,7 @@ export async function loadConfig(file: string): Promise<Config> {
     hubRoot,
     repos: c.repos.map((r) => ({ name: r.name, path: path.resolve(hubRoot, r.path) })),
     model: c.model,
-    claudeBin: c.claudeBin,
+    codexBin: c.codexBin,
     commitTrailer: c.commitTrailer,
     questionTimeoutMs: c.questionTimeoutMinutes * 60_000,
     devUiOrigin: c.devUiOrigin,
@@ -96,6 +98,8 @@ export async function loadConfig(file: string): Promise<Config> {
       applyAllowedTools: r.applyAllowedTools,
     })),
     sandbox: {
+      auth: c.sandbox.auth,
+      authVolume: c.sandbox.authVolume,
       image: c.sandbox.image,
       egressImage: c.sandbox.egressImage,
       browserImage: c.sandbox.browserImage,

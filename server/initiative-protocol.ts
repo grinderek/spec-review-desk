@@ -24,9 +24,7 @@ export interface RunReplyContext { change?: string }
 
 const SCHEMAS = { planner: PlannerReplySchema, author: AuthorReplySchema, research: ResearchReplySchema } as const
 
-// The real `claude` CLI's --json-schema validator rejects the top-level "$schema" dialect key
-// z.toJSONSchema() emits (protocol.ts's AGENT_REPLY_SCHEMA_ARG, verified 2026-09-27 against the
-// real CLI). Strip it — immutably — for every schema arg the CLI sees.
+// Codex receives a dialect-neutral JSON Schema file for each agent role.
 const withoutSchemaDialect = (jsonSchema: object): object => {
   const { $schema: _dialect, ...rest } = jsonSchema as { $schema?: string }
   return rest

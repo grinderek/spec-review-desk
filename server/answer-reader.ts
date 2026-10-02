@@ -1,4 +1,4 @@
-import type { ClaudeEvent } from './claude.ts'
+import type { CodexEvent } from './codex.ts'
 
 // Reads the top-level "answer" string out of a JSON object that arrives in arbitrary chunks (the
 // StructuredOutput tool's input_json_delta stream) and returns its decoded text as it grows.
@@ -150,7 +150,7 @@ export class StructuredStream {
   #reader: AnswerReader | null = null
   #emitted = false
 
-  feed(event: ClaudeEvent): ClaudeEvent[] {
+  feed(event: CodexEvent): CodexEvent[] {
     if (event.type === 'message_start') {
       this.#tools = new Map()
       return []

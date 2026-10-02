@@ -86,17 +86,17 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
         <RunnerStat id={id} runner={runner} docker={capabilities?.docker ?? false} />
       </div>
       <div className="gatebar">
-        <span className={`ready${view.readiness.ready ? ' on' : ''}`}>{recorded ? `approved ${view.review.approved_at!.slice(0, 10)}` : 'ready for /opsx:apply'}</span>
+        <span className={`ready${view.readiness.ready ? ' on' : ''}`}>{recorded ? `approved ${view.review.approved_at!.slice(0, 10)}` : 'ready for Codex Apply'}</span>
         {view.readiness.ready ? null : <small>Blocked: {view.readiness.reasons.join(' · ')}</small>}
         {view.readiness.ready && !view.archived && (!recorded || view.uncommittedReview) ? (
           <button className="btn ok" onClick={() => void act(() => api.recordApproval(id), 'Approval recorded and committed')}>Record approval</button>
         ) : null}
         {recorded && !view.archived ? (
-          <button className="btn pri" disabled={!view.readiness.ready || running || !capabilities?.claude} onClick={() => void act(() => api.startApply(id), 'Apply started')}>Apply</button>
+          <button className="btn pri" disabled={!view.readiness.ready || running || !capabilities?.codex} onClick={() => void act(() => api.startApply(id), 'Apply started')}>Apply</button>
         ) : null}
         {running && !view.archived ? <button className="btn bad" onClick={() => void act(() => api.stopApply(id), 'Stopping the Apply run…')}>Stop</button> : null}
         {drift.length && !view.archived ? (
-          <button className="btn" disabled={running || !capabilities?.claude} onClick={() => void act(() => api.reapply(id), 'Re-apply started')}>Re-apply {drift.length} changed scenario{drift.length > 1 ? 's' : ''}</button>
+          <button className="btn" disabled={running || !capabilities?.codex} onClick={() => void act(() => api.reapply(id), 'Re-apply started')}>Re-apply {drift.length} changed scenario{drift.length > 1 ? 's' : ''}</button>
         ) : null}
       </div>
       <div className="warnings">

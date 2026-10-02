@@ -11,7 +11,7 @@ import { readReview, updateReview } from './review-store.ts'
 import { sliceStatuses } from './initiatives.ts'
 import { FINISHERS } from './run-kinds.ts'
 import { InitiativeRunService, runPaths } from './run-service.ts'
-import { FAKE_OPENSPEC, resetFakeClaude } from './testing/fake-claude-path.ts'
+import { FAKE_OPENSPEC, resetFakeCodex } from './testing/fake-codex-path.ts'
 import { FakeSandbox } from './testing/fake-sandbox.ts'
 import { FEATURE, NEW_STEPS_MD, SPEC_MD } from './testing/fixtures.ts'
 import { testConfig } from './testing/http.ts'
@@ -49,14 +49,14 @@ async function setup() {
 async function writes(entries: { match: string; files: Record<string, string> }[]): Promise<void> {
   const file = path.join(tmp, 'writes.json')
   await writeFile(file, JSON.stringify(entries))
-  process.env.FAKE_CLAUDE_WRITES_FILE = file
+  process.env.FAKE_CODEX_WRITES_FILE = file
 }
 
 beforeEach(async () => {
-  resetFakeClaude()
+  resetFakeCodex()
   tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-author-'))
-  process.env.FAKE_CLAUDE_LOG = path.join(tmp, 'calls.ndjson')
-  process.env.FAKE_CLAUDE_MODE = 'answer'
+  process.env.FAKE_CODEX_LOG = path.join(tmp, 'calls.ndjson')
+  process.env.FAKE_CODEX_MODE = 'answer'
   process.env.FAKE_OPENSPEC_LOG = path.join(tmp, 'openspec.ndjson')
   delete process.env.FAKE_OPENSPEC_FAIL
 })
@@ -65,7 +65,7 @@ describe('author runs', () => {
   it('vets the output, moves the change, writes its review.yaml with the decisions and commits once', async () => {
     const s = await setup()
     const decision = { id: 'partial', question: 'Count partial days?', scope: { kind: 'scenario', key: KEY }, options: [option('yes'), option('no')], recommended: 'yes', blocking: false }
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ decisions: [decision] }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ decisions: [decision] }))
     await writes([{ match: 'Slice s1', files: files() }])
     const run = await startAuthor(s.service, s.target, 's1', { notes: 'Keep it small.', change: CHANGE })
     await s.service.settled(run.id)
@@ -81,14 +81,14 @@ describe('author runs', () => {
     expect(committed).toContain(`openspec/changes/${CHANGE}/review.yaml`)
     expect(committed).toContain('openspec/initiatives/hs/initiative.yaml')
     expect((await git(s.repo, ['status', '--porcelain'])).trim()).toBe('')
-    expect(s.sandbox.runs[0]).toMatchObject({ extraArgs: ['--add-dir', '/work/out'], domains: [], browser: false })
-    expect(s.sandbox.runs[0]!.claude).toMatchObject({ allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'], permissionMode: 'acceptEdits' })
-    expect(s.sandbox.runs[0]!.claude.prompt).toContain('Owner notes: Keep it small.')
+    expect(s.sandbox.runs[0]).toMatchObject({ extraArgs: [], domains: [], browser: false })
+    expect(s.sandbox.runs[0]!.codex).toMatchObject({ allowedTools: ['Read', 'Grep', 'Glob', 'Write', 'Edit'], permissionMode: 'acceptEdits' })
+    expect(s.sandbox.runs[0]!.codex.prompt).toContain('Owner notes: Keep it small.')
   })
 
   it('moves nothing when the output fails vetting', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply())
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply())
     await writes([{ match: 'Slice s1', files: { ...files(), 'openspec/changes/other/proposal.md': 'x' } }])
     const run = await startAuthor(s.service, s.target, 's1', {})
     await s.service.settled(run.id)
@@ -101,7 +101,7 @@ describe('author runs', () => {
   it('refuses a decision about a scenario the change does not have', async () => {
     const s = await setup()
     const decision = { id: 'x', question: 'Q?', scope: { kind: 'scenario', key: 'features/nope.feature::Nope' }, options: [option('a'), option('b')], recommended: null, blocking: false }
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ decisions: [decision] }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ decisions: [decision] }))
     await writes([{ match: 'Slice s1', files: files() }])
     const run = await startAuthor(s.service, s.target, 's1', {})
     await s.service.settled(run.id)
@@ -115,7 +115,7 @@ describe('author runs', () => {
       { match: 'Continue writing the change', reply: reply() },
       { match: 'Slice s1', reply: reply({ status: 'needs_owner', answer: 'Need the age basis.', decisions: [blocking] }) },
     ]))
-    process.env.FAKE_CLAUDE_REPLIES_FILE = path.join(tmp, 'replies.json')
+    process.env.FAKE_CODEX_REPLIES_FILE = path.join(tmp, 'replies.json')
     await writes([{ match: 'Continue writing the change', files: files() }])
     const run = await startAuthor(s.service, s.target, 's1', {})
     await s.service.settled(run.id)
@@ -130,8 +130,8 @@ describe('author runs', () => {
     await s.service.settled(run.id)
     expect((await readInitiative(s.dir)).runs[0]).toMatchObject({ outcome: 'done' })
     const second = s.sandbox.runs[1]!
-    expect(second.claude).toMatchObject({ resume: true, sessionId: run.session })
-    expect(second.claude.prompt).toContain(`- ${raised!.id} (Business or calendar age?): dismissed — Use business hours.`)
+    expect(second.codex).toMatchObject({ resume: true, sessionId: (await readInitiative(s.dir)).runs[0]!.session })
+    expect(second.codex.prompt).toContain(`- ${raised!.id} (Business or calendar age?): dismissed — Use business hours.`)
     expect(second.room).toBe(s.sandbox.runs[0]!.room)
   })
 
@@ -143,7 +143,7 @@ describe('author runs', () => {
       { match: 'Continue writing the change', reply: reply() },
       { match: 'Slice s1', reply: reply({ status: 'needs_owner', answer: 'Need the age basis.', decisions: [blocking] }) },
     ]))
-    process.env.FAKE_CLAUDE_REPLIES_FILE = path.join(tmp, 'replies.json')
+    process.env.FAKE_CODEX_REPLIES_FILE = path.join(tmp, 'replies.json')
     const run = await startAuthor(s.service, s.target, 's1', {})
     await s.service.settled(run.id)
     const [raised] = (await readReview(s.dir)).decisions
@@ -154,8 +154,8 @@ describe('author runs', () => {
   it('starts exactly one attempt when Resume is pressed twice at once, and keeps the session until it ends', async () => {
     const s = await setup()
     const run = await waitingAuthor(s)
-    process.env.FAKE_CLAUDE_HANG_MATCH = 'Continue writing the change'
-    process.env.FAKE_CLAUDE_HANG_COUNT_FILE = path.join(tmp, 'hung')
+    process.env.FAKE_CODEX_HANG_MATCH = 'Continue writing the change'
+    process.env.FAKE_CODEX_HANG_COUNT_FILE = path.join(tmp, 'hung')
     const results = await Promise.allSettled([resumeAuthor(s.service, s.target, run.id), resumeAuthor(s.service, s.target, run.id)])
     expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])
     expect(results.find((r): r is PromiseRejectedResult => r.status === 'rejected')!.reason).toMatchObject({ status: 409, code: 'run_not_waiting' })
@@ -176,8 +176,8 @@ describe('author runs', () => {
     const s = await setup()
     const run = await waitingAuthor(s)
     await updateInitiative(s.dir, (d) => ({ ...d, plan: { ...d.plan, slices: [...d.plan.slices, { id: 's3', title: 'Invoices', scope: 'Bills.', depends_on: [], change: null }] } }))
-    process.env.FAKE_CLAUDE_MODE = 'hang'
-    delete process.env.FAKE_CLAUDE_REPLIES_FILE
+    process.env.FAKE_CODEX_MODE = 'hang'
+    delete process.env.FAKE_CODEX_REPLIES_FILE
     const [proposed, resumed] = await Promise.allSettled([startAuthor(s.service, s.target, 's3', {}), resumeAuthor(s.service, s.target, run.id)])
     expect(proposed.status).toBe('fulfilled')
     expect(resumed).toMatchObject({ status: 'rejected', reason: { code: 'author_running' } })
@@ -219,7 +219,7 @@ describe('author runs', () => {
 
   it('starts one author when Propose is pressed twice at once', async () => {
     const s = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply())
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply())
     await writes([{ match: 'Slice s1', files: files() }])
     const results = await Promise.allSettled([startAuthor(s.service, s.target, 's1', {}), startAuthor(s.service, s.target, 's1', {})])
     expect(results.map((r) => r.status).sort()).toEqual(['fulfilled', 'rejected'])

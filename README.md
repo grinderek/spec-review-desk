@@ -1,142 +1,157 @@
 # Spec Review Desk
 
-Local review app for behavior-driven OpenSpec changes (`openspec/changes/*` with
-`schema: behavior-driven`), across every git worktree of the repos in `config.yaml`.
-Design: `docs/superpowers/specs/2026-09-23-spec-review-desk-design.md` and
-`docs/superpowers/specs/2026-09-24-spec-review-decisions-design.md` and
-`docs/superpowers/specs/2026-09-24-spec-review-initiatives-design.md` (local, gitignored).
+A local review app for behavior-driven OpenSpec changes across the git worktrees of configured
+repositories. Codex researches a feature, proposes a slice plan, writes specifications, answers
+review questions and implements approved changes. The owner approves behavior and records product
+decisions before implementation starts.
 
 ## Run
 
-    cd tools/spec-review
-    npm install
-    npm start            # builds the UI, serves http://127.0.0.1:4600
-    npm run dev          # server on :4600 + Vite on :5173 with hot reload
+Requires Node.js 24+, Git and Codex CLI 0.159.3+. Docker 25+ is needed for initiative agents and the
+configured Cucumber runner.
 
-The server prints a one-time URL with `?t=<token>`. Open it; the token becomes an HttpOnly cookie.
-Restarting the server issues a new token.
+```sh
+npm ci
+npm install -g @openai/codex@0.159.3
+codex login
+cp config.example.yaml config.yaml
+# Set hubRoot, repos and initiativeBase for your repositories.
+npm start                       # builds the UI and serves http://127.0.0.1:4600
+# npm run dev                   # server :4600 + Vite :5173
+```
 
-## The method
+Open the one-time URL printed by the server. Its token becomes an HttpOnly session cookie;
+restarting the server issues a new token. The app listens on loopback only and checks Host, Origin
+and the session cookie on API requests.
 
-`docs/method/bdd-event-sourcing.md`: classic Gherkin/Cucumber BDD plus two additions — every
-scenario is an event-sourcing specification (`Given` = events that already happened, exactly one
-`When` = one command or request, `Then` = the response or the server-rendered page and the events
-appended), and full-stack checks read pages the server rendered, in process, without a browser.
-The step catalogs carry an `Event` / `Command` column naming what each phrase appends, expects or
-sends. It also covers refusals (a business "no" is an event, a rejected command appends none),
-server-generated values, printing specifications and comparing events, projections in the
-scenarios, event versioning and migrating a legacy corpus, after Rinat Abdullin's articles it
-links. The document is copied into every planner and author room as `method/bdd-event-sourcing.md`.
+The checked-in `config.yaml` describes the original api/mobile/web workspace, including its existing
+BDD worktree. Use `config.example.yaml` for another workspace. `model` defaults to `gpt-5.4` and
+`codexBin` to `codex`. Select a model available to your account.
 
-## What it does
+## Review and implementation
 
-- Renders each change's `features/*.feature` with decisions (`# Owner decision …`), author notes,
-  tables and Examples; underlines each step by catalog status (STEPS.md / NEW_STEPS.md / neither).
-- Checks each scenario's shape — one `When`, `Given` before it, `Then` after it, phrases under their
-  catalog keyword, events named in the past tense rather than as CRUD commands — and marks a departure *off shape* with the reasons; shows the scenario as
-  `Given events → When command → Then events` from the catalogs' Event / Command column. An
-  author's change that is off shape is refused at vetting.
-- Approve / revoke / request changes per scenario and per new phrase. Approval is bound to the
-  scenario's text hash: any edit sends it back to pending, with a diff since approval.
-- Ask the change's agent (one `claude` session per change, opus, read-only tools). A proposed patch
-  is applied only by "Apply & commit" → `docs(openspec): <change> — <summary> (owner decision)`.
-- Every agent replies with one JSON object (`claude --json-schema`, schema in `server/protocol.ts`),
-  validated again on the server; an invalid reply is retried once in the same session, then shown
-  with its issues and raw text.
-- Questions only the owner can answer arrive as **open decisions** (Decisions tab inbox, thread
-  cards, "decision open" pill, gate counter). A blocking decision keeps the change from being ready.
-  A scenario decision is recorded by the agent's patch (`# Owner decision …`, `resolves`); a decision
-  about the whole change is written by the Desk to `<change>/decisions.md` and committed with
-  `review.yaml`. "+ Open decision" adds one by hand; decisions are dismissed, never deleted.
-- "Record approval" when everything is approved, every thread resolved and no blocking decision
-  open; then "Apply" runs `/opsx:apply` detached with the allowlist from `config.yaml`. An Apply run
-  that needs the owner raises decisions; "Resume with decisions" continues it once they are recorded
-  or dismissed. Stop, and re-apply scenarios whose corpus copy differs.
-- Runs the cucumber corpus in the warm `nucleus-bdd` container on every file change.
-- **+ New feature** starts an *initiative* (`openspec/initiatives/<name>/`: `initiative.yaml`,
-  `brief.md`, `inputs/`, `decisions.md`) in a new worktree `plan/<name>` or an existing one. A
-  sandboxed **planner** proposes a slice plan (edit, re-plan, approve); **Propose sN** runs a
-  clean-room **author** that writes the slice as a behavior-driven change, vetted before it is moved
-  into the worktree and committed. **Research** runs in two phases: WebSearch only, then WebFetch
-  limited to the domains the owner approves in the initiative inbox; the result is a draft input
-  until accepted. The Brief tab edits `brief.md` in place (Save commits it); an input's name (Inputs
-  table, Research drafts) opens it in a viewer — Markdown rendered, a PDF or image inline — with
-  Accept/Discard next to a draft.
+- Renders `openspec/changes/*` with `schema: behavior-driven`: Gherkin scenarios, author notes,
+  owner decisions, tables and Examples. Step phrases are matched against `STEPS.md` and `NEW_STEPS.md`.
+- Approvals are bound to text hashes. Editing an approved scenario or phrase makes it pending and
+  shows a diff. Uncatalogued steps, unresolved threads and blocking decisions prevent readiness.
+- Questions use one Codex thread per change. The reviewer has read-only file tools and proposes
+  patches in its JSON reply. **Apply & commit** validates and commits a proposed specification patch.
+- Decisions requiring the owner appear in the Decisions inbox. Scenario decisions are recorded in
+  the agent's patch; change-wide decisions are written to `decisions.md` by the Desk.
+- **Record approval**, then **Apply**, starts Codex detached. It reads the approved OpenSpec change,
+  implements its scenarios, runs the permitted checks and commits. It can stop for owner decisions
+  and resume after they are recorded or dismissed. Stop and re-apply remain available.
+- The configured Cucumber corpus runs in its warm Docker container on file changes.
 
-## Sandbox (research, planner, author)
+Every agent runs through `codex exec --json --output-schema <file>`. Replies are validated again on
+the server, including rules that JSON Schema cannot express. An invalid reply is retried once in
+the same thread. Codex assigns thread IDs; the Desk stores the returned ID for `codex exec resume`.
+The CLI reports completed assistant messages rather than token deltas; the UI updates as those
+messages and tool events arrive. A turn is successful only after `turn.completed`.
 
-    npm run agent:build   # builds spec-review-agent:2.1.280, spec-review-egress:2 and spec-review-browser:0.0.80
-    claude setup-token    # then put CLAUDE_CODE_OAUTH_TOKEN=… into tools/spec-review/.env (gitignored)
+## New features and research
 
-Requires Docker ≥ 25: a research read phase starts the agent on two networks at once (two `--network`
-flags on one `docker run`). A research read uses four per-run networks (`sr-net`, `sr-out`, `sr-bnet`,
-`sr-bout`), other runs two, all from Docker's default address pools.
+**+ New feature** creates `openspec/initiatives/<name>/` with a brief, inputs, decisions and a plan,
+in an existing worktree or a new `.codex/worktrees/<name>` on branch `plan/<name>`.
 
-Each run gets its own `--internal` network (`sr-net-<run>`) and tinyproxy (`sr-egress-<run>`) that
-lets only HTTPS through — CONNECT to port 443 of `api.anthropic.com` (plus approved research domains);
-plain HTTP and every other port are refused (`FilterURLs On`, `^host:443$` filter lines). Each proxy
-reaches out through its own per-run bridge (`sr-out-<run>`, `sr-bout-<run>`), never the shared default
-bridge, so it cannot reach other containers. The agent
-container is read-only, without capabilities, as uid 10001, and sees only its room (read-only), its
-output directory and its session store under `<worktree>/.spec-review/runs/<run>/`. The token is
-passed through a per-run env file, never logged or served; every run's output is scanned for it.
-The sandbox is ready with the agent and egress images and the token; the browser image is reported on
-its own (the Research tab shows its build hint). Without it research still searches, but a reading
-phase never starts: Resume answers 409 `browser_unavailable`, and a run that would continue into it
-on its own waits for the owner (needs owner, "… npm run agent:build, then Resume").
+1. Add a brief and inputs (Markdown, PDF or images).
+2. The planner proposes 1–12 slices in dependency order. Edit or re-plan, then approve.
+3. **Propose sN** runs an author against a clean room. The Desk vets the output, moves the resulting
+   behavior-driven change into the worktree and commits it.
+4. Review the change's scenarios and phrases, approve, and run Apply.
 
-**Research browser.** WebFetch returns pages that render with JavaScript empty ("Content truncated"),
-so the research read phase (after the owner approved domains) also gets a headless browser:
-`sr-browser-<run>`, the Playwright MCP server (`@playwright/mcp` 0.0.80 in the official Playwright
-1.63.0 image, Chromium, as `pwuser`) on its own `--internal` network (`sr-bnet-<run>`) with every page
-request through its own tinyproxy (`sr-bproxy-<run>`, same image and hardening as the agent's) whose
-filter lists only the approved research domains — never `api.anthropic.com`. It shares no network with
-the agent's proxy; a blocked host fails with `net::ERR_TUNNEL_CONNECTION_FAILED`. Read-only root with
-tmpfs `/tmp` and `/home/pwuser`, no capabilities, `no-new-privileges`, pids/memory/cpu limits, no host
-mounts, no token. The agent joins both networks and gets the browser as its one MCP server
-(`--mcp-config` with `--strict-mcp-config`, `NO_PROXY=sr-browser-<run>`) and a minimal tool set:
-navigate, navigate back, snapshot, click, wait for, network requests; the script-evaluation tools,
-file upload, screenshots and form input stay denied. Navigation: `file:` URLs are blocked by the MCP
-server and `javascript:` URLs abort, but a `data:` URL still opens a page that runs its own script —
-@playwright/mcp 0.0.80 has no option to block it (`--allowed-origins` does not cover `data:`, verified),
-so, as for any page, the boundary is the browser proxy: HTTPS to the approved hosts only. The search
-phase, the planner and the author never get it.
-The browser, its proxy and its network are removed with the agent, the agent's proxy and the run
-network — also on stop, timeout and failure. A JavaScript page usually loads its scripts from other
-hosts (the Intuit docs need `uxfabric.intuitcdn.net`, `plugin.intuitcdn.net` and
-`static.developer.intuit.com` besides `developer.intuit.com`): the agent lists the failed requests and
-asks for those hosts with another fetch-domains decision.
-The secret scan fails closed: page text the agent reads (snapshots, tool results) is scanned too, so a
-page that shows an `sk-ant-…` string — e.g. a sample key in API docs — fails the research run with the
-rotate-your-token message even though your token did not leak (a false alarm; rotating is still the
-safe answer when unsure).
+**Research** first exposes only `desk.search_web`: it returns Bing RSS result titles, URLs and
+snippets, without opening result pages. Reading requires an owner-approved domain decision. The
+read phase exposes `desk.read_web_page` and a restricted Playwright MCP browser for JavaScript
+pages. Every redirect is checked; the browser's proxy permits only approved HTTPS domains. A
+"search only" decision keeps page-reading tools unavailable. Research results are draft inputs
+until accepted; previously read domains are retained in their provenance.
 
-Every sandboxed reply (planner/author/research) is requested with `claude --json-schema`; the real
-CLI rejects a schema that carries a top-level `$schema` key (zod's `toJSONSchema` emits one), so
-`REPLY_SCHEMA_ARGS` in `server/initiative-protocol.ts` strips it the same way `server/protocol.ts`
-already does for `AGENT_REPLY_SCHEMA_ARG` — a test pins that no schema arg ever carries `$schema`.
+The method in [docs/method/bdd-event-sourcing.md](docs/method/bdd-event-sourcing.md) combines Gherkin
+BDD, event sourcing and server-rendered full-stack checks. `Given` supplies prior events, exactly
+one `When` sends a command/request, and `Then` describes the response/page and appended events.
+The Desk flags departures and rejects off-shape author output. Planner and author rooms include
+this method, the corpus, schema and repository instructions from `AGENTS.md`.
 
-`npm run e2e` exercises New feature → plan (**planner**) → approve → propose (**author**, including
-stopping a hung run and proposing again) against `FakeSandbox` and the fake `claude`/`openspec`
-binaries — no docker, no real agent. It does **not** cover **research**: no spec drives the Research
-tab, its WebSearch/WebFetch phases, or the domain-approval decision flow — that coverage is still
-outstanding. Task 21 (building the real images, running one real sandboxed run end to end against
-the real `claude` CLI and docker) is a manual, one-time check outside the automated suite; see
-"Task 21: MANUAL — the real sandbox" in
-`docs/superpowers/plans/2026-09-24-spec-review-initiatives.md` (local, gitignored) before doing it.
+## Agent sandbox and authentication
 
-State lives in `openspec/changes/<name>/review.yaml` (committed with each decision) and `decisions.md`. Run logs live in
-`<worktree>/.spec-review/` (added to `.git/info/exclude` automatically).
-A patch commit's sha is written back into `review.yaml` after the commit that includes it, so
-`review.yaml` shows as modified in `git status` until the next decision commits it.
+```sh
+npm run agent:build
+npm run agent:login
+npm run agent:auth-status
+```
 
-## Security
+Docker initiative agents use ChatGPT subscription authentication by default. `agent:login` prints a
+URL and device code: open the URL on your computer and sign in to the account whose plan includes
+Codex. No API key is needed in this mode; usage consumes that account's Codex allowance. Enable
+device-code login in your ChatGPT security settings if the login page requests it.
 
-Loopback only. Host and Origin are checked on every request; every `/api` call needs the session
-cookie. The server spawns `claude` with write access for Apply — do not expose the port.
+Credentials live in the private Docker volume `spec-review-codex-auth`, owned by uid 10001, rather
+than in the project or the image. Each run has a separate Codex session directory and links its
+`auth.json` to the shared volume. The pinned CLI writes refreshed credentials through that link.
+An OS file lock serializes subscription agent sessions, including login/logout, to avoid concurrent
+refresh-token rotation. Waiting for this lock counts towards the run timeout. Stop active agents before logging out or changing accounts. Authentication
+commands accept `--config path/to/config.yaml` after `--` in the npm command. `npm run agent:logout`
+removes the container login. Host Reviewer and Apply still use the host's `codex login`; sign in to
+the same account there separately. Host history and credentials are never mounted into containers.
 
-## Tests
+For separately billed API usage, set `sandbox.auth: api` in config.yaml and put `OPENAI_API_KEY` in
+the gitignored `.env` next to it (`cp .env.example .env`). The key is passed privately to `codex exec`
+as `CODEX_API_KEY`. The application never silently falls back from a subscription to paid API usage.
+`sandbox.authVolume` selects a different named credential volume, for example for another account.
 
-    npm test             # vitest: server + ui helpers
-    npm run coverage
-    npm run e2e          # Playwright against a temp repo and a fake claude binary
+Codex has its native shell, web search, apps and plugins disabled. A scoped stdio MCP server
+provides file reads, text search, PDF text and images. Reviewer, planner and research have no file
+write tool; author writes only to `/work/out`. Apply has workspace writes and a command tool that
+executes argv without a shell. Existing `applyAllowedTools` entries such as `Bash(git add:*)` remain
+supported as command-prefix configuration; they do not launch Bash. Push, reset, rebase, rm, curl,
+wget, ssh and scp stay denied even under a broader allowlist. Apply commands run on the host;
+this allowlist is a command boundary, not a Docker sandbox.
+
+Each initiative attempt runs as uid 10001 with a read-only root, resource limits and no Linux
+capabilities, on internal networks behind per-run HTTPS proxies. Its room, output, separate Codex session store and subscription credential volume are mounted.
+The agent proxy permits `chatgpt.com` and `auth.openai.com` in subscription mode (`api.openai.com`
+in API mode), the search endpoint and approved read domains. The browser has a separate proxy/network and no key or host mounts. Its enabled MCP
+tools are navigation, back, snapshot, click, wait and network requests. Teardown removes containers
+and networks after completion, failure, timeout or stop; a run waiting for its owner keeps its
+session for Resume. API keys and JWT credentials are redacted from logs and cause the run to fail.
+
+The browser image is required only for a read phase. Without it research can search and then wait
+for the owner to build the image. In a proxy environment, builds accept an optional BuildKit
+`proxy_ca` secret; `NODE_IMAGE` can select a trusted mirror of `node:24-slim`.
+
+## Migration from Claude
+
+Existing specifications, reviews, decisions and git worktrees remain readable. Old Apply logs are
+still decoded. Claude conversations cannot become Codex threads; missing threads are rebuilt from
+files for questions. Finish or stop running Claude agents before switching runtimes. Retained
+initiative runs waiting for their owner should be restarted under Codex rather than resumed with
+an old Claude session ID.
+
+Set `codexBin: codex`, an available Codex `model`, rebuild the agent image and run `npm run agent:login`. Existing
+worktree paths in configuration need not move. New worktrees use `.codex/worktrees`. Room assembly
+prefers `AGENTS.md` and `.agents/rules/testing.md`, with legacy `CLAUDE.md` and
+`.claude/rules/testing.md` accepted as migration inputs.
+
+State lives in `review.yaml`, `initiative.yaml` and `decisions.md`, next to the specifications.
+Run logs and temporary files live under gitignored `.spec-review/`. A patch commit SHA is written
+back to `review.yaml` after that commit, so it can remain modified until the next decision commits it.
+
+## Checks
+
+```sh
+npm run typecheck
+npm test
+npm run coverage
+npx playwright install chromium
+npm run e2e
+npm run smoke:codex
+npm run smoke:agent-auth # offline Docker credential/locking check; build the image first
+```
+
+Vitest and Playwright use a fake Codex emitting native thread/item/turn JSONL, fake OpenSpec and
+FakeSandbox. Browser tests cover review, decisions, planning, authoring and live updates; the
+research search/domain-approval lifecycle is covered by server tests rather than browser tests.
+`smoke:codex` runs the real CLI against a local Responses API fixture, checks an actual scoped MCP
+call, JSON Schema output and thread resume, and requires no API key or paid model request. It does
+not verify live OpenAI authentication or model behavior.

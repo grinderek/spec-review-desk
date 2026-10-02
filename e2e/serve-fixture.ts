@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { git } from '../server/git.ts'
 import { startServer } from '../server/main.ts'
-import { FAKE_CLAUDE, FAKE_OPENSPEC } from '../server/testing/fake-claude-path.ts'
+import { FAKE_CODEX, FAKE_OPENSPEC } from '../server/testing/fake-codex-path.ts'
 import { FakeSandbox } from '../server/testing/fake-sandbox.ts'
 import { FEATURE as FEATURE_TEXT, NEW_STEPS_MD, SPEC_MD } from '../server/testing/fixtures.ts'
 import { changeFiles, makeRepo, sh, writeFiles } from '../server/testing/repo.ts'
@@ -99,7 +99,7 @@ async function main(): Promise<void> {
     },
     // The live-refresh e2e watches its planner run while it runs: that one takes a few seconds.
     { match: 'Initiative: live-refresh', delayMs: 3_000, reply: plannerReply },
-    // Spec B: the sandboxed planner and author (FakeSandbox runs the fake claude against the room).
+    // Spec B: the sandboxed planner and author (FakeSandbox runs the fake Codex against the room).
     { match: 'Propose how to slice', reply: plannerReply },
     { match: 'Slice s1', reply: reply({ answer: 'Wrote the engine slice.', status: 'done', change: 'add-health-score-engine' }) },
   ]
@@ -118,23 +118,23 @@ async function main(): Promise<void> {
   cleanupDirs.push(tmp)
   const repliesFile = path.join(tmp, 'replies.json')
   await writeFile(repliesFile, JSON.stringify(replies))
-  process.env.FAKE_CLAUDE_REPLIES_FILE = repliesFile
+  process.env.FAKE_CODEX_REPLIES_FILE = repliesFile
   const writesFile = path.join(tmp, 'writes.json')
   await writeFile(writesFile, JSON.stringify(writes))
-  process.env.FAKE_CLAUDE_WRITES_FILE = writesFile
-  process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
-  process.env.FAKE_CLAUDE_MODE = 'answer'
+  process.env.FAKE_CODEX_WRITES_FILE = writesFile
+  process.env.FAKE_CODEX_SESSIONS = path.join(tmp, 'sessions')
+  process.env.FAKE_CODEX_MODE = 'answer'
   // The propose/stop e2e scenario proposes slice s1 twice: the first attempt hangs (so the UI's
   // Stop control is exercised), the second is the real scripted 'Slice s1' reply above.
-  process.env.FAKE_CLAUDE_HANG_MATCH = 'Slice s1'
-  process.env.FAKE_CLAUDE_HANG_COUNT_FILE = path.join(tmp, 'hang-count')
+  process.env.FAKE_CODEX_HANG_MATCH = 'Slice s1'
+  process.env.FAKE_CODEX_HANG_COUNT_FILE = path.join(tmp, 'hang-count')
 
   const config = path.join(hub, 'config.yaml')
   await writeFile(config, [
     'hubRoot: .',
     'repos: [{ name: api, path: api }]',
     'port: 4620',
-    `claudeBin: ${FAKE_CLAUDE}`,
+    `codexBin: ${FAKE_CODEX}`,
     `openspecBin: ${FAKE_OPENSPEC}`,
     'initiativeBase: initiative-base',
     'commitTrailer: "Co-Authored-By: E2E <e2e@example.com>"',

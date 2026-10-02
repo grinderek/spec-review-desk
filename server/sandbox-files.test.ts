@@ -1,21 +1,21 @@
 import { readFile } from 'node:fs/promises'
 import { describe, expect, it } from 'vitest'
-import { AGENT_IMAGE, BROWSER_IMAGE, CLAUDE_CODE_VERSION, EGRESS_IMAGE, PLAYWRIGHT_MCP_VERSION } from './sandbox-args.ts'
+import { AGENT_IMAGE, BROWSER_IMAGE, CODEX_VERSION, EGRESS_IMAGE, PLAYWRIGHT_MCP_VERSION } from './sandbox-args.ts'
 
 const read = (rel: string): Promise<string> => readFile(new URL(`../${rel}`, import.meta.url), 'utf8')
 
 describe('sandbox images (spec B §5)', () => {
   it('pins the CLI version in the agent image and runs it as uid 10001 without git', async () => {
     const dockerfile = await read('sandbox/agent/Dockerfile')
-    expect(dockerfile).toContain('FROM node:22-slim')
-    expect(dockerfile).toContain(`ARG CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION}`)
-    expect(dockerfile).toContain('@anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}')
+    expect(dockerfile).toContain('ARG NODE_IMAGE=node:24-slim')
+    expect(dockerfile).toContain(`ARG CODEX_VERSION=${CODEX_VERSION}`)
+    expect(dockerfile).toContain('@openai/codex@${CODEX_VERSION}')
     expect(dockerfile).toContain('--uid 10001')
     expect(dockerfile).toContain('USER agent')
     expect(dockerfile).not.toMatch(/apk add|\bgit\b/)
-    // The only system package: poppler-utils, which the CLI's Read tool needs to render PDF inputs.
+    // PDF extraction, TLS trust and the OS lock for refreshable subscription credentials.
     const packages = [...dockerfile.matchAll(/apt-get install -y --no-install-recommends ([^\\\n]+)/g)].map((m) => m[1]!.trim())
-    expect(packages).toEqual(['poppler-utils'])
+    expect(packages).toEqual(['poppler-utils ca-certificates util-linux'])
   })
 
   it('denies every host the filter does not list, and everything but HTTPS to port 443 (review fix 1)', async () => {
@@ -43,7 +43,7 @@ describe('sandbox images (spec B §5)', () => {
   it('builds the three images under the tags the Desk runs', async () => {
     const pkg = JSON.parse(await read('package.json')) as { scripts: Record<string, string> }
     expect(pkg.scripts['agent:build']).toBe(
-      `docker build -t ${AGENT_IMAGE} --build-arg CLAUDE_CODE_VERSION=${CLAUDE_CODE_VERSION} sandbox/agent && docker build -t ${EGRESS_IMAGE} sandbox/egress` +
+      `docker build -t ${AGENT_IMAGE} --build-arg CODEX_VERSION=${CODEX_VERSION} -f sandbox/agent/Dockerfile . && docker build -t ${EGRESS_IMAGE} sandbox/egress` +
         ` && docker build -t ${BROWSER_IMAGE} --build-arg PLAYWRIGHT_MCP_VERSION=${PLAYWRIGHT_MCP_VERSION} sandbox/browser`,
     )
   })

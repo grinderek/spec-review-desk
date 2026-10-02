@@ -1,4 +1,4 @@
-import { copyFile, lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stringify } from 'yaml'
@@ -105,21 +105,39 @@ export async function assembleRoom(room: string, input: RoomInput): Promise<stri
     const specs = path.join(input.worktree, 'openspec', 'specs')
     for (const rel of await walk(specs, () => true)) add(path.join(specs, rel), `corpus/specs/${rel}`)
     if ((await kind(METHOD_DOC)) === 'file') add(METHOD_DOC, 'method/bdd-event-sourcing.md')
-    const claudeMd = (await kind(path.join(input.worktree, 'CLAUDE.md'))) === 'file' ? await readFile(path.join(input.worktree, 'CLAUDE.md'), 'utf8') : ''
-    const section = extractSection(claudeMd, 'Spec-driven work')
-    if (section) texts.push(['method/spec-driven-work.md', section])
-    const testing = path.join(input.worktree, '.claude', 'rules', 'testing.md')
+    // Prefer Codex project instructions; retain the old files as migration inputs.
+    const agents = path.join(input.worktree, 'AGENTS.md')
+    const legacy = path.join(input.worktree, 'CLAUDE.md')
+    const rulesFile = (await kind(agents)) === 'file' ? agents : legacy
+    const rules = (await kind(rulesFile)) === 'file' ? await readFile(rulesFile, 'utf8') : ''
+    const section = extractSection(rules, 'Spec-driven work')
+    if (rules) texts.push(['method/spec-driven-work.md', section || rules])
+    const codexTesting = path.join(input.worktree, '.agents', 'rules', 'testing.md')
+    const testing = (await kind(codexTesting)) === 'file' ? codexTesting : path.join(input.worktree, '.claude', 'rules', 'testing.md')
     if ((await kind(testing)) === 'file') add(testing, 'method/testing.md')
     const schema = path.join(input.worktree, 'openspec', 'schemas', 'behavior-driven')
     for (const rel of await walk(schema, () => true)) add(path.join(schema, rel), `method/schema/${rel}`)
   }
+  async function roomDir(dir: string): Promise<void> {
+    const root = path.resolve(room)
+    const target = path.resolve(dir)
+    if (target !== root && !target.startsWith(root + path.sep)) throw new Error('Room path escapes its root')
+    await mkdir(target, { recursive: true })
+    for (let at = target; ; at = path.dirname(at)) {
+      await chmod(at, 0o755)
+      if (at === root) break
+    }
+  }
+  await roomDir(room)
   for (const [from, to] of copies) {
-    await mkdir(path.dirname(path.join(room, to)), { recursive: true })
+    await roomDir(path.dirname(path.join(room, to)))
     await copyFile(from, path.join(room, to))
+    await chmod(path.join(room, to), 0o644)
   }
   for (const [to, text] of texts) {
-    await mkdir(path.dirname(path.join(room, to)), { recursive: true })
-    await writeFile(path.join(room, to), text)
+    await roomDir(path.dirname(path.join(room, to)))
+    await writeFile(path.join(room, to), text, { mode: 0o644 })
+    await chmod(path.join(room, to), 0o644)
   }
   return [...copies.map(([, to]) => to), ...texts.map(([to]) => to)].sort()
 }

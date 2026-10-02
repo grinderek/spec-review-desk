@@ -6,7 +6,7 @@ test('New feature → plan → approve → propose s1 → the change appears', a
   await page.getByLabel('Name', { exact: true }).fill('health-score')
   await page.getByLabel('Title', { exact: true }).fill('Business health score')
   await page.getByLabel('Brief', { exact: true }).fill('Score the founder day.')
-  await expect(page.getByLabel('Create will run')).toContainText('worktree add .claude/worktrees/health-score -b plan/health-score initiative-base')
+  await expect(page.getByLabel('Create will run')).toContainText('worktree add .codex/worktrees/health-score -b plan/health-score initiative-base')
   await page.getByRole('button', { name: 'Create' }).click()
   await expect(page.getByRole('heading', { name: /health-score/ })).toBeVisible({ timeout: 20_000 })
 

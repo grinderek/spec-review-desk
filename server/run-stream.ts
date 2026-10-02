@@ -1,6 +1,6 @@
 import { appendFile } from 'node:fs/promises'
 import { StructuredStream } from './answer-reader.ts'
-import { parseStreamLine, type ResultEvent } from './claude.ts'
+import { CodexStream, type ResultEvent } from './codex.ts'
 import type { EventBus } from './events.ts'
 import type { Sandbox, SandboxOutcome, SandboxRun } from './sandbox.ts'
 import { findSecretsInLine, maskDeep, type SecretDetector, SecretHoldback } from './secret-scan.ts'
@@ -24,7 +24,7 @@ export type LogEntry =
   | { type: 'result'; ok: boolean; sessionId: string; numTurns: number }
 interface RawStreamLine { type?: string; event?: { type?: string; delta?: { type?: string; thinking?: unknown } } }
 
-// claude.ts's ClaudeEvent model has no `thinking` variant (nothing outside this file ever needed
+// codex.ts's CodexEvent model has no `thinking` variant (nothing outside this file ever needed
 // it); extracting it locally, straight off the raw line, avoids widening that shared model just for
 // a channel this file redacts and never surfaces anywhere else (review round 3).
 function thinkingDeltaText(line: string): string | null {
@@ -55,6 +55,7 @@ export interface AttemptResult { outcome: SandboxOutcome; resultEvent: ResultEve
 
 export async function streamAttempt({ sandbox, bus, token, detector, channel, logFile, resume, timeoutMs, spec }: AttemptStream): Promise<AttemptResult> {
   const stream = new StructuredStream()
+  const codex = new CodexStream()
   let writes: Promise<void> = Promise.resolve()
   // Spec §5.2/§10: the token must never sit unredacted on disk or reach the UI live, even for the
   // seconds before the attempt ends, and never reassembled from many small pieces that no single
@@ -105,42 +106,44 @@ export async function streamAttempt({ sandbox, bus, token, detector, channel, lo
       timeoutMs,
       onLine: (line) => {
         if (findSecretsInLine(line, token).length) sawSecret = true
-        const event = parseStreamLine(line)
-        if (!event) {
+        const events = codex.feed(line)
+        if (!events.length) {
           const text = thinkingDeltaText(line)
           if (text === null) return
           detector.feed(text)
           releaseThinking(thinking.push(text))
           return
         }
-        if (event.type === 'delta') {
-          detector.feed(event.text)
-          releaseNarration(narration.push(event.text))
-        } else if (event.type === 'result') {
-          resultEvent = event
-          detector.feed(event.sessionId)
-          const meta = { type: 'result' as const, ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns }
-          persist(meta)
-          publish(meta)
-        } else if (event.type === 'init' || event.type === 'message_start' || event.type === 'tool_start') {
-          // Every string that reaches the log or the bus feeds the detector, in stream order
-          // (round 5). Raw json_delta does not: the decoded answer_delta below is the answer's
-          // text — raw JSON would feed it twice and can hide pieces behind \u escapes.
-          if (event.type === 'init') detector.feed(event.sessionId)
-          if (event.type === 'tool_start') detector.feed(event.name)
-          persist(event)
-          publish(event)
-        }
-        for (const derived of stream.feed(event)) {
-          if (derived.type === 'answer_delta') {
-            detector.feed(derived.text)
-            releaseAnswer(answer.push(derived.text))
-          } else if (derived.type === 'answer_reset') {
-            answer.flush() // the superseded draft is dropped unreleased, but still scanned
-            if (answer.sawSecret) sawSecret = true
-            answer = new SecretHoldback(token)
-            persist(derived)
-            publish(derived)
+        for (const event of events) {
+          if (event.type === 'delta') {
+            detector.feed(event.text)
+            releaseNarration(narration.push(event.text))
+          } else if (event.type === 'result') {
+            resultEvent = event
+            detector.feed(event.sessionId)
+            const meta = { type: 'result' as const, ok: event.ok, sessionId: event.sessionId, numTurns: event.numTurns }
+            persist(meta)
+            publish(meta)
+          } else if (event.type === 'init' || event.type === 'message_start' || event.type === 'tool_start') {
+            // Every string that reaches the log or the bus feeds the detector, in stream order
+            // (round 5). Raw json_delta does not: the decoded answer_delta below is the answer's
+            // text — raw JSON would feed it twice and can hide pieces behind \u escapes.
+            if (event.type === 'init') detector.feed(event.sessionId)
+            if (event.type === 'tool_start') detector.feed(event.name)
+            persist(event)
+            publish(event)
+          }
+          for (const derived of stream.feed(event)) {
+            if (derived.type === 'answer_delta') {
+              detector.feed(derived.text)
+              releaseAnswer(answer.push(derived.text))
+            } else if (derived.type === 'answer_reset') {
+              answer.flush() // the superseded draft is dropped unreleased, but still scanned
+              if (answer.sawSecret) sawSecret = true
+              answer = new SecretHoldback(token)
+              persist(derived)
+              publish(derived)
+            }
           }
         }
       },

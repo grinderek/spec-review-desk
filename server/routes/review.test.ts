@@ -6,7 +6,7 @@ import { listChanges, worktreeId } from '../discovery.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import { readReview, setEntry, updateReview } from '../review-store.ts'
-import { FAKE_CLAUDE, resetFakeClaude } from '../testing/fake-claude-path.ts'
+import { FAKE_CODEX, resetFakeCodex } from '../testing/fake-codex-path.ts'
 import { call, testContext } from '../testing/http.ts'
 import { makeRepo } from '../testing/repo.ts'
 import { approveEverything } from '../testing/review.ts'
@@ -17,10 +17,10 @@ const FIRST = "features/thread_state.feature::The founder's reply resolves a wai
 
 async function setup() {
   const { repo } = await makeRepo()
-  const ctx = testContext(repo, { claudeBin: FAKE_CLAUDE })
+  const ctx = testContext(repo, { codexBin: FAKE_CODEX })
   const questions = new QuestionService({ config: ctx.config, bus: ctx.bus })
   const app = createBaseApp(ctx)
-  registerReadRoutes(app, ctx, { claude: true, docker: false })
+  registerReadRoutes(app, ctx, { codex: true, docker: false })
   registerReviewRoutes(app, ctx, { questions })
   await call(app, 'GET', '/api/changes')
   const wt = ctx.registry.all()[0]!
@@ -29,10 +29,10 @@ async function setup() {
 }
 
 beforeEach(() => {
-  resetFakeClaude()
-  process.env.FAKE_CLAUDE_MODE = 'answer'
-  process.env.FAKE_CLAUDE_TEXT = 'Noted.'
-  delete process.env.FAKE_CLAUDE_LOG
+  resetFakeCodex()
+  process.env.FAKE_CODEX_MODE = 'answer'
+  process.env.FAKE_CODEX_TEXT = 'Noted.'
+  delete process.env.FAKE_CODEX_LOG
 })
 
 describe('review routes', () => {

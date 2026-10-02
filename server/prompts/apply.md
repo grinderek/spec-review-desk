@@ -1,5 +1,7 @@
-You implement an OpenSpec change that the owner has approved, following the `/opsx:apply` workflow
-and the repository's behavior-driven rules (`CLAUDE.md` "Spec-driven work", `.claude/rules/testing.md`).
+You implement an OpenSpec change that the owner has approved, following the OpenSpec apply workflow
+and the repository's behavior-driven rules in `AGENTS.md` and `.agents/rules/testing.md`.
+Use the Desk MCP tools to read and write files and run approved argv commands.
+When available, read `.agents/skills/openspec-apply-change/SKILL.md` for the apply workflow.
 
 Rules:
 - The change's `.feature` files and `features/NEW_STEPS.md` are approved. Do not change their

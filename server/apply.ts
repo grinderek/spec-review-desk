@@ -6,7 +6,7 @@ import path from 'node:path'
 import { StructuredStream } from './answer-reader.ts'
 import { outcomeOf, readEvents } from './apply-outcome.ts'
 import { allScenarios, loadChangeView } from './change-view.ts'
-import { claudeArgs, type ClaudeRunSpec, parseStreamLine } from './claude.ts'
+import { codexArgs, type CodexRunSpec, CodexStream, prepareCodex } from './codex.ts'
 import type { Config } from './config.ts'
 import { addDecisions, decisionsFromReply, isActive, pendingBlocking, runDecisions } from './decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
@@ -27,9 +27,7 @@ export const DEFAULT_APPLY_TOOLS = [
   'Read', 'Grep', 'Glob', 'Edit', 'Write',
   'Bash(git add:*)', 'Bash(git commit:*)', 'Bash(git status:*)', 'Bash(git diff:*)', 'Bash(git log:*)',
 ]
-// A hard ceiling on every Apply run, regardless of the profile's allowlist or the owner's own
-// user/project Claude settings (which --allowedTools only ADDS to — deny rules beat allow rules,
-// so this is what actually keeps push/reset/rebase/rm and network tools out; spec §10/§13).
+// Denied command prefixes are removed before exposing the scoped MCP command tool.
 export const DEFAULT_APPLY_DENY = [
   'Bash(git push:*)', 'Bash(git reset:*)', 'Bash(git rebase:*)', 'Bash(rm:*)',
   'Bash(curl:*)', 'Bash(wget:*)', 'Bash(ssh:*)', 'Bash(scp:*)', 'WebFetch', 'WebSearch',
@@ -37,15 +35,16 @@ export const DEFAULT_APPLY_DENY = [
 const APPLY_RULES = new URL('./prompts/apply.md', import.meta.url)
 
 export interface SpawnedProcess { pid: number; exited: Promise<number | null> }
-export type SpawnDetached = (spec: ClaudeRunSpec, logFile: string) => SpawnedProcess
+export type SpawnDetached = (spec: CodexRunSpec, logFile: string) => SpawnedProcess
 
 export const spawnDetached: SpawnDetached = (spec, logFile) => {
   const fd = openSync(logFile, 'a')
-  const child = spawn(spec.bin, claudeArgs(spec), { cwd: spec.cwd, detached: true, stdio: ['pipe', fd, fd] })
+  const prepared = prepareCodex(spec)
+  const child = spawn(spec.bin, codexArgs(prepared.spec), { cwd: spec.cwd, detached: true, stdio: ['pipe', fd, fd] })
   closeSync(fd)
   const exited = new Promise<number | null>((resolve) => {
-    child.once('exit', (code) => resolve(code))
-    child.once('error', () => resolve(null))
+    child.once('exit', (code) => { prepared.dispose(); resolve(code) })
+    child.once('error', () => { prepared.dispose(); resolve(null) })
   })
   child.stdin?.on('error', () => undefined)
   child.stdin?.end(spec.prompt)
@@ -69,7 +68,7 @@ export function applyPrompt(
   decisions: readonly DecisionRecord[] = [],
   scenarioKeys: readonly string[] = [],
 ): string {
-  const lines = [`/opsx:apply ${changeName}`]
+  const lines = [`Implement the owner-approved OpenSpec change "${changeName}".`, `Read openspec/changes/${changeName}/proposal.md, specs/ and features/ before making changes.`, "Follow the repository AGENTS.md and the OpenSpec apply skill under .agents/skills/ when present.", "Implement the approved scenarios, run the configured checks and commit the implementation."]
   if (onlyKeys.length) {
     lines.push(
       '',
@@ -258,8 +257,8 @@ export class ApplyService {
     const logFile = resolveRunLog(wt.path, run.log)
     await mkdir(path.dirname(logFile), { recursive: true })
     const offset = await sizeOf(logFile)
-    const spec: ClaudeRunSpec = {
-      bin: config.claudeBin,
+    const spec: CodexRunSpec = {
+      bin: config.codexBin,
       cwd: wt.path,
       sessionId: run.session,
       resume,
@@ -287,6 +286,7 @@ export class ApplyService {
     let partial = ''
     let draining: Promise<void> = Promise.resolve()
     const structuredStream = new StructuredStream()
+    const stream = new CodexStream()
     const drainOnce = async (): Promise<void> => {
       const size = await sizeOf(logFile)
       if (size <= position) return
@@ -302,10 +302,10 @@ export class ApplyService {
       const lines = partial.split('\n')
       partial = lines.pop() ?? ''
       for (const line of lines) {
-        const event = parseStreamLine(line)
-        if (!event) continue
-        this.deps.bus.publish(`run:${run.id}`, { type: 'event', event })
-        for (const derived of structuredStream.feed(event)) this.deps.bus.publish(`run:${run.id}`, { type: 'event', event: derived })
+        for (const event of stream.feed(line)) {
+          this.deps.bus.publish(`run:${run.id}`, { type: 'event', event })
+          for (const derived of structuredStream.feed(event)) this.deps.bus.publish(`run:${run.id}`, { type: 'event', event: derived })
+        }
       }
     }
     const drain = (): Promise<void> => {
@@ -332,7 +332,10 @@ export class ApplyService {
     const text = buffer.subarray(offset).toString('utf8')
     const current = this.#active.get(wt.path)
     const stopping = current?.runId === run.id && current.stopping
-    const result = outcomeOf(readEvents(text), stopping)
+    const events = readEvents(text)
+    const session = events.findLast((e) => e.type === 'init')
+    if (session?.type === 'init') run = { ...run, session: session.sessionId }
+    const result = outcomeOf(events, stopping)
     const issues = result.reply
       ? validateReply(result.reply, replyContext('apply', await loadChangeView(wt, ref, { withCommits: false })))
       : result.issues

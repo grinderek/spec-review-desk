@@ -7,7 +7,7 @@ import { dismissDecision } from './decision-model.ts'
 import { discover, listChanges, Registry } from './discovery.ts'
 import { type BusEvent, EventBus } from './events.ts'
 import { readReview, recordApproval, updateReview } from './review-store.ts'
-import { FAKE_CLAUDE, resetFakeClaude } from './testing/fake-claude-path.ts'
+import { FAKE_CODEX, resetFakeCodex } from './testing/fake-codex-path.ts'
 import { testConfig } from './testing/http.ts'
 import { makeRepo } from './testing/repo.ts'
 import { approveEverything } from './testing/review.ts'
@@ -35,25 +35,25 @@ async function setup() {
   const bus = new EventBus()
   const events: BusEvent[] = []
   bus.subscribe('*', (e) => events.push(e))
-  const apply = new ApplyService({ config: testConfig(repo, { claudeBin: FAKE_CLAUDE }), bus, pollMs: 50 })
+  const apply = new ApplyService({ config: testConfig(repo, { codexBin: FAKE_CODEX }), bus, pollMs: 50 })
   return { wt, ref, apply, events }
 }
 
 const calls = async () => (await readFile(fakeLog, 'utf8')).trim().split('\n').map((l) => JSON.parse(l) as { args: string[]; prompt: string })
 
 beforeEach(async () => {
-  resetFakeClaude()
+  resetFakeCodex()
   const tmp = await mkdtemp(path.join(os.tmpdir(), 'sr-apply-decisions-'))
   fakeLog = path.join(tmp, 'calls.ndjson')
-  process.env.FAKE_CLAUDE_SESSIONS = path.join(tmp, 'sessions')
-  process.env.FAKE_CLAUDE_LOG = fakeLog
-  process.env.FAKE_CLAUDE_MODE = 'answer'
+  process.env.FAKE_CODEX_SESSIONS = path.join(tmp, 'sessions')
+  process.env.FAKE_CODEX_LOG = fakeLog
+  process.env.FAKE_CODEX_MODE = 'answer'
 })
 
 describe('structured Apply outcomes', () => {
   it('turns needs_owner into decisions of the run and an apply thread, and streams the answer', async () => {
     const { wt, ref, apply, events } = await setup()
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: 'Stopped before step 3.', status: 'needs_owner', decisions: [blocking] }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: 'Stopped before step 3.', status: 'needs_owner', decisions: [blocking] }))
     const run = await apply.start(wt, ref)
     await apply.settled(run.id)
     const review = await readReview(ref.dir)
@@ -69,19 +69,19 @@ describe('structured Apply outcomes', () => {
       })
       .join('')
     expect(answer).toBe('Stopped before step 3.')
-    expect((await calls())[0]!.args).toContain('--json-schema')
+    expect((await calls())[0]!.args).toContain('--output-schema')
   })
 
   it('retries an invalid reply once in the same session, and settled() waits for the retry', async () => {
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-then-valid'
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply())
+    process.env.FAKE_CODEX_STRUCTURED = 'invalid-then-valid'
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply())
     const run = await apply.start(wt, ref)
     await apply.settled(run.id)
     const all = await calls()
     expect(all).toHaveLength(2)
     expect(all[1]!.prompt).toMatch(/^Your reply did not pass validation: /)
-    expect(all[1]!.args).toEqual(expect.arrayContaining(['--resume', run.session]))
+    expect(all[1]!.args).toEqual(expect.arrayContaining(['resume', (await readReview(ref.dir)).apply_runs[0]!.session]))
     const review = await readReview(ref.dir)
     expect(review.apply_runs[0]).toMatchObject({ outcome: 'done', validation_retry: true })
     expect(review.threads.filter((t) => t.anchor === 'apply')).toEqual([])
@@ -90,7 +90,7 @@ describe('structured Apply outcomes', () => {
 
   it('stops after the second invalid reply: failed, an apply thread with the issues, no decisions', async () => {
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-twice'
+    process.env.FAKE_CODEX_STRUCTURED = 'invalid-twice'
     const run = await apply.start(wt, ref)
     await apply.settled(run.id)
     expect(await calls()).toHaveLength(2)
@@ -107,8 +107,8 @@ describe('structured Apply outcomes', () => {
   // zero decisions (which would hide ApplyResume and never block readiness), and not `done`.
   it('forces outcome to failed on a second invalid reply even when it claims needs_owner', async () => {
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-twice'
-    process.env.FAKE_CLAUDE_INVALID_REPLY = JSON.stringify({
+    process.env.FAKE_CODEX_STRUCTURED = 'invalid-twice'
+    process.env.FAKE_CODEX_INVALID_REPLY = JSON.stringify({
       answer: 'Stuck, needs a decision.',
       patch: null,
       decisions: [{ ...blocking, recommended: 'nonexistent_option' }],
@@ -127,8 +127,8 @@ describe('structured Apply outcomes', () => {
 
   it('forces outcome to failed on a second invalid reply even when it claims done', async () => {
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_STRUCTURED = 'invalid-twice'
-    process.env.FAKE_CLAUDE_INVALID_REPLY = JSON.stringify({
+    process.env.FAKE_CODEX_STRUCTURED = 'invalid-twice'
+    process.env.FAKE_CODEX_INVALID_REPLY = JSON.stringify({
       answer: 'All done supposedly.',
       patch: '--- a bare diff the Apply agent must never send ---',
       decisions: [],
@@ -147,8 +147,8 @@ describe('structured Apply outcomes', () => {
 
   it('keeps the NEEDS_OWNER prose fallback when the reply is not structured', async () => {
     const { wt, ref, apply } = await setup()
-    process.env.FAKE_CLAUDE_STRUCTURED = 'off'
-    process.env.FAKE_CLAUDE_TEXT = 'Stuck.\nNEEDS_OWNER: which weight?'
+    process.env.FAKE_CODEX_STRUCTURED = 'off'
+    process.env.FAKE_CODEX_TEXT = 'Stuck.\nNEEDS_OWNER: which weight?'
     const run = await apply.start(wt, ref)
     await apply.settled(run.id)
     const review = await readReview(ref.dir)
@@ -163,7 +163,7 @@ describe('resume with decisions', () => {
   it('resumes a needs_owner run once its blocking decisions are recorded or dismissed', async () => {
     const { wt, ref, apply } = await setup()
     const naming = { ...blocking, id: 'naming', question: 'Rename the pillar?', scope: { kind: 'change' }, blocking: false }
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: 'Stopped.', status: 'needs_owner', decisions: [blocking, naming] }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: 'Stopped.', status: 'needs_owner', decisions: [blocking, naming] }))
     const run = await apply.start(wt, ref)
     await apply.settled(run.id)
     const raised = (await readReview(ref.dir)).decisions
@@ -171,7 +171,7 @@ describe('resume with decisions', () => {
     await expect(apply.resumeWithDecisions(wt, ref, run.id)).rejects.toMatchObject({ code: 'decisions_pending' })
 
     await updateReview(ref.dir, (d) => dismissDecision(d, raised[0]!.id, 'Out of scope.', '2026-09-24T11:00:00.000Z'))
-    process.env.FAKE_CLAUDE_REPLY = JSON.stringify(reply({ answer: 'Done, all green.' }))
+    process.env.FAKE_CODEX_REPLY = JSON.stringify(reply({ answer: 'Done, all green.' }))
     await apply.resumeWithDecisions(wt, ref, run.id)
     await apply.settled(run.id)
 
@@ -179,7 +179,7 @@ describe('resume with decisions', () => {
     expect(review.apply_runs).toHaveLength(1)
     expect(review.apply_runs[0]).toMatchObject({ outcome: 'done' })
     const last = (await calls()).at(-1)!
-    expect(last.args).toEqual(expect.arrayContaining(['--resume', run.session]))
+    expect(last.args).toEqual(expect.arrayContaining(['resume', (await readReview(ref.dir)).apply_runs[0]!.session]))
     expect(last.prompt).toMatch(/^The owner answered the decisions you raised:/)
     expect(last.prompt).toContain(`- ${raised[0]!.id} (Which weight for CC threads?): dismissed — Out of scope.`)
     expect(last.prompt).toContain(`- ${raised[1]!.id} (Rename the pillar?): still open and not blocking`)
