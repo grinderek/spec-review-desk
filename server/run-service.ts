@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { chmod, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
 import type { CodexRunSpec, ResultEvent } from './codex.ts'
-import type { Config } from './config.ts'
+import { agentProfile, type Config } from './config.ts'
 import { pendingBlocking, runDecisions } from './decision-model.ts'
 import type { WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
@@ -236,7 +236,7 @@ export class InitiativeRunService {
     const tools = agentTools(run.kind, webFetch)
     const token = await sandbox.token()
     const codex: CodexRunSpec = {
-      bin: 'codex', cwd: WORK_IN, sessionId: run.session, resume, model: config.model, allowedTools: tools.allowed,
+      bin: 'codex', cwd: WORK_IN, sessionId: run.session, resume, ...agentProfile(config, run.kind), allowedTools: tools.allowed,
       disallowedTools: tools.disallowed, permissionMode: tools.permissionMode, appendSystemPrompt: await readFile(RULES[run.kind], 'utf8'),
       jsonSchema: REPLY_SCHEMA_ARGS[run.kind], prompt,
       toolsScript: '/opt/spec-review/desk-tools.mjs', writeRoot: run.kind === 'author' ? WORK_OUT : undefined,

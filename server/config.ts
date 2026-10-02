@@ -4,6 +4,15 @@ import { parse } from 'yaml'
 import { z } from 'zod'
 import { AGENT_IMAGE, BROWSER_IMAGE, EGRESS_IMAGE } from './sandbox-args.ts'
 
+const ReasoningEffortSchema = z.enum(['low', 'medium', 'high', 'xhigh', 'max'])
+export type ReasoningEffort = z.infer<typeof ReasoningEffortSchema>
+export type AgentRole = 'research' | 'planner' | 'author' | 'reviewer' | 'apply'
+const AgentProfileSchema = z.object({
+  model: z.string().min(1).optional(),
+  reasoningEffort: ReasoningEffortSchema.optional(),
+})
+export interface AgentProfile { model?: string; reasoningEffort?: ReasoningEffort }
+
 const RunnerSchema = z.object({
   worktree: z.string().min(1),
   execution: z.enum(['compose', 'local']).default('compose'),
@@ -21,7 +30,15 @@ const ConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(4600),
   hubRoot: z.string().default('../..'),
   repos: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) })).min(1),
-  model: z.string().default('gpt-5.4'),
+  model: z.string().min(1).default('gpt-6.1-sol'),
+  reasoningEffort: ReasoningEffortSchema.default('high'),
+  agents: z.object({
+    research: AgentProfileSchema.optional(),
+    planner: AgentProfileSchema.optional(),
+    author: AgentProfileSchema.optional(),
+    reviewer: AgentProfileSchema.optional(),
+    apply: AgentProfileSchema.optional(),
+  }).default({}),
   codexBin: z.string().default('codex'),
   commitTrailer: z.string().default(''),
   questionTimeoutMinutes: z.number().positive().default(10),
@@ -61,6 +78,8 @@ export interface Config {
   hubRoot: string
   repos: { name: string; path: string }[]
   model: string
+  reasoningEffort?: ReasoningEffort
+  agents?: Partial<Record<AgentRole, AgentProfile>>
   codexBin: string
   commitTrailer: string
   questionTimeoutMs: number
@@ -72,6 +91,14 @@ export interface Config {
 }
 
 export class ConfigError extends Error {}
+
+export function agentProfile(config: Config, role: AgentRole): { model: string; reasoningEffort: ReasoningEffort } {
+  const override = config.agents?.[role]
+  return {
+    model: override?.model ?? config.model,
+    reasoningEffort: override?.reasoningEffort ?? config.reasoningEffort ?? 'high',
+  }
+}
 
 export async function loadConfig(file: string): Promise<Config> {
   const configDir = path.dirname(path.resolve(file))
@@ -87,6 +114,8 @@ export async function loadConfig(file: string): Promise<Config> {
     hubRoot,
     repos: c.repos.map((r) => ({ name: r.name, path: path.resolve(hubRoot, r.path) })),
     model: c.model,
+    reasoningEffort: c.reasoningEffort,
+    agents: c.agents,
     codexBin: c.codexBin,
     commitTrailer: c.commitTrailer,
     questionTimeoutMs: c.questionTimeoutMinutes * 60_000,

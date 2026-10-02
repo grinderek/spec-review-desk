@@ -7,7 +7,7 @@ import { StructuredStream } from './answer-reader.ts'
 import { outcomeOf, readEvents } from './apply-outcome.ts'
 import { allScenarios, loadChangeView } from './change-view.ts'
 import { codexArgs, type CodexRunSpec, CodexStream, prepareCodex } from './codex.ts'
-import type { Config } from './config.ts'
+import { agentProfile, type Config } from './config.ts'
 import { addDecisions, decisionsFromReply, isActive, pendingBlocking, runDecisions } from './decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
@@ -262,7 +262,7 @@ export class ApplyService {
       cwd: wt.path,
       sessionId: run.session,
       resume,
-      model: config.model,
+      ...agentProfile(config, 'apply'),
       allowedTools: config.runners.find((p) => p.worktreePath === wt.path)?.applyAllowedTools ?? DEFAULT_APPLY_TOOLS,
       disallowedTools: DEFAULT_APPLY_DENY,
       permissionMode: 'acceptEdits',

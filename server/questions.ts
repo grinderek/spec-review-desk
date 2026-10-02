@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { allScenarios, type ChangeView, findPhrase, findScenario, loadChangeView } from './change-view.ts'
 import { type CodexEvent, type CodexOutcome, type CodexRunSpec, isMissingSession, runCodex } from './codex.ts'
-import type { Config } from './config.ts'
+import { agentProfile, type Config } from './config.ts'
 import { addDecisions, decisionsFromReply } from './decision-model.ts'
 import { DECISIONS_FILE } from './decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
@@ -143,7 +143,7 @@ export class QuestionService {
       cwd: wt.path,
       sessionId,
       resume,
-      model: config.model,
+      ...agentProfile(config, 'reviewer'),
       allowedTools: QUESTION_TOOLS.allowed,
       disallowedTools: QUESTION_TOOLS.disallowed,
       permissionMode: 'default',

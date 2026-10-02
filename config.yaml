@@ -4,7 +4,11 @@ repos:
   - { name: api, path: api }
   - { name: mobile, path: mobile }
   - { name: web, path: web }
-model: gpt-5.4
+model: gpt-6.1-sol
+reasoningEffort: high
+agents:
+  planner: { model: gpt-6-astra, reasoningEffort: high }
+  reviewer: { reasoningEffort: medium }
 codexBin: codex
 commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"
 questionTimeoutMinutes: 10

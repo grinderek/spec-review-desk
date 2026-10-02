@@ -25,8 +25,18 @@ restarting the server issues a new token. The app listens on loopback only and c
 and the session cookie on API requests.
 
 The checked-in `config.yaml` describes the original api/mobile/web workspace, including its existing
-BDD worktree. Use `config.example.yaml` for another workspace. `model` defaults to `gpt-5.4` and
-`codexBin` to `codex`. Select a model available to your account.
+BDD worktree. Use `config.example.yaml` for another workspace. `model` defaults to `gpt-6.1-sol`,
+`reasoningEffort` to `high`, and `codexBin` to `codex`. Select models available to your account.
+
+`agents` overrides the model and/or reasoning effort for `research`, `planner`, `author`,
+`reviewer`, and `apply`; omitted fields inherit the top-level settings. The supplied configs use
+Astra/high for planning, Sol/medium for review questions, and Sol/high for research, specification
+authoring and implementation. These are starting profiles, not an evaluated quality ranking.
+Luna/medium is a candidate for narrowly scoped extraction or summaries; none of the current roles
+is limited to those operations, so it is not the default for an entire role. Supported effort
+values are `low`, `medium`, `high`, `xhigh`, and `max`; effort is passed explicitly to Codex.
+Restart the Desk after editing profiles. Future launches, retries and resumes use the new settings;
+an already running agent keeps its existing model and effort.
 
 ## Review and implementation
 

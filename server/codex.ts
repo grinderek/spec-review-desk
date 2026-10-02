@@ -5,6 +5,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { StructuredStream } from './answer-reader.ts'
 import { parseJsonObject } from './protocol.ts'
+import type { ReasoningEffort } from './config.ts'
 
 export interface CodexRunSpec {
   bin: string
@@ -12,6 +13,7 @@ export interface CodexRunSpec {
   sessionId: string
   resume: boolean
   model: string
+  reasoningEffort?: ReasoningEffort
   // Desk capabilities, translated to scoped MCP tools rather than CLI tool-name allowlists.
   allowedTools: readonly string[]
   disallowedTools: readonly string[]
@@ -62,6 +64,7 @@ export function codexArgs(spec: CodexRunSpec): string[] {
     'exec',
     '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules',
     '--model', spec.model,
+    ...(spec.reasoningEffort ? ['-c', `model_reasoning_effort=${toml(spec.reasoningEffort)}`] : []),
     '-c', 'approval_policy="never"', '-c', 'sandbox_mode="read-only"',
     '-c', 'features.shell_tool=false', '-c', 'features.unified_exec=false',
     '-c', 'features.multi_agent=false', '-c', 'features.view_image=false', '-c', 'features.goals=false', '-c', 'features.plugins=false', '-c', 'features.apps=false',
