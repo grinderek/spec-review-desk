@@ -2,7 +2,7 @@
 
 The DSL covers owner workflows and business gates: approvals, semantic changes, requests for
 changes, readiness and orphan operations. Fourteen readable rules use small case tables for
-meaningful variants. Do not write standalone unit or technical integration tests. The complete Vitest suite is removed;
+meaningful variants. Write standalone unit or technical integration tests only at the owner’s explicit request. The old suite is removed;
 do not extend the language or another verification script to reproduce it. Existing browser flows,
 compiler checks and targeted manual verification remain.
 
@@ -27,9 +27,10 @@ Journal replacement cost grows with history. Approval commits include the journa
 
 ## Coverage
 
-Product contracts cover the primary workflows: 37 rules and 50 executions. `npm test` runs only
-this corpus; `test:self` verifies execution through Desk. All 58 Vitest suite files (488 checks),
-Vitest configuration/dependencies and unused helpers are removed. Browser workflows and typecheck
+Product contracts cover the primary workflows: 37 rules and 50 executions. `npm test` runs
+this corpus and any owner-requested Vitest tests; `test:self` verifies execution through Desk. All 58 Vitest suite files (488 checks) and
+unused helpers remain removed. Vitest configuration, dependencies, temporary-root setup and coverage
+commands remain available for owner-requested tests; the suite is currently empty. Browser workflows and typecheck
 remain. See `docs/method/testing.md` for verification limits.
 
 ## Application workflows
@@ -43,6 +44,6 @@ requires a completed run, every implemented contract matching, and no corpus par
 A successful run with absent scenarios no longer marks a slice applied. Research checks approved reading and search-only
 choices. Verification uses a real local subprocess.
 
-AGENTS.md and agent prompts explicitly prohibit standalone unit/technical integration tests and
-recreating deleted assertions elsewhere. The DSL gains no syntax or scenarios from this removal.
+AGENTS.md and agent prompts allow standalone unit/technical integration tests only at the owner’s
+explicit request and forbid recreating deleted assertions elsewhere on the agent’s own initiative. The DSL gains no syntax or scenarios from this removal.
 Contract event assertions refer to the approval journal; other state is observed through public views.

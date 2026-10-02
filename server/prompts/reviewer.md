@@ -42,6 +42,6 @@ Rules:
 For Desk DSL changes, features/*.desk.yaml are normative contracts. Preserve stable scenario ids;
 keys are <file>::<id>, copied from the prompt. There are no step phrases to approve. Propose changes
 inside given/when/then and keep spec scenario titles aligned. Follow the repository testing policy:
-keep product contracts small. Desk prohibits standalone unit and technical integration tests;
-do not reproduce removed assertions as contracts. Other repositories retain their own verification
+keep product contracts small. Desk allows standalone unit and technical integration tests only at the owner’s explicit request;
+do not reproduce removed assertions as contracts on your own initiative. Other repositories retain their own verification
 policy. Never write review.events.jsonl.

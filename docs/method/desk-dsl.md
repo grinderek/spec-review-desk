@@ -32,7 +32,7 @@ embedded executable code.
 ## What belongs in a contract
 
 Keep the owner corpus small: a scenario describes a product rule someone can read and approve.
-Do not write standalone unit or technical integration tests in this repository. Do not extend
+Write standalone unit or technical integration tests only at the owner’s explicit request. Do not extend
 the language or add cases to reproduce removed implementation checks.
 The review corpus retains its 14 rules. Discussions, owner decisions, initiatives, research,
 implementation and verification add 23 core rules: 37 contracts / 50 executions across the app.
@@ -80,8 +80,8 @@ and verification. Reads observe actual change, initiative, corpus and runner vie
 is defined once per operation; expectations stay in the contracts.
 
 Given facts prepare source contracts, phrases, prior approvals, discussions and decisions.
-Approvals use the same serialized writer as production. Technical details are verified with compiler checks and targeted manual inspection, without a
-separate test suite or additional technical contracts. Fixture
+Approvals use the same serialized writer as production. Technical details use compiler checks and targeted manual inspection; standalone tests require an
+explicit owner request. Vitest remains available with an empty suite. Fixture
 bindings include `$key`, `$hash`, `$head`, `$at`, `$change`, `$phrase` and `$phraseHash`. Production
 commands generate their own ids and times. The question service uses a deterministic model transport
 while running real reply validation and persistence. Initiative and Apply workflows use the existing

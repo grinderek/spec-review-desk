@@ -5,8 +5,9 @@ owner-readable rules: scenario and phrase approvals, semantic changes, readiness
 orphan handling. The complete application corpus contains 37 contracts / 50 executions.
 
 The old standalone TypeScript suite, including review.integration.test.ts, has been removed.
-AGENTS.md explicitly prohibits writing unit or technical integration tests or recreating their
-assertions in another format. Product rules remain in DSL; existing browser workflows and compiler
+AGENTS.md allows writing or restoring unit and technical integration tests only at the owner’s
+explicit request. Vitest infrastructure remains available; the suite is currently empty. Do not
+recreate deleted assertions in another format on your own initiative. Product rules remain in DSL; existing browser workflows and compiler
 checks remain available. No replacement technical corpus was added.
 
 Run `npm test` for the product corpus, `npm run test:self` for execution through Desk itself,

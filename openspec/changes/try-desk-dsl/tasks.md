@@ -6,5 +6,6 @@
 - [x] Provide and verify a local self-review runner
 - [x] Cover discussions, owner decisions, initiatives, research, Apply and verification
 - [x] Verify planner → authored change → owner review → Apply → matching corpus
-- [x] Prohibit unit/technical integration tests in repository and agent instructions
+- [x] Require an explicit owner request for unit/technical integration tests
+- [x] Retain Vitest infrastructure while leaving the old suite deleted
 - [ ] Owner review and approval through Desk

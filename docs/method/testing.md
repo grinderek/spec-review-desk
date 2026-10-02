@@ -1,17 +1,21 @@
-# Developing Desk without a standalone technical test suite
+# Developing Desk with owner-requested technical tests
 
-Do not write unit or technical integration tests for this repository. This explicit policy is in
-`AGENTS.md` and in the Desk agent prompts. Do not restore Vitest, add another technical test framework,
-or reproduce deleted assertions in DSL, browser cases, smoke scripts or contract adapters.
+Write or restore unit and technical integration tests only at the owner's explicit request.
+Implementing a feature or fixing a bug does not implicitly authorize new tests. This policy is in
+`AGENTS.md` and the Desk agent prompts. Do not reproduce deleted assertions in DSL, browser cases,
+smoke scripts or adapters on your own initiative.
 
-The complete Vitest suite has been removed: 488 checks in 58 files, its configuration, coverage
-commands and dependencies, and unused suite helpers. There is no replacement technical suite.
+The previous 488 checks in 58 files remain deleted. Vitest, its configuration, isolated temporary
+root, coverage support and dependencies remain available for future owner-requested tests.
+The suite is currently empty; Vitest succeeds with `passWithNoTests`, without claiming test coverage.
 The existing product corpus remains 37 contracts / 50 executions; no extra cases were added to
 compensate for the deletion.
 
 ## Verification
 
-- `npm test` runs only the product contracts through real authenticated routes and workflow services.
+- `npm test` runs product contracts and any owner-requested Vitest tests.
+- `npm run test:technical` runs Vitest; `test:legacy` is its compatibility alias.
+- `npm run coverage` collects coverage for owner-requested tests; the empty suite has no coverage.
 - `npm run test:self` verifies matching proposed and implemented contracts, then executes the corpus
   through Desk's own authenticated local runner and checks every result row.
 - `npm run typecheck` verifies application types; `npm run e2e` builds the UI and runs the existing

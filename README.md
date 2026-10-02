@@ -147,8 +147,8 @@ hash-bound approvals and verification results. Gherkin projects remain supported
 
 See [the language and migration boundary](docs/method/desk-dsl.md). Scenario, phrase and whole-change approvals are
 replayed from `review.events.jsonl`; discussion, decision and agent-run state keeps its existing storage. `npm test` runs
-only the product DSL corpus. Standalone unit and technical integration tests are intentionally
-removed; AGENTS.md prohibits adding them. The owner corpus covers review, discussions, decisions, initiatives, research,
+the product DSL corpus and any owner-requested Vitest tests. The old tests remain deleted;
+AGENTS.md permits writing or restoring tests only at the owner’s explicit request. The owner corpus covers review, discussions, decisions, initiatives, research,
 implementation and verification. See [the testing boundary](docs/method/testing.md).
 
 ## Checks
@@ -157,6 +157,8 @@ implementation and verification. See [the testing boundary](docs/method/testing.
 npm run typecheck
 npm test
 npm run test:self
+npm run test:technical # currently empty; tests only at the owner’s explicit request
+npm run coverage
 npx playwright install chromium
 npm run e2e
 npm run smoke:codex

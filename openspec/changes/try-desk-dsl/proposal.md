@@ -8,4 +8,5 @@ Support YAML contracts alongside Gherkin with stable ids, semantic hashes, case 
 bindings and public-state observations. Cover the primary review, discussion, owner-decision,
 initiative, research, implementation and verification workflows. Run them through Desk itself.
 Keep approval replay and compatibility in the existing journal, and retain browser and compiler checks. Remove standalone unit/technical integration tests and
-prohibit adding them; do not translate their assertions into DSL.
+allow new tests only at the owner’s explicit request. Retain Vitest infrastructure; do not translate
+deleted assertions into DSL.
