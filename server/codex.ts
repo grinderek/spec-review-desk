@@ -60,6 +60,8 @@ export function codexArgs(spec: CodexRunSpec): string[] {
     args: [spec.toolsScript ?? TOOLS_SCRIPT, JSON.stringify({ root: spec.cwd, writeRoot: write ? (spec.writeRoot ?? spec.cwd) : null, commands, deniedCommands: denied, search: spec.search === true, readDomains: spec.readDomains ?? [] })],
     required: true,
     tool_timeout_sec: 180,
+    // The bridge enforces Desk scopes; unattended exec cannot answer MCP prompts.
+    default_tools_approval_mode: 'approve',
   }
   return [
     'exec',
