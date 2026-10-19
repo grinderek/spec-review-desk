@@ -3,7 +3,6 @@ import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseDeskDsl } from '../server/desk-dsl.ts'
 import { corpusKey } from '../server/run-messages.ts'
-import type { ReviewEvent } from '../server/review-store.ts'
 import { DeskWorld } from '../server/testing/desk-world.ts'
 
 const root = path.resolve('features')
@@ -29,10 +28,10 @@ function bind(world: DeskWorld, bindings: Record<string, string> | undefined, re
     world.vars[name] = value
   }
 }
-function payload(event: ReviewEvent): unknown {
+function payload(event: Record<string, any>): unknown {
   if ('entry' in event) return { key: event.key, hash: event.entry.text_hash, commit: event.entry.approved_commit, at: event.entry.at, ...('thread' in event && event.thread ? { thread: event.thread } : {}) }
   if ('key' in event) return { key: event.key }
-  if ('commit' in event) return { at: event.at, commit: event.commit }
+  if (event.type === 'ChangeApprovalRecorded') return { at: event.at, commit: event.commit }
   const { version, stream, sequence, id, command, at, origin, type, ...data } = event
   return data
 }
@@ -51,12 +50,12 @@ for (const file of files) {
           await world.given(name, world.resolve(raw))
         }
         await world.ready()
-        const before = await world.events()
+        const before = await world.events(scenario.then.stream)
         const [command, raw] = Object.entries(world.resolve(scenario.when))[0]!
         const response = await world.command(command, world.resolve(raw))
         bind(world, scenario.then.bind, response)
         subset(world.resolve(scenario.then.response), response)
-        const actual = (await world.events()).slice(before.length)
+        const actual = (await world.events(scenario.then.stream)).slice(before.length)
         assert.equal(actual.length, scenario.then.events.length, 'events: exact number appended')
         scenario.then.events.forEach((fact, i) => {
           const [name, fields] = Object.entries(world.resolve(fact))[0]!
@@ -68,7 +67,7 @@ for (const file of files) {
           subset(world.resolve(observation.response), observed, `reads[${i}]`)
         }
         // Observing a public view must not change history.
-        assert.deepEqual(await world.events(), [...before, ...actual], 'Then reads appended events')
+        assert.deepEqual(await world.events(scenario.then.stream), [...before, ...actual], 'Then reads appended events')
         passed++; console.log(`PASS ${label}`)
         report.push({ ...result, status: 'passed' })
       } catch (error) {

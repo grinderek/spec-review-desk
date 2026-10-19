@@ -1,12 +1,13 @@
-import { mkdir, stat, writeFile } from 'node:fs/promises'
+import { mkdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import type { Config } from './config.ts'
 import { discover, listWorktrees, type Registry, worktreeId } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { ensureExcluded, run } from './git.ts'
-import { BRIEF_FILE, briefText } from './initiative-brief.ts'
+import { briefText } from './initiative-brief.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
-import { emptyInitiative, initiativeDir, isInitiativeName, writeInitiative } from './initiative-store.ts'
+import { initiativeDir, isInitiativeName, withInitiativeLock } from './initiative-store.ts'
+import { readInitiativeStream, recordInitiativeEvents, storeInitiativeBlob } from './initiative-events.ts'
 import { type IncomingFile, planInputs, readRepoFile, writeInputs } from './inputs.ts'
 
 // Spec B §4.1: New feature — a new worktree + branch plan/<name> (or an existing worktree), the
@@ -64,9 +65,16 @@ export async function createInitiative(config: Config, registry: Registry, input
   const dir = initiativeDir(wtPath, input.name)
   try {
     await mkdir(dir, { recursive: true })
-    await writeFile(path.join(dir, BRIEF_FILE), briefText(input.brief))
-    const inputs = await writeInputs(dir, planned, at)
-    await writeInitiative(dir, { ...emptyInitiative({ name: input.name, title: input.title, repo: input.repo, created_at: at }), inputs })
+    await withInitiativeLock(dir, async () => {
+      const stream = await readInitiativeStream(dir)
+      if (stream.events.length) throw new HttpError(409, 'name_taken', `Initiative ${input.name} already exists`)
+      const brief = await storeInitiativeBlob(dir, briefText(input.brief))
+      const inputs = await writeInputs(dir, planned, at)
+      await recordInitiativeEvents(dir, stream, [
+        { type: 'InitiativeCreated', name: input.name, title: input.title, repo: input.repo, created_at: at, brief },
+        ...inputs.map(input => ({ type: 'InitiativeInputAdded' as const, input })),
+      ], at)
+    })
     await ensureExcluded(wtPath)
     await commitPaths(wtPath, [`openspec/initiatives/${input.name}`], initiativeCommitMessage(`${input.name} — initiative`, config.commitTrailer))
   } catch (error) {

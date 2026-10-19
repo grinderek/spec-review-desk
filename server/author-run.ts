@@ -1,17 +1,20 @@
+import { executeOwnerDecision } from './decision-commands.ts'
 import { readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
-import { addDecisions, decisionsFromReply } from './decision-model.ts'
+import { decisionsFromReply } from './decision-model.ts'
 import type { WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
 import { authorPrompt } from './initiative-prompt.ts'
-import { CHANGE_NAME, findSlice, INITIATIVE_FILE, type InitiativeDoc, readInitiative, type RunRecord } from './initiative-store.ts'
+import { CHANGE_NAME, findSlice, type InitiativeDoc, readInitiative, withInitiativeLock, type RunRecord } from './initiative-store.ts'
 import { sliceStatuses } from './initiatives.ts'
 import { buildResumePrompt } from './prompt.ts'
-import { emptyReview, readReview, updateReview, writeReview } from './review-store.ts'
+import { readReview } from './review-store.ts'
 import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts'
 import { proposeBlocker } from './slice-plan.ts'
 import { moveChange, vetAuthorOutput } from './vet-output.ts'
+import { executeInitiativeCommand } from './initiative-commands.ts'
+import { initiativeBusinessPaths } from './inputs.ts'
 
 // Spec B §4.4: a clean-room author writes one slice as a behavior-driven change.
 export { CHANGE_NAME } from './initiative-store.ts'
@@ -62,7 +65,7 @@ export function startAuthor(
   input: { notes?: string; change?: string },
 ): Promise<RunRecord> {
   const busy = new HttpError(409, 'author_running', 'An author run of this initiative is already starting')
-  return service.exclusive(`${target.ini.dir}#author`, busy, () => launchAuthor(service, target, sliceId, input))
+  return service.exclusive(`${target.ini.dir}#author`, busy, () => withInitiativeLock(target.ini.dir, () => launchAuthor(service, target, sliceId, input)))
 }
 
 async function launchAuthor(service: InitiativeRunService, target: RunTarget, sliceId: string, input: { notes?: string; change?: string }): Promise<RunRecord> {
@@ -90,18 +93,13 @@ export function resumeAuthor(service: InitiativeRunService, target: RunTarget, r
   })
 }
 
-const setChange = (sliceId: string, change: string | null) => (doc: InitiativeDoc): InitiativeDoc => ({
-  ...doc,
-  plan: { ...doc.plan, slices: doc.plan.slices.map((s) => (s.id === sliceId ? { ...s, change } : s)) },
-})
-
-export const finishAuthor: Finisher<'author'> = async (ctx, reply) => {
+export const finishAuthor: Finisher<'author'> = async (ctx, reply) => withInitiativeLock(ctx.target.ini.dir, async () => {
   if (reply.status === 'failed') return ctx.record('failed', reply.answer)
   const { wt, ini } = ctx.target
   const source = { kind: 'run' as const, run: ctx.run.id, agent: 'author' as const }
   if (reply.status === 'needs_owner') {
     // Ruling 4: needs_owner decisions go to the initiative inbox.
-    await updateReview(ini.dir, (d) => addDecisions(d, decisionsFromReply(reply.decisions, source, ctx.at)))
+    await executeOwnerDecision(ini.dir, { type: 'RaiseOwnerDecisions', decisions: decisionsFromReply(reply.decisions, source, ctx.at) })
     return ctx.record('needs_owner', reply.answer)
   }
   const change = reply.change
@@ -114,13 +112,15 @@ export const finishAuthor: Finisher<'author'> = async (ctx, reply) => {
   const sliceId = ctx.run.slice ?? ''
   const dir = await moveChange(ctx.paths.out, change, wt.path)
   // Ruling 4: a finished author's decisions belong to the new change's own review.yaml.
-  await writeReview(dir, addDecisions(emptyReview(), decisionsFromReply(reply.decisions, source, ctx.at)))
-  await ctx.record('done', reply.answer, undefined, setChange(sliceId, change))
+  await executeOwnerDecision(dir, { type: 'RaiseOwnerDecisions', decisions: decisionsFromReply(reply.decisions, source, ctx.at) })
+  await executeInitiativeCommand(ini.dir, { type: 'associate-change', slice: sliceId, change }, ctx.at)
+  await ctx.record('done', reply.answer)
   const changeRel = `openspec/changes/${change}`
   try {
-    await commitPaths(wt.path, [changeRel, `${ini.relDir}/${INITIATIVE_FILE}`], initiativeCommitMessage(`${change} — slice ${sliceId} executable Gherkin (clean room)`, ctx.config.commitTrailer))
+    await commitPaths(wt.path, [changeRel, ...initiativeBusinessPaths(ini.relDir)], initiativeCommitMessage(`${change} - slice ${sliceId} executable Gherkin (clean room)`, ctx.config.commitTrailer))
   } catch (error) {
     await rm(dir, { recursive: true, force: true })
-    await ctx.record('failed', `The change was vetted but its commit failed: ${(error as Error).message}`, undefined, setChange(sliceId, null))
+    await executeInitiativeCommand(ini.dir, { type: 'associate-change', slice: sliceId, change: null }, ctx.at)
+    await ctx.record('failed', `The change was vetted but its commit failed: ${(error as Error).message}`)
   }
-}
+})

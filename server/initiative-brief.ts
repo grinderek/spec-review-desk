@@ -1,9 +1,9 @@
-import { readFile, rename, writeFile } from 'node:fs/promises'
-import path from 'node:path'
 import { isDirty } from './git.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
 import { withInitiativeLock } from './initiative-store.ts'
 import type { RunTarget } from './run-service.ts'
+import { executeInitiativeCommand } from './initiative-commands.ts'
+import { INITIATIVE_EVENTS_FILE, storeInitiativeBlob } from './initiative-events.ts'
 
 // openspec/initiatives/<name>/brief.md — what, why and out of scope, written by the owner at
 // creation and edited on the Brief tab (Desk fixes item 2).
@@ -25,16 +25,12 @@ export const briefFits = (brief: string): boolean => briefText(brief).length <= 
 // 1). Nothing to commit: `commit` is null. One save at a time per initiative.
 export function saveBrief(target: RunTarget, brief: string, trailer: string): Promise<{ brief: string; commit: string | null }> {
   const { wt, ini } = target
-  const file = path.join(ini.dir, BRIEF_FILE)
   const rel = `${ini.relDir}/${BRIEF_FILE}`
   const text = briefText(brief)
   return withInitiativeLock(ini.dir, async () => {
-    if ((await readFile(file, 'utf8').catch(() => null)) !== text) {
-      const tmp = `${file}.${process.pid}.tmp`
-      await writeFile(tmp, text)
-      await rename(tmp, file)
-    }
+    const blob = await storeInitiativeBlob(ini.dir, text)
+    await executeInitiativeCommand(ini.dir, { type: 'save-brief', blob })
     if (!(await isDirty(wt.path, rel))) return { brief: text, commit: null }
-    return { brief: text, commit: await commitPaths(wt.path, [rel], initiativeCommitMessage(`${ini.name} — brief`, trailer)) }
+    return { brief: text, commit: await commitPaths(wt.path, [rel, `${ini.relDir}/${INITIATIVE_EVENTS_FILE}`, `${ini.relDir}/blobs`], initiativeCommitMessage(`${ini.name} - brief`, trailer)) }
   })
 }

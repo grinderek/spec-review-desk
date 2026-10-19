@@ -11,6 +11,7 @@ export interface ReadinessInput {
   uncatalogued: number
   parseErrors: number
   reviewValid: boolean
+  pendingEffects?: number
 }
 export interface Readiness { ready: boolean; reasons: string[] }
 
@@ -19,6 +20,7 @@ const count = (n: number, singular: string, plural = `${singular}s`): string => 
 export function computeReadiness(input: ReadinessInput): Readiness {
   const reasons: string[] = []
   if (!input.reviewValid) reasons.push('review.yaml is invalid')
+  if (input.pendingEffects) reasons.push(`${count(input.pendingEffects, 'Git operation')} requires recovery`)
   if (input.parseErrors) reasons.push(`${count(input.parseErrors, 'file')} failed to parse`)
   if (input.scenarios.length === 0) reasons.push('no scenarios')
   const scenarios = input.scenarios.filter((e) => e.status !== 'approved').length

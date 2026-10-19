@@ -19,14 +19,19 @@ and keep `specs/**/spec.md` titles equal to those contracts. Use stable scenario
 approved contracts to make an implementation pass.
 
 Given facts prepare prior history and environment; When executes one public command; Then checks
-new review-journal events and public responses. Use response bindings for generated values and subsequent
+new events in the selected review or initiative journal and public responses. Use response bindings for generated values and subsequent
 GET observations for persisted state. Keep domain adapters small and add them for operations,
-not scenario wording. Discussions and reviewer sessions project from the review journal; decision and agent-run state retains its existing persistence.
+not scenario wording. Approvals, discussions, owner decisions, patch lifecycle and Git receipts project
+from the review journal. Initiative metadata, brief/input references, permissions and plans project
+from the initiative journal and immutable blobs. Agent runs retain their existing persistence until S4.
 
 Run `npm test`, `npm run typecheck` and relevant browser checks. `npm run desk` opens this repository
 with its local contract runner. `npm test` runs the product corpus and any owner-requested Vitest tests;
 an empty Vitest suite succeeds. `npm run test:self` checks execution through Desk itself.
 
-Desk owns review.yaml, review.events.jsonl and decisions.md. Agents must not forge approvals or
+Desk owns review.yaml, review.events.jsonl, decisions.md, initiative.yaml and initiative.events.jsonl. Agents must not forge approvals or
 edit their history. Scenario, phrase and whole-change approvals project from review.events.jsonl;
-discussion messages, status, patch metadata and reviewer sessions also project from that journal; other review fields still use YAML. Use the existing serialized update path for mutations.
+discussions, decisions, patches and reviewer sessions also project from that journal. YAML currently
+retains only nonmigrated run state. Use explicit commands and the serialized scope writer for mutations.
+Git intents for decision recording and review patches use the shared worktree lease before scope locks;
+only a verified receipt confirms their success. Replay must never repeat external effects.

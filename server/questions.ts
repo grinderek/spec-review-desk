@@ -1,4 +1,5 @@
-import { executeDiscussionCommand } from './discussion-commands.ts'
+import { decideDiscussion, executeDiscussionCommand } from './discussion-commands.ts'
+import { decideOwnerDecision } from './decision-commands.ts'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { allScenarios, type ChangeView, findPhrase, findScenario, loadChangeView } from './change-view.ts'
@@ -6,7 +7,7 @@ import { type CodexEvent, type CodexOutcome, type CodexRunSpec, isMissingSession
 import { selectAgent } from './agent-routing.ts'
 import { appendAudit, auditId, estimateApiUsd } from './agent-usage.ts'
 import { type Config } from './config.ts'
-import { addDecisions, decisionsFromReply } from './decision-model.ts'
+import { decisionsFromReply } from './decision-model.ts'
 import { DECISIONS_FILE } from './decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import type { EventBus } from './events.ts'
@@ -16,7 +17,7 @@ import {
   AGENT_REPLY_SCHEMA_ARG, type AgentKind, type AgentReply, parseReply, type ReplyContext, retryPrompt, validateReply,
 } from './protocol.ts'
 import {
-  type DecisionRecord, findThread, type Message, nowIso, type Patch, REVIEW_EVENTS_FILE, REVIEW_FILE, type Thread,
+  type DecisionRecord, findThread, type Message, nowIso, type Patch, REVIEW_EVENTS_FILE, REVIEW_FILE, recordReviewEvents, type Thread,
 } from './review-store.ts'
 
 export const QUESTION_TOOLS = { allowed: ['Read', 'Grep', 'Glob'], disallowed: ['Edit', 'Write', 'Bash', 'NotebookEdit', 'WebFetch', 'WebSearch'] }
@@ -196,9 +197,12 @@ export class QuestionService {
 
     if (outcome.sessionId) await executeDiscussionCommand(ref.dir, { type: 'SetReviewAgentSession', session: outcome.sessionId })
 
-    const { message, decisions } = await this.#compose(wt.path, view.relDir, threadId, outcome, checked, note, nowIso(now()))
+    const { message, decisions } = await this.#compose(wt.path, view.relDir, threadId, outcome, checked, note, nowIso(now()), view.review.decisions)
     const ok = Boolean(checked?.reply)
-    await executeDiscussionCommand(ref.dir, { type: 'AgentReply', threadId, message, status: ok ? 'answered' : 'open' }, doc => addDecisions(doc, decisions))
+    await recordReviewEvents(ref.dir, async doc => ({ events: [
+      ...decideOwnerDecision(doc, { type: 'RaiseOwnerDecisions', decisions }),
+      ...decideDiscussion(doc, { type: 'AgentReply', threadId, message, status: ok ? 'answered' : 'open' }),
+    ] }))
     bus.publish(topic, { type: 'done', ok })
     bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }
@@ -211,6 +215,7 @@ export class QuestionService {
     checked: CheckedReply | null,
     note: string | null,
     at: string,
+    promptDecisions: readonly DecisionRecord[],
   ): Promise<{ message: Message; decisions: DecisionRecord[] }> {
     if (!outcome.ok || !checked) {
       return { message: { role: 'agent', at, text: `The agent did not answer: ${outcome.error ?? 'unknown error'}`, note, patch: null }, decisions: [] }
@@ -227,7 +232,13 @@ export class QuestionService {
       note,
       patch: reply.patch ? await vetPatch(cwd, relDir, reply.patch) : null,
       ...(decisions.length ? { decision_ids: decisions.map((d) => d.id) } : {}),
-      ...(reply.resolves.length ? { resolves: reply.resolves } : {}),
+      ...(reply.resolves.length ? { resolves: reply.resolves, decision_bindings: reply.resolves.flatMap(id => {
+        // Bind to the choices actually included in this agent's original prompt, even if a
+        // later validation read sees a reattached or changed decision. Never bless stale work.
+        const decision = promptDecisions.find(d => d.id === id)
+        return decision?.status === 'decided' && decision.scope.kind === 'scenario' && decision.choice
+          ? [{ decisionId: id, scope: { ...decision.scope }, choice: { ...decision.choice } }] : []
+      }) } : {}),
     }
     return { message, decisions }
   }

@@ -89,34 +89,50 @@ fake Codex CLI and sandbox transport, with real protocol parsing, services, fini
 Git writes. Local verification executes a real subprocess with a controlled workload. No live LLM
 or Docker is required for this corpus.
 
-`then.events` observes every new event in the review journal, including discussions, patch
-metadata and reviewer session selection. Other domains still use their public persisted views.
-No events are invented from expected state or transient event-bus notifications.
+`then.events` observes every new event in the selected review or initiative journal. No events
+are invented from expected state or transient event-bus notifications.
 
 ## Review persistence
 
-`review.events.jsonl` stores explicit approval and discussion events. Approval assertions expose
-entry fields as key/hash/commit/at; other assertions expose the event's domain payload directly.
-DiscussionOpened records the initial thread; owner/agent replies append complete messages;
-DiscussionResolved closes the thread. DiscussionPatchUpdated records the current patch metadata,
-and ReviewAgentSessionSet preserves the reviewer session. Replay never executes external effects.
+`review.events.jsonl` stores explicit approvals, discussions, owner decisions, patch lifecycle and
+Git effects. Approval assertions expose entry fields as key/hash/commit/at; other assertions expose
+the event's domain payload directly. DiscussionOpened records the initial thread; replies append
+complete messages; DiscussionResolved closes it. Reviewer session selection is recorded separately.
+OwnerDecision events retain questions, choices, dismissals, attachment and confirmed recording.
+Patch events distinguish request, pending/uncertain execution and verified completion. Resolving
+messages retain the original scenario/choice bindings; reattachment cannot make an old patch record
+an unrelated obligation.
 
 The supported envelope is version 2 with stream/event/command UUIDs, sequence from 1, time and
-origin approval-command, discussion-command or disposable fixture. Legacy embedded threads,
-unsupported history and snapshots without their required journal fail explicitly. No imports,
-checkpoints or snapshot-diff bridges exist. A request-changes command records approval and initial
-discussion in the same batch. Agent replies preserve validation failures and decision references.
+origin approval-command, discussion-command, decision-command, patch-command or disposable fixture.
+Unsupported history and snapshots without their required journal fail explicitly. There are no
+imports, checkpoints or snapshot-diff bridges. Request-changes and scenario-choice commands record
+their related discussion events in the same batch. Replies preserve validation failures and references.
 
-The complete journal is atomically replaced before updating its YAML projection. Approvals,
-threads, patch metadata and reviewer session recover on read after projection loss; snapshot
-writers cannot alter them. Decisions and agent runs still require their mixed YAML snapshot.
+The journal is atomically replaced before updating its YAML projection. Approvals, discussions,
+decisions, patch lifecycle, Git effects and reviewer session recover after projection loss. Snapshot
+writers cannot alter them. Only nonmigrated agent runs still require mixed YAML. Readers generate
+the decision log from confirmed events even if decisions.md is absent. Initiative business state
+uses its own journal and immutable content blobs; its run snapshot remains until S4.
+
 Writers share a canonical per-scope queue, advisory flock on WSL/Linux and byte-version check.
 A busy lock returns conflict; flock is required. External editors do not participate in the lock;
 journal rewrite cost grows with history and power-loss durability is not promised. A failed YAML
-write can follow a successful event commit. Replay does not resume model or Git work. See the
-[discussion slice](../../openspec/changes/discussion-events/design.md) for process and limits.
+write can follow a successful event commit. Replay never resumes model or Git work. Decision/patch
+Git requests acquire the shared worktree lease before the scope lease. A verified receipt, including
+its allowed paths and resulting blobs, is required for completion. Explicit retry can finish a known
+pending effect; unknown drift is refused. See the [S2 design](../../openspec/changes/owner-decision-events/design.md)
+for current limits and the remaining startup/agent execution recovery work.
 
 ## Review and run Desk itself
+
+`then.stream` selects the event observation boundary explicitly: `review` (the default) or
+`initiative`. Expectations compare the complete new event sequence in that one stream. There is
+no invented global order across independent streams. An initiative owner decision observes its
+review events; subsequent GET observations verify research permissions in initiative state.
+Initiative contracts select `initiative` for brief, input, plan and domain events. Immutable
+content blobs and the initiative journal restore the materialized brief and input files; reading
+these views does not record business events or restart work.
 
 ```sh
 npm run test:spec

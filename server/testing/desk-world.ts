@@ -1,9 +1,10 @@
-import { readFile, rm, writeFile } from 'node:fs/promises'
+import { executeOwnerDecision } from '../decision-commands.ts'
+import { chmod, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { ApplyService } from '../apply.ts'
 import { worktreeId } from '../discovery.ts'
 import { git } from '../git.ts'
-import { readReview, readReviewEvents, REVIEW_FILE, ReviewSchema, updateReview } from '../review-store.ts'
+import { readReview, readReviewEvents, REVIEW_FILE, ReviewSchema } from '../review-store.ts'
 import { FINISHERS } from '../run-kinds.ts'
 import { InitiativeRunService } from '../run-service.ts'
 import { RunnerService } from '../runner.ts'
@@ -19,6 +20,8 @@ import { FakeSandbox } from './fake-sandbox.ts'
 import { call, callForm } from './http.ts'
 import { ReviewWorld } from './review-world.ts'
 import { writeFiles } from './repo.ts'
+import { INITIATIVE_FILE, readInitiative } from '../initiative-store.ts'
+import { readInitiativeStream } from '../initiative-events.ts'
 
 // One public-API adapter per domain. The CLI transport is scripted, not the application services.
 export class DeskWorld {
@@ -53,7 +56,14 @@ export class DeskWorld {
   resolve(value: unknown): any { return this.review.resolve(value) }
   async ready() { const change = this.vars.change; await this.review.ready(); if (this.changeDir) this.vars.change = change; this.vars.runner = `/api/runner/${worktreeId(this.review.repo)}` }
   private changeDir = ''
-  events() { return readReviewEvents(this.changeDir || this.review.dir) }
+  async events(stream: 'review' | 'initiative' = 'review') {
+    if (stream === 'review') return readReviewEvents(this.changeDir || this.review.dir)
+    const root = path.join(this.repo, 'openspec/initiatives')
+    const names = await readdir(root).catch(() => [] as string[])
+    if (names.length > 1) throw new Error('An initiative event observation must select one stream')
+    if (!names[0]) return []
+    return (await readInitiativeStream(path.join(root, names[0]))).events.map(({ event, ...envelope }) => ({ ...envelope, ...event }))
+  }
   read(url: string) { return this.review.read(url) }
   private async setupCommand(name: string, data: Record<string, any>) {
     await this.ready()
@@ -79,6 +89,22 @@ export class DeskWorld {
       await this.setupCommand('ResolveDiscussion', { thread: this.vars.thread })
     } else if (name === 'ReviewProjectionUnavailable') {
       await rm(path.join(this.changeDir || this.review.dir, REVIEW_FILE), { force: true })
+      await rm(path.join(this.changeDir || this.review.dir, 'decisions.md'), { force: true })
+    } else if (name === 'GitCommitUnavailable' || name === 'GitCommitAvailable') {
+      const hooks = (await git(this.review.repo, ['rev-parse', '--git-path', 'hooks/pre-commit'])).trim()
+      const hook = path.resolve(this.review.repo, hooks)
+      if (name === 'GitCommitUnavailable') { await writeFile(hook, '#!/bin/sh\nexit 1\n'); await chmod(hook, 0o755) }
+      else await rm(hook, { force: true })
+    } else if (name === 'OwnerChoiceRecorded') {
+      const response = await this.setupCommand('DecideOwnerQuestion', { id: this.vars.decision, option: data.option, note: data.note })
+      this.vars.recordedCommit = response.body.commit
+    } else if (name === 'OwnerChoiceRecordingPending') {
+      await this.given('GitCommitUnavailable', {})
+      await this.ready()
+      const response = await this.command('DecideOwnerQuestion', { id: this.vars.decision, option: data.option, note: data.note })
+      if (response.status !== 500) throw Error('Given pending decision requires a failed commit')
+    } else if (name === 'OwnerDecisionReattached') {
+      await this.setupCommand('ReattachOwnerQuestion', { id: this.vars.decision, to: data.to })
     } else if (name === 'AgentReplyPrepared') {
       this.review.agentReply = { answer: data.answer ?? 'Noted.', patch: data.patch ? await this.patch() : null, decisions: data.decisions ?? [], resolves: data.resolves ?? [], status: 'answered' }
     } else if (name === 'InitiativeOpened') {
@@ -86,13 +112,21 @@ export class DeskWorld {
       this.vars.initiative = `/api/initiatives/${r.body.worktreeId}/${r.body.name}`
       this.vars.initiativeName = r.body.name
       this.vars.initiativeDir = path.join(this.review.repo, 'openspec/initiatives', r.body.name)
+    } else if (name === 'ResearchDomainsAllowed') {
+      await this.setupCommand('SetResearchDomains', { domains: data.domains })
+    } else if (name === 'InitiativeProjectionUnavailable') {
+      const dir = String(this.vars.initiativeDir)
+      const doc = await readInitiative(dir)
+      await rm(path.join(dir, INITIATIVE_FILE), { force: true })
+      await rm(path.join(dir, 'brief.md'), { force: true })
+      for (const input of doc.inputs) await rm(path.join(dir, 'inputs', input.file), { force: true })
     } else if (name === 'PlanDrafted') {
       this.cliReply({ answer: 'Plan ready.', patch: null, decisions: [], resolves: [], status: 'done', slices: data.slices })
       await this.setupCommand('RunPlanner', {})
     } else if (name === 'PlannerReplyPrepared') this.cliReply({ answer: 'Plan ready.', patch: null, decisions: [], resolves: [], status: 'done', slices: data.slices })
     else if (name === 'InitiativeDecisionRaised') {
       const decisions = ReviewSchema.parse({ version: 1, decisions: [{ id: 'd_fixture', source: { kind: 'owner' }, scope: { kind: 'change' }, question: 'Owner choice?', blocking: true, status: 'open', created_at: this.vars.at }] }).decisions
-      await updateReview(String(this.vars.initiativeDir), doc => ({ ...doc, decisions }))
+      await executeOwnerDecision(String(this.vars.initiativeDir), { type: 'RaiseOwnerDecisions', decisions }, 'fixture')
     } else if (name === 'ScenarioDecisionChosen') {
       const r = await this.setupCommand('DecideOwnerQuestion', { id: this.vars.decision, option: data.option, note: data.note })
       this.vars.thread = r.body.threadId
@@ -161,7 +195,9 @@ export class DeskWorld {
       OpenDiscussion: ['POST', `${base}/threads`, data], ReplyToDiscussion: ['POST', `${base}/threads/${data.thread}/messages`, { text: data.text }],
       ResolveDiscussion: ['POST', `${base}/threads/${data.thread}/resolve`], ApplyReviewPatch: ['POST', `${base}/threads/${data.thread}/patches/1/apply`, { summary: data.summary }],
       DecideOwnerQuestion: ['POST', `${base}/decisions/${data.id}/decide`, { option: data.option, note: data.note }],
+      ReattachOwnerQuestion: ['POST', `${base}/decisions/${data.id}/reattach`, { to: data.to }],
       DismissOwnerQuestion: ['POST', `${base}/decisions/${data.id}/dismiss`, { reason: data.reason }],
+      ObserveInitiative: ['GET', ini], EditPlan: ['PUT', `${ini}/plan`, { slices: data.slices }], SetResearchDomains: ['PUT', `${ini}/research/domains`, { domains: data.domains }], DiscardResearch: ['POST', `${ini}/inputs/${data.file}/discard`],
       EditBrief: ['PUT', `${ini}/brief`, { brief: data.brief }], RunPlanner: ['POST', `${ini}/plan/run`], ApprovePlan: ['POST', `${ini}/plan/approve`],
       ProposeSlice: ['POST', `${ini}/slices/${data.slice}/propose`, { change: data.change }],
       RunResearch: ['POST', `${ini}/research`, data], DecideResearchPermission: ['POST', `${ini}/decisions/${data.id}/decide`, { option: data.option }], ResumeResearch: ['POST', `${ini}/runs/${data.run}/resume`, {}], AcceptResearch: ['POST', `${ini}/inputs/${data.file}/accept`],

@@ -29,14 +29,14 @@
 
 ## S2-S5. Бизнес-состояние и восстановление
 
-- [x] Определить общую review-journal boundary для обсуждений; решения пока mixed YAML.
+- [x] Определить review/initiative observation boundaries; сравнивать полную дельту выбранного журнала.
 - [x] Перенести discussion identity, messages, status, patch metadata и reviewer session в review stream.
-- [ ] Завершить durable patch effects и owner decisions в review stream.
-- [ ] Перенести initiative plan, inputs, decisions и research permissions в initiative stream.
+- [x] Перенести owner decisions и явный patch lifecycle в review stream; подтверждать Git effects по receipt.
+- [x] Перенести initiative plan, metadata, brief/input refs и research permissions в initiative journal; owner decisions в review journal того же scope, grants коррелируются с их commit.
 - [ ] Разделить durable intents, внешнее выполнение и подтвержденные результаты.
 - [ ] Обработать resume/stop/restart и неопределенный результат без слепого повторного запуска.
 - [ ] Сделать остальные перенесенные views восстановимыми и убрать их авторитетные snapshots; approval bridge уже удален в S1.
-- [ ] Определять новые форматы последующих областей отдельно; внутренняя backward compatibility и автоматический импорт не требуются.
+- [x] Убрать требования legacy imports/adapters из плана; новые области используют один целевой формат.
 - [ ] Учесть упорядоченный контекст исторических преобразований и несовместимые переименования JSON-полей.
 - [ ] Строить отчет из результата одного прогона, сохраняя cleanup и при неуспехе подготовки или команды.
 
@@ -59,4 +59,4 @@
 - [ ] Ручная проверка disposable workspace, восстановления views и отсутствия повторных внешних эффектов.
 
 Первый срез approve/revoke реализуется в [scenario-approval-events](../scenario-approval-events/proposal.md).
-Остальные approval commands завершены в [approval-command-events](../approval-command-events/proposal.md). Первый discussion срез S2 реализуется в discussion-events; остальные срезы S2-S7 не завершены. Этот список не является записью одобрения владельца.
+Остальные approval commands завершены в [approval-command-events](../approval-command-events/proposal.md). S2 описан в discussion-events и owner-decision-events, S3 - в initiative-business-events. S4-S7 остаются открытыми. Этот список не является записью одобрения владельца.

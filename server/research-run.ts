@@ -1,13 +1,16 @@
+import { executeOwnerDecision } from './decision-commands.ts'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { slugify } from './author-run.ts'
-import { addDecisions, decisionsFromReply, runDecisions } from './decision-model.ts'
+import { decisionsFromReply, runDecisions } from './decision-model.ts'
 import { FETCH_DOMAINS, normalizeDomain } from './egress.ts'
 import { RESEARCH_READING_STOPPED, researchPrompt, researchResumeClosing } from './initiative-prompt.ts'
-import { findRun, type InputEntry, readInitiative, type RunRecord } from './initiative-store.ts'
+import { findRun, type InputEntry, readInitiative, withInitiativeLock, type RunRecord } from './initiative-store.ts'
+import { executeInitiativeCommand } from './initiative-commands.ts'
 import { buildResumePrompt } from './prompt.ts'
-import { readReview, updateReview } from './review-store.ts'
+import { readReview } from './review-store.ts'
 import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts'
+import { storeInitiativeBlob } from './initiative-events.ts'
 
 // Spec B §4.5: research in two phases — WebSearch only, then (after the owner's fetch-domains
 // decision) WebFetch limited to the approved domains. The result is a draft input.
@@ -50,7 +53,7 @@ export function researchFileName(topic: string, taken: readonly string[]): strin
   return `${base}-${n}.md`
 }
 
-export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
+export const finishResearch: Finisher<'research'> = async (ctx, reply) => withInitiativeLock(ctx.target.ini.dir, async () => {
   if (reply.status === 'failed') return ctx.record('failed', reply.answer)
   const { ini } = ctx.target
   const doc = await readInitiative(ini.dir)
@@ -67,7 +70,7 @@ export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
       return ctx.relaunch({ phase: 'read', web_fetch: true, validation_retry: false }, `${ALREADY_ALLOWED} ${researchResumeClosing(doc.research.domains)}`)
     }
     const [record] = decisionsFromReply([decision], { kind: 'run', run: ctx.run.id, agent: 'research' }, ctx.at)
-    await updateReview(ini.dir, (d) => addDecisions(d, [{ ...record!, requested_domains: requested }]))
+    await executeOwnerDecision(ini.dir, { type: 'RaiseOwnerDecisions', decisions: [{ ...record!, requested_domains: requested }] })
     return ctx.record('needs_owner', reply.answer)
   }
   const inputsDir = path.join(ini.dir, 'inputs')
@@ -78,10 +81,12 @@ export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
   const entry: InputEntry = {
     file,
     bytes: Buffer.byteLength(body),
+    blob: await storeInitiativeBlob(ini.dir, body),
     // Re-review (b): the domains its reading attempts used, also when the owner stopped reading.
     source: { kind: 'research', run: ctx.run.id, domains: findRun(doc, ctx.run.id).read_domains ?? [] },
     added_at: ctx.at,
     draft: true,
   }
-  await ctx.record('done', reply.answer, undefined, (d) => ({ ...d, inputs: [...d.inputs, entry] }))
-}
+  await executeInitiativeCommand(ini.dir, { type: 'add-inputs', inputs: [entry] }, ctx.at)
+  await ctx.record('done', reply.answer)
+})

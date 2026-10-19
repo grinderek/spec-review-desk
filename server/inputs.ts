@@ -1,11 +1,14 @@
-import { lstat, mkdir, readFile, realpath, rename, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
 import path from 'node:path'
-import { normalizeDomain } from './egress.ts'
 import { HttpError } from './errors.ts'
 import { git } from './git.ts'
 import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
-import { INITIATIVE_FILE, INPUT_FILE, type InitiativeDoc, type InputEntry, readInitiative, updateInitiative } from './initiative-store.ts'
+import { INITIATIVE_FILE, INPUT_FILE, type InitiativeDoc, type InputEntry, readInitiative, withInitiativeLock } from './initiative-store.ts'
 import type { RunTarget } from './run-service.ts'
+import { INITIATIVE_EVENTS_FILE, storeInitiativeBlob } from './initiative-events.ts'
+import { executeInitiativeCommand } from './initiative-commands.ts'
+
+export const initiativeBusinessPaths = (rel: string): string[] => [`${rel}/${INITIATIVE_FILE}`, `${rel}/${INITIATIVE_EVENTS_FILE}`, `${rel}/blobs`]
 
 // Spec B §7: uploads and repo copies land in openspec/initiatives/<name>/inputs/, in git.
 export const INPUT_EXTENSIONS = ['.pdf', '.md', '.txt', '.yaml', '.yml', '.json', '.png', '.jpg', '.jpeg']
@@ -60,7 +63,7 @@ export async function writeInputs(initiativeDir: string, planned: readonly { nam
     const tmp = path.join(real, `.${name}.${process.pid}.tmp`)
     await writeFile(tmp, file.bytes)
     await rename(tmp, target)
-    entries.push({ file: name, bytes: file.bytes.byteLength, source: file.source, added_at: at, draft: false })
+    entries.push({ file: name, bytes: file.bytes.byteLength, blob: await storeInitiativeBlob(initiativeDir, file.bytes), source: file.source, added_at: at, draft: false })
   }
   return entries
 }
@@ -88,13 +91,15 @@ export async function readRepoFile(roots: readonly string[], hubRoot: string, re
 export async function uploadInputs(target: RunTarget, files: readonly IncomingFile[], trailer: string, at: string): Promise<string[]> {
   const { wt, ini } = target
   if (files.length === 0) throw new HttpError(400, 'no_files', 'Nothing to add')
-  const planned = planInputs(await readInitiative(ini.dir), files)
-  const entries = await writeInputs(ini.dir, planned, at)
-  await updateInitiative(ini.dir, (d) => ({ ...d, inputs: [...d.inputs, ...entries] }))
-  const names = entries.map((e) => e.file)
-  await commitPaths(wt.path, [...names.map((n) => `${ini.relDir}/inputs/${n}`), `${ini.relDir}/${INITIATIVE_FILE}`],
-    initiativeCommitMessage(`${ini.name} — inputs: ${names.join(', ')}`, trailer))
-  return names
+  return withInitiativeLock(ini.dir, async () => {
+    const planned = planInputs(await readInitiative(ini.dir), files)
+    const entries = await writeInputs(ini.dir, planned, at)
+    await executeInitiativeCommand(ini.dir, { type: 'add-inputs', inputs: entries }, at)
+    const names = entries.map((e) => e.file)
+    await commitPaths(wt.path, [...names.map((n) => `${ini.relDir}/inputs/${n}`), ...initiativeBusinessPaths(ini.relDir)],
+      initiativeCommitMessage(`${ini.name} - inputs: ${names.join(', ')}`, trailer))
+    return names
+  })
 }
 
 // Desk fixes item 4: the Desk shows an input (a research draft before Accept, any other input on
@@ -140,33 +145,30 @@ function draftOf(doc: InitiativeDoc, file: string): InputEntry {
 
 export async function acceptDraft(target: RunTarget, file: string, trailer: string): Promise<{ commit: string }> {
   const { wt, ini } = target
-  const doc = await readInitiative(ini.dir)
-  const entry = draftOf(doc, file)
-  const topic = entry.source.kind === 'research' ? (doc.runs.find((r) => r.id === (entry.source as { run: string }).run)?.topic ?? file) : file
-  await updateInitiative(ini.dir, (d) => ({ ...d, inputs: d.inputs.map((i) => (i.file === file ? { ...i, draft: false } : i)) }))
-  const commit = await commitPaths(wt.path, [`${ini.relDir}/inputs/${file}`, `${ini.relDir}/${INITIATIVE_FILE}`],
-    initiativeCommitMessage(`${ini.name} — research: ${topic}`, trailer))
-  return { commit }
+  return withInitiativeLock(ini.dir, async () => {
+    const doc = await readInitiative(ini.dir)
+    const entry = draftOf(doc, file)
+    const topic = entry.source.kind === 'research' ? (doc.runs.find((r) => r.id === (entry.source as { run: string }).run)?.topic ?? file) : file
+    await executeInitiativeCommand(ini.dir, { type: 'accept-input', file })
+    const commit = await commitPaths(wt.path, [`${ini.relDir}/inputs/${file}`, ...initiativeBusinessPaths(ini.relDir)],
+      initiativeCommitMessage(`${ini.name} - research: ${topic}`, trailer))
+    return { commit }
+  })
 }
 
 export async function discardDraft(target: RunTarget, file: string): Promise<void> {
   const { ini } = target
-  draftOf(await readInitiative(ini.dir), file)
-  await rm(path.join(ini.dir, 'inputs', file), { force: true })
-  await updateInitiative(ini.dir, (d) => ({ ...d, inputs: d.inputs.filter((i) => i.file !== file) }))
+  await executeInitiativeCommand(ini.dir, { type: 'discard-input', file })
 }
 
 // The domain allowlist editor (ruling 5); domain edits commit (ruling 9).
 export async function setDomains(target: RunTarget, raw: readonly string[], trailer: string): Promise<string[]> {
   const { wt, ini } = target
-  const domains = raw.map((d) => {
-    const host = normalizeDomain(d)
-    if (!host) throw new HttpError(422, 'invalid_domain', `"${d}" is not a plain hostname`)
-    return host
+  return withInitiativeLock(ini.dir, async () => {
+    const before = await readInitiative(ini.dir)
+    const doc = await executeInitiativeCommand(ini.dir, { type: 'set-domains', domains: raw })
+    if (before.research.domains.join(',') === doc.research.domains.join(',')) return doc.research.domains
+    await commitPaths(wt.path, initiativeBusinessPaths(ini.relDir), initiativeCommitMessage(`${ini.name} - research domains`, trailer))
+    return doc.research.domains
   })
-  const unique = [...new Set(domains)]
-  if ((await readInitiative(ini.dir)).research.domains.join(',') === unique.join(',')) return unique
-  await updateInitiative(ini.dir, (d) => ({ ...d, research: { domains: unique } }))
-  await commitPaths(wt.path, [`${ini.relDir}/${INITIATIVE_FILE}`], initiativeCommitMessage(`${ini.name} — research domains`, trailer))
-  return unique
 }

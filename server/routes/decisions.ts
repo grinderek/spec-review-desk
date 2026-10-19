@@ -1,17 +1,18 @@
 import { decideDiscussion } from '../discussion-commands.ts'
+import { decideOwnerDecision, executeOwnerDecision, projectOwnerDecision } from '../decision-commands.ts'
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { findScenario, loadChangeView } from '../change-view.ts'
 import {
-  addDecisions, decideDecision, type DecisionChoiceInput, dismissDecision, findDecision, ownerDecision, ownerDecisionText, reattachDecision,
+  type DecisionChoiceInput, findDecision, ownerDecision, ownerDecisionText,
 } from '../decision-model.ts'
 import { commitChangeDecision } from '../decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { OptionSchema, ScopeSchema } from '../protocol.ts'
 import { ownerMessage, type QuestionService } from '../questions.ts'
-import { newId, nowIso, readReview, recordReviewEvents, type ReviewDoc, type DiscussionEvent, updateReview } from '../review-store.ts'
+import { newId, nowIso, readReview, recordReviewEvents, type ReviewDoc, type DiscussionEvent } from '../review-store.ts'
 import { assertWritable, relDirOf, resolveChange } from './resolve.ts'
 
 const NewDecision = z
@@ -62,7 +63,7 @@ export function registerDecisionRoutes(app: Hono, ctx: AppContext, deps: Decisio
     const body = NewDecision.parse(await c.req.json())
     if (body.scope.kind === 'scenario') await requireScenario(wt, ref, body.scope.key)
     const record = ownerDecision(body, nowIso())
-    await updateReview(ref.dir, (doc) => addDecisions(doc, [record]))
+    await executeOwnerDecision(ref.dir, { type: 'RaiseOwnerDecisions', decisions: [record] })
     changed(wt, ref)
     return c.json({ id: record.id }, 201)
   })
@@ -95,11 +96,13 @@ export function registerDecisionRoutes(app: Hono, ctx: AppContext, deps: Decisio
     const fresh = newId('t')
     let threadId = fresh
     await recordReviewEvents(ref.dir, async (doc) => {
-      const decided = decideDecision(doc, id, choice, at)
+      const events = decideOwnerDecision(doc, { type: 'ChooseOwnerDecision', id, choice, at })
+      const decided = structuredClone(doc)
+      for (const event of events) projectOwnerDecision(decided, event)
       const posted = postDecision(decided, id, fresh, at)
       threadId = posted.threadId
-      return { events: posted.events, review: decided }
-    })
+      return { events: [...events, ...posted.events] }
+    }, 'decision-command')
     void deps.questions.ask(wt, ref, threadId)
     changed(wt, ref)
     return c.json({ status: 'decided', threadId })
@@ -108,7 +111,7 @@ export function registerDecisionRoutes(app: Hono, ctx: AppContext, deps: Decisio
   app.post(`${base}/:id/dismiss`, async (c) => {
     const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
     const { reason } = Dismiss.parse(await c.req.json())
-    await updateReview(ref.dir, (doc) => dismissDecision(doc, c.req.param('id'), reason, nowIso()))
+    await executeOwnerDecision(ref.dir, { type: 'DismissOwnerDecision', id: c.req.param('id'), reason, at: nowIso() })
     changed(wt, ref)
     return c.json({ ok: true })
   })
@@ -117,7 +120,7 @@ export function registerDecisionRoutes(app: Hono, ctx: AppContext, deps: Decisio
     const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
     const { to } = Reattach.parse(await c.req.json())
     await requireScenario(wt, ref, to)
-    await updateReview(ref.dir, (doc) => reattachDecision(doc, c.req.param('id'), to))
+    await executeOwnerDecision(ref.dir, { type: 'ReattachOwnerDecision', id: c.req.param('id'), to })
     changed(wt, ref)
     return c.json({ ok: true })
   })

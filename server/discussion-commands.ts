@@ -1,12 +1,11 @@
 import { HttpError } from './errors.ts'
-import { findThread, recordReviewEvents, type DiscussionEvent, type Message, type Patch, type ReviewDoc, type Thread } from './review-store.ts'
+import { recordReviewEvents, type DiscussionEvent, type Message, type ReviewDoc, type Thread } from './review-store.ts'
 
 export type DiscussionCommand =
   | { type: 'OpenDiscussion'; thread: Thread }
   | { type: 'ReplyToDiscussion'; threadId: string; message: Message }
   | { type: 'AgentReply'; threadId: string; message: Message; status: 'open' | 'answered' }
   | { type: 'ResolveDiscussion'; threadId: string }
-  | { type: 'UpdateDiscussionPatch'; threadId: string; index: number; change: Partial<Patch> }
   | { type: 'SetReviewAgentSession'; session: string }
 
 // Commands decide new facts; replay never invokes models, Git or notifications.
@@ -19,11 +18,6 @@ export function decideDiscussion(doc: ReviewDoc, command: DiscussionCommand): Di
   const thread = doc.threads.find(t => t.id === command.threadId)
   if (!thread) throw new HttpError(404, 'unknown_thread', `No thread ${command.threadId}`)
   if (command.type === 'ResolveDiscussion') return thread.status === 'resolved' ? [] : [{ type: 'DiscussionResolved', threadId: thread.id }]
-  if (command.type === 'UpdateDiscussionPatch') {
-    const patch = findThread(doc, thread.id).messages[command.index]?.patch
-    if (!patch) throw new HttpError(404, 'unknown_patch', `Message ${command.index} has no patch`)
-    return [{ type: 'DiscussionPatchUpdated', threadId: thread.id, index: command.index, patch: { ...patch, ...command.change } }]
-  }
   if (command.type === 'ReplyToDiscussion') return [{ type: 'DiscussionOwnerReplied', threadId: thread.id, message: command.message }]
   return [{ type: 'DiscussionAgentReplied', threadId: thread.id, message: command.message, status: command.status }]
 }

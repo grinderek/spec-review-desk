@@ -3,7 +3,7 @@ import path from 'node:path'
 import { type Catalog, emptyCatalog, makeClassifier, parseCatalog, type Phrase } from './catalog.ts'
 import { deskFeature } from './desk-dsl.ts'
 import { isActive } from './decision-model.ts'
-import { DECISIONS_FILE, type DecisionLogEntry, parseDecisionLog } from './decisions-md.ts'
+import { type DecisionLogEntry, parseDecisionLog, renderDecisionLog } from './decisions-md.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { FeatureParseError, type FeatureView, parseFeature, type ScenarioView } from './gherkin.ts'
 import { findCommitIntroducing, isDirty } from './git.ts'
@@ -150,7 +150,7 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
     ...d,
     orphaned: d.scope.kind === 'scenario' && isActive(d) && !scenarioKeys.has(d.scope.key),
   }))
-  const decisionsText = await readOptional(path.join(ref.dir, DECISIONS_FILE))
+  const decisionsText = renderDecisionLog(review, ref.name)
   const readiness = computeReadiness({
     scenarios: scenarios.map((s) => s.effective),
     phrases: phrases.map((p) => p.effective),
@@ -160,6 +160,7 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
     uncatalogued: steps.filter((s) => s.kind === 'uncatalogued').length,
     parseErrors: errors.length,
     reviewValid: reviewErrors === null,
+    pendingEffects: review.git_effects.filter(e => ['requested', 'pending', 'uncertain'].includes(e.status)).length,
   })
 
   return {

@@ -1,3 +1,4 @@
+import { decideOwnerDecision } from './decision-commands.ts'
 import { decideDiscussion, executeDiscussionCommand } from './discussion-commands.ts'
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
@@ -11,7 +12,7 @@ import { codexArgs, type CodexRunSpec, CodexStream, prepareCodex } from './codex
 import { selectAgent } from './agent-routing.ts'
 import { appendAudit, auditId, estimateApiUsd } from './agent-usage.ts'
 import { type Config } from './config.ts'
-import { addDecisions, decisionsFromReply, isActive, pendingBlocking, runDecisions } from './decision-model.ts'
+import { decisionsFromReply, isActive, pendingBlocking, runDecisions } from './decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import type { EventBus } from './events.ts'
@@ -385,7 +386,10 @@ export class ApplyService {
       ...(decisions.length ? { decision_ids: decisions.map((d) => d.id) } : {}),
       ...(issues.length ? { invalid: { issues, raw: result.raw ?? result.text } } : {}),
     }
-    await recordReviewEvents(ref.dir, async doc => this.#record(addDecisions(doc, decisions), final, message))
+    await recordReviewEvents(ref.dir, async doc => {
+      const recorded = this.#record(doc, final, message)
+      return { ...recorded, events: [...decideOwnerDecision(doc, { type: 'RaiseOwnerDecisions', decisions }), ...recorded.events] }
+    })
     if (current?.runId === run.id) this.#active.delete(wt.path)
     this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome: final.outcome })
     this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })

@@ -8,8 +8,10 @@ scenarios:
     when:
       OpenInitiative: { name: new-feature, title: New feature, brief: Describe the intended behavior. }
     then:
+      stream: initiative
       bind: { initiativeWorktree: response.body.worktreeId }
-      events: []
+      events:
+        - InitiativeCreated: { name: new-feature, title: New feature }
       response: { status: 201, body: { name: new-feature } }
       reads:
         - path: /api/initiatives/$initiativeWorktree/new-feature
@@ -22,7 +24,9 @@ scenarios:
     when:
       EditBrief: { brief: The revised feature scope. }
     then:
-      events: []
+      stream: initiative
+      events:
+        - InitiativeBriefSaved: {}
       response: { status: 200 }
       reads:
         - path: $initiative
@@ -36,7 +40,9 @@ scenarios:
     when:
       RunPlanner: {}
     then:
-      events: []
+      stream: initiative
+      events:
+        - SlicePlanDrafted: {}
       response: { status: 202 }
       reads:
         - path: $initiative
@@ -52,7 +58,9 @@ scenarios:
     when:
       ApprovePlan: {}
     then:
-      events: []
+      stream: initiative
+      events:
+        - SlicePlanApproved: {}
       response: { status: 200 }
       reads:
         - path: $initiative
@@ -67,6 +75,7 @@ scenarios:
     when:
       ApprovePlan: {}
     then:
+      stream: initiative
       events: []
       response: { status: 409, body: { error: { code: decisions_pending } } }
       reads:
@@ -83,7 +92,9 @@ scenarios:
     when:
       ProposeSlice: { slice: s1, change: slice-contract }
     then:
-      events: []
+      stream: initiative
+      events:
+        - SliceChangeAssociated: { slice: s1, change: slice-contract }
       response: { status: 202 }
       reads:
         - path: $initiative
@@ -98,6 +109,7 @@ scenarios:
     when:
       ProposeSlice: { slice: s2, change: dependent-contract }
     then:
+      stream: initiative
       events: []
       response: { status: 409, body: { error: { code: slice_not_ready } } }
   - id: accept-research-input
@@ -109,7 +121,9 @@ scenarios:
     when:
       AcceptResearch: { file: research-contract.md }
     then:
-      events: []
+      stream: initiative
+      events:
+        - ResearchInputAccepted: { file: research-contract.md }
       response: { status: 200 }
       reads:
         - path: $initiative
@@ -126,7 +140,9 @@ scenarios:
     when:
       ProposeSlice: { slice: s2, change: dependent-contract }
     then:
-      events: []
+      stream: initiative
+      events:
+        - SliceChangeAssociated: { slice: s2, change: dependent-contract }
       response: { status: 202 }
       reads:
         - path: $initiative
@@ -145,7 +161,9 @@ scenarios:
     when:
       ResumeResearch: { run: $researchRun }
     then:
-      events: []
+      stream: initiative
+      events:
+        - InitiativeInputAdded: { input: { draft: true } }
       response: { status: 202, body: { ok: true } }
       reads:
         - path: $initiative
@@ -154,3 +172,55 @@ scenarios:
             body:
               doc: { research: { domains: $domains }, runs: [{ outcome: done, web_fetch: $webFetch }] }
               inputs: [{ draft: true, source: { domains: $domains } }]
+  - id: restore-initiative-business-state
+    scenario: Restore the approved plan and research material from initiative history
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: { brief: Preserve the intended scope. }
+      - ResearchDomainsAllowed: { domains: [docs.example.com] }
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }] }
+      - PlanApproved: {}
+      - ResearchDrafted: { topic: Contract }
+      - InitiativeProjectionUnavailable: {}
+    when:
+      ObserveInitiative: {}
+    then:
+      stream: initiative
+      events: []
+      response:
+        status: 200
+        body:
+          brief: "Preserve the intended scope.\n"
+          doc: { research: { domains: [docs.example.com] }, plan: { status: approved, slices: [{ id: s1, title: Engine }] } }
+          inputs: [{ file: research-contract.md, draft: true, present: true }]
+  - id: discard-research-draft
+    scenario: Discard research without accepting it as agent input
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchDrafted: { topic: Contract }
+    when:
+      DiscardResearch: { file: research-contract.md }
+    then:
+      stream: initiative
+      events:
+        - ResearchInputDiscarded: { file: research-contract.md }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [] } }
+  - id: research-domain-permission
+    scenario: Record the owner's allowed research domains
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+    when:
+      SetResearchDomains: { domains: [docs.example.com, docs.example.com] }
+    then:
+      stream: initiative
+      events:
+        - ResearchDomainsSet: { domains: [docs.example.com] }
+      response: { status: 200, body: { domains: [docs.example.com] } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { research: { domains: [docs.example.com] } } } }

@@ -38,7 +38,8 @@ The removed suite separately checked malformed input, compatibility, concurrency
 Git rollback, process recovery and helper/UI details. Those cases no longer have dedicated automated
 coverage. The remaining product and browser flows do not claim equivalent coverage.
 
-Approval and discussion events are replayable, including messages, status, patches and reviewer sessions.
-Other domains retain YAML storage. Contract event assertions refer to the complete review journal;
-other state is observed through public views. All verification runs
+Approvals, discussions, owner decisions, patch lifecycle and decision/patch Git receipts replay from
+review history. Initiative metadata, brief/input content, plans and permissions replay from its
+journal and immutable blobs. Agent run state still uses YAML until S4. Contracts select review or
+initiative history explicitly and compare its complete event delta; public GETs observe other views. All verification runs
 use disposable fixture repositories and never forge owner approvals in the real repository.

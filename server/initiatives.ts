@@ -4,13 +4,14 @@ import type { DecisionView } from './change-view.ts'
 import { loadChangeView } from './change-view.ts'
 import { corpusReport } from './corpus.ts'
 import { isActive } from './decision-model.ts'
-import { DECISIONS_FILE, type DecisionLogEntry, parseDecisionLog } from './decisions-md.ts'
+import { type DecisionLogEntry, parseDecisionLog, renderDecisionLog } from './decisions-md.ts'
 import { type ChangeRef, listChanges, type WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { BRIEF_FILE } from './initiative-brief.ts'
 import { isDirty } from './git.ts'
 import { INITIATIVE_FILE, type InitiativeDoc, type InputEntry, isInitiativeName, readInitiative, type Slice } from './initiative-store.ts'
 import { readReview } from './review-store.ts'
+import { INITIATIVE_EVENTS_FILE } from './initiative-events.ts'
 import { deriveStatus, proposeBlocker, type SliceStatus } from './slice-plan.ts'
 
 // Spec B §3: an initiative is found in any worktree of a configured repo; slice statuses are
@@ -68,7 +69,7 @@ export async function listInitiatives(wt: WorktreeInfo): Promise<InitiativeRef[]
   }
   const found = await Promise.all(names.filter(isInitiativeName).map(async (name): Promise<InitiativeRef[]> => {
     const dir = path.join(wt.path, INITIATIVES, name)
-    const present = await stat(path.join(dir, INITIATIVE_FILE)).then(() => true, () => false)
+    const present = await stat(path.join(dir, INITIATIVE_EVENTS_FILE)).then(() => true, () => false)
     return present ? [{ worktreeId: wt.id, name, dir, relDir: `openspec/initiatives/${name}` }] : []
   }))
   return found.flat()
@@ -111,7 +112,7 @@ export async function loadInitiativeView(wt: WorktreeInfo, ref: InitiativeRef): 
   const doc = await readInitiative(ref.dir)
   const statuses = await sliceStatuses(wt, doc)
   const review = await readReview(ref.dir)
-  const decisionsText = await readOptional(path.join(ref.dir, DECISIONS_FILE))
+  const decisionsText = renderDecisionLog(review, ref.name)
   const inputs = await Promise.all(doc.inputs.map(async (i) => ({
     ...i,
     present: await stat(path.join(ref.dir, 'inputs', i.file)).then(() => true, () => false),

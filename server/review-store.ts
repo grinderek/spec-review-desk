@@ -1,3 +1,4 @@
+import { projectPatch, type PatchEvent } from './patch-commands.ts'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -5,16 +6,26 @@ import { isDeepStrictEqual } from 'node:util'
 import { parse, stringify } from 'yaml'
 import { z } from 'zod'
 import { RoutingDecisionSchema } from './agent-routing.ts'
+import { projectOwnerDecision, type DecisionEvent } from './decision-commands.ts'
+import { GitEffectPlanSchema } from './git-effect.ts'
+import { projectReviewEffect, type ReviewEffectEvent } from './review-effects.ts'
 import { withReviewLock } from './review-lock.ts'
 export { withReviewLock } from './review-lock.ts'
 
 const PatchSchema = z.object({
   diff: z.string(),
-  state: z.enum(['proposed', 'applied', 'rejected', 'stale']),
+  effect_id: z.string().uuid().nullable().optional(),
+  state: z.enum(['proposed', 'applying', 'uncertain', 'applied', 'rejected', 'stale']),
   commit: z.string().nullable().default(null),
   error: z.string().nullable().default(null),
   files: z.array(z.string()).default([]),
 })
+const DecisionBindingSchema = z.object({
+  decisionId: z.string(),
+  scope: z.object({ kind: z.literal('scenario'), key: z.string() }),
+  choice: z.object({ option: z.string().nullable(), note: z.string(), at: z.string() }),
+})
+export type DecisionBinding = z.infer<typeof DecisionBindingSchema>
 const MessageSchema = z.object({
   role: z.enum(['owner', 'agent']),
   at: z.string(),
@@ -25,6 +36,7 @@ const MessageSchema = z.object({
   // reply that failed validation twice (spec §4/§5). Omitted when absent.
   decision_ids: z.array(z.string()).optional(),
   resolves: z.array(z.string()).optional(),
+  decision_bindings: z.array(DecisionBindingSchema).optional(),
   invalid: z.object({ issues: z.array(z.string()), raw: z.string() }).optional(),
 })
 const ThreadSchema = z.object({
@@ -91,6 +103,7 @@ export const ReviewSchema = z.object({
   threads: z.array(ThreadSchema).default([]),
   apply_runs: z.array(ApplyRunSchema).default([]),
   decisions: z.array(DecisionRecordSchema).default([]),
+  git_effects: z.array(z.object({ plan: GitEffectPlanSchema, status: z.enum(['requested', 'pending', 'uncertain', 'failed', 'completed']), commit: z.string().nullable(), reason: z.string().nullable() })).default([]),
 })
 
 export type ReviewDoc = z.infer<typeof ReviewSchema>
@@ -156,9 +169,8 @@ export type DiscussionEvent =
   | { type: 'DiscussionOwnerReplied'; threadId: string; message: Message }
   | { type: 'DiscussionAgentReplied'; threadId: string; message: Message; status: 'open' | 'answered' }
   | { type: 'DiscussionResolved'; threadId: string }
-  | { type: 'DiscussionPatchUpdated'; threadId: string; index: number; patch: Patch }
   | { type: 'ReviewAgentSessionSet'; session: string }
-export type ReviewDomainEvent = ApprovalEvent | DiscussionEvent
+export type ReviewDomainEvent = ApprovalEvent | DiscussionEvent | PatchEvent | DecisionEvent | ReviewEffectEvent
 const ApprovalEnvelopeSchema = z.object({
   version: z.literal(2),
   stream: z.string().uuid(),
@@ -166,7 +178,7 @@ const ApprovalEnvelopeSchema = z.object({
   id: z.string().uuid(),
   command: z.string().uuid(),
   at: z.string(),
-  origin: z.enum(['approval-command', 'discussion-command', 'fixture']),
+  origin: z.enum(['approval-command', 'discussion-command', 'patch-command', 'decision-command', 'fixture']),
 })
 const ReviewEventSchema = z.discriminatedUnion('type', [
   ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
@@ -181,8 +193,24 @@ const ReviewEventSchema = z.discriminatedUnion('type', [
   ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionOwnerReplied'), threadId: z.string(), message: MessageSchema.extend({ role: z.literal('owner') }) }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionAgentReplied'), threadId: z.string(), message: MessageSchema.extend({ role: z.literal('agent') }), status: z.enum(['open', 'answered']) }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionResolved'), threadId: z.string() }).strict(),
-  ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionPatchUpdated'), threadId: z.string(), index: z.number().int().nonnegative(), patch: PatchSchema }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('PatchRejected'), threadId: z.string(), index: z.number().int().nonnegative() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('PatchRechecked'), threadId: z.string(), index: z.number().int().nonnegative(), state: z.enum(['proposed', 'stale']), error: z.string().nullable(), files: z.array(z.string()) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('PatchApplicationRequested'), threadId: z.string(), index: z.number().int().nonnegative(), effectId: z.string().uuid() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('PatchApplied'), threadId: z.string(), index: z.number().int().nonnegative(), effectId: z.string().uuid(), commit: z.string().min(1) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('PatchApplicationPending'), threadId: z.string(), index: z.number().int().nonnegative(), effectId: z.string().uuid(), reason: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('PatchApplicationUncertain'), threadId: z.string(), index: z.number().int().nonnegative(), effectId: z.string().uuid(), reason: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('PatchApplicationFailed'), threadId: z.string(), index: z.number().int().nonnegative(), effectId: z.string().uuid(), reason: z.string() }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('ReviewAgentSessionSet'), session: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('OwnerDecisionRaised'), decision: DecisionRecordSchema.extend({ status: z.literal('open'), choice: z.null(), recorded: z.null(), dismissed: z.null() }) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('OwnerDecisionChosen'), decisionId: z.string(), choice: z.object({ option: z.string().nullable(), note: z.string(), at: z.string() }) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('OwnerDecisionDismissed'), decisionId: z.string(), reason: z.string(), at: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('OwnerDecisionReattached'), decisionId: z.string(), to: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('OwnerDecisionRecorded'), decisionId: z.string(), recorded: z.object({ how: z.enum(['patch', 'decisions_md']), commit: z.string().min(1) }) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('GitEffectRequested'), effect: GitEffectPlanSchema }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('GitEffectCompleted'), effectId: z.string().uuid(), commit: z.string().min(1) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('GitEffectPending'), effectId: z.string().uuid(), reason: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('GitEffectFailed'), effectId: z.string().uuid(), reason: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('GitEffectUncertain'), effectId: z.string().uuid(), reason: z.string() }).strict(),
 ])
 export type ReviewEvent = z.infer<typeof ReviewEventSchema>
 export interface ReviewStream { events: ReviewEvent[]; text: string; version: string }
@@ -220,10 +248,10 @@ export async function readReview(changeDir: string): Promise<ReviewDoc> {
   return projectReview(doc, (await readReviewStream(changeDir)).events)
 }
 export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): ReviewDoc {
-  if (!events.length && (Object.keys(doc.scenarios).length || Object.keys(doc.phrases).length || doc.approved_at || doc.approved_commit || doc.threads.length || doc.agent_session)) {
+  if (!events.length && (Object.keys(doc.scenarios).length || Object.keys(doc.phrases).length || doc.approved_at || doc.approved_commit || doc.threads.length || doc.agent_session || doc.decisions.length || doc.git_effects.length)) {
     throw new ReviewFileError(REVIEW_FILE, ['Review snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
-  const next: ReviewDoc = { ...doc, scenarios: replayScenarioReviews(events), phrases: {}, approved_at: null, approved_commit: null, threads: [], agent_session: null }
+  const next: ReviewDoc = { ...doc, scenarios: replayScenarioReviews(events), phrases: {}, approved_at: null, approved_commit: null, threads: [], agent_session: null, decisions: [], git_effects: [] }
   for (const event of events) {
     if (event.type === 'PhraseReviewRemoved') delete next.phrases[event.key]
     else if (event.type === 'PhraseApproved' || event.type === 'PhraseChangesRequested') putEntry(next.phrases, event.key, event.entry)
@@ -234,15 +262,22 @@ export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): R
       next.threads.push(structuredClone(event.thread))
     }
     else if (event.type === 'ReviewAgentSessionSet') next.agent_session = event.session
-    else if (event.type === 'DiscussionOwnerReplied' || event.type === 'DiscussionAgentReplied' || event.type === 'DiscussionResolved' || event.type === 'DiscussionPatchUpdated') {
+    else if (event.type === 'OwnerDecisionRaised' || event.type === 'OwnerDecisionChosen' || event.type === 'OwnerDecisionDismissed' || event.type === 'OwnerDecisionReattached' || event.type === 'OwnerDecisionRecorded') {
+      try { projectOwnerDecision(next, event) }
+      catch (error) { throw new ReviewFileError(REVIEW_EVENTS_FILE, [(error as Error).message]) }
+    }
+    else if (event.type === 'GitEffectRequested' || event.type === 'GitEffectCompleted' || event.type === 'GitEffectPending' || event.type === 'GitEffectFailed' || event.type === 'GitEffectUncertain') {
+      try { projectReviewEffect(next, event) }
+      catch (error) { throw new ReviewFileError(REVIEW_EVENTS_FILE, [(error as Error).message]) }
+    }
+    else if (event.type === 'PatchRejected' || event.type === 'PatchRechecked' || event.type === 'PatchApplicationRequested' || event.type === 'PatchApplied' || event.type === 'PatchApplicationPending' || event.type === 'PatchApplicationUncertain' || event.type === 'PatchApplicationFailed') {
+      try { projectPatch(next, event) } catch (error) { throw new ReviewFileError(REVIEW_EVENTS_FILE, [(error as Error).message]) }
+    }
+    else if (event.type === 'DiscussionOwnerReplied' || event.type === 'DiscussionAgentReplied' || event.type === 'DiscussionResolved') {
       const thread = next.threads.find(t => t.id === event.threadId)
       if (!thread) throw new ReviewFileError(REVIEW_EVENTS_FILE, [`Event refers to missing discussion ${event.threadId}`])
       if (event.type === 'DiscussionResolved') thread.status = 'resolved'
-      else if (event.type === 'DiscussionPatchUpdated') {
-        const message = thread.messages[event.index]
-        if (!message?.patch) throw new ReviewFileError(REVIEW_EVENTS_FILE, ['Patch event refers to missing patch'])
-        message.patch = structuredClone(event.patch)
-      } else {
+      else {
         thread.messages.push(structuredClone(event.message))
         thread.status = event.type === 'DiscussionOwnerReplied' ? 'open' : event.status
       }
@@ -251,13 +286,16 @@ export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): R
   if (doc.threads.some(t => !next.threads.some(recorded => recorded.id === t.id)) || (doc.agent_session && !events.some(e => e.type === 'ReviewAgentSessionSet'))) {
     throw new ReviewFileError(REVIEW_FILE, ['Discussion snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
+  if (doc.decisions.some(d => !next.decisions.some(recorded => recorded.id === d.id)) || doc.git_effects.some(e => !next.git_effects.some(recorded => recorded.plan.effectId === e.plan.effectId))) {
+    throw new ReviewFileError(REVIEW_FILE, ['Decision or effect snapshot has no supported event history. Legacy snapshot imports are not supported.'])
+  }
   return next
 }
 function putEntry(entries: Record<string, Entry>, key: string, entry: Entry): void {
   Object.defineProperty(entries, key, { value: entry, writable: true, configurable: true, enumerable: true })
 }
 function approvalState(doc: ReviewDoc) {
-  return { scenarios: doc.scenarios, phrases: doc.phrases, approved_at: doc.approved_at, approved_commit: doc.approved_commit, threads: doc.threads, agent_session: doc.agent_session }
+  return { scenarios: doc.scenarios, phrases: doc.phrases, approved_at: doc.approved_at, approved_commit: doc.approved_commit, threads: doc.threads, agent_session: doc.agent_session, decisions: doc.decisions, git_effects: doc.git_effects }
 }
 async function replaceFile(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
@@ -291,7 +329,7 @@ async function commitReviewEvents(changeDir: string, expected: ReviewStream, eve
   return [...expected.events, ...events]
 }
 
-export async function recordReviewEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; review?: ReviewDoc; verify?: () => Promise<void> }>, origin: 'approval-command' | 'discussion-command' | 'fixture' = 'discussion-command'): Promise<void> {
+export async function recordReviewEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; review?: ReviewDoc; verify?: () => Promise<void> }>, origin: 'approval-command' | 'discussion-command' | 'patch-command' | 'decision-command' | 'fixture' = 'discussion-command'): Promise<void> {
   await withReviewLock(changeDir, async () => {
     const stream = await readReviewStream(changeDir)
     const previous = projectReview(await readReviewSnapshot(changeDir), stream.events)

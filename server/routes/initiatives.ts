@@ -9,7 +9,9 @@ import { HttpError } from '../errors.ts'
 import { briefFits, MAX_BRIEF_CHARS, saveBrief } from '../initiative-brief.ts'
 import { commitPaths, initiativeCommitMessage } from '../initiative-git.ts'
 import { type CreateInput, createInitiative } from '../initiative-create.ts'
-import { findRun, INITIATIVE_FILE, readInitiative, updateInitiative } from '../initiative-store.ts'
+import { findRun, readInitiative, withInitiativeLock } from '../initiative-store.ts'
+import { executeInitiativeCommand } from '../initiative-commands.ts'
+import { initiativeBusinessPaths } from '../inputs.ts'
 import { listInitiatives, loadInitiativeView, sliceStatuses, summarizeInitiative } from '../initiatives.ts'
 import { acceptDraft, discardDraft, type IncomingFile, MAX_TOTAL_INPUT_BYTES, readInput, readRepoFile, setDomains, uploadInputs } from '../inputs.ts'
 import { startPlanner } from '../planner-run.ts'
@@ -17,7 +19,6 @@ import { resumeResearch, startResearch } from '../research-run.ts'
 import { nowIso, readReview } from '../review-store.ts'
 import type { InitiativeRunService, RunTarget } from '../run-service.ts'
 import type { Sandbox } from '../sandbox.ts'
-import { approvePlan, editPlan } from '../slice-plan.ts'
 import { publishInitiativeChanged, resolveInitiativeTarget } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
 
@@ -177,26 +178,22 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
   app.put(`${base}/plan`, async (c) => {
     const t = await target(c)
     const { slices } = PlanEdit.parse(await c.req.json())
-    const statuses = await sliceStatuses(t.wt, await readInitiative(t.ini.dir))
-    const doc = await updateInitiative(t.ini.dir, (d) => ({ ...d, plan: editPlan(d.plan, slices, statuses) }))
+    const doc = await withInitiativeLock(t.ini.dir, async () => {
+      const statuses = await sliceStatuses(t.wt, await readInitiative(t.ini.dir))
+      return executeInitiativeCommand(t.ini.dir, { type: 'edit-plan', slices, statuses }, nowIso())
+    })
     changed(t)
     return c.json({ plan: doc.plan })
   })
 
   app.post(`${base}/plan/approve`, async (c) => {
     const t = await target(c)
-    const pending = pendingBlocking((await readReview(t.ini.dir)).decisions).length
-    if (pending) throw new HttpError(409, 'decisions_pending', `${pending} blocking decision(s) of the initiative are open`)
-    const doc = await updateInitiative(t.ini.dir, (d) => {
-      // A planner run in flight could still overwrite the plan it is about to approve (it
-      // replaces plan.slices wholesale when it finishes) — refuse until it settles.
-      if (d.runs.some((r) => r.kind === 'planner' && r.outcome === 'running')) {
-        throw new HttpError(409, 'planner_running', 'The planner is running; wait for it to finish before approving the plan')
-      }
-      return { ...d, plan: approvePlan(d.plan, nowIso()) }
+    const commit = await withInitiativeLock(t.ini.dir, async () => {
+      const pending = pendingBlocking((await readReview(t.ini.dir)).decisions).length
+      const doc = await executeInitiativeCommand(t.ini.dir, { type: 'approve-plan', pending }, nowIso())
+      return commitPaths(t.wt.path, initiativeBusinessPaths(t.ini.relDir),
+        initiativeCommitMessage(`${t.ini.name} - slice plan approved (${doc.plan.slices.length} slices)`, trailer))
     })
-    const commit = await commitPaths(t.wt.path, [`${t.ini.relDir}/${INITIATIVE_FILE}`],
-      initiativeCommitMessage(`${t.ini.name} — slice plan approved (${doc.plan.slices.length} slices)`, trailer))
     changed(t)
     return c.json({ commit })
   })

@@ -32,8 +32,10 @@ scenarios:
     then:
       bind: { correction: response.body.commit }
       events:
-        - DiscussionPatchUpdated: { threadId: $thread, index: 1, patch: { state: applied } }
-        - DiscussionPatchUpdated: { threadId: $thread, index: 1, patch: { state: applied, commit: $correction } }
+        - GitEffectRequested: { effect: { purpose: { kind: review-patch } } }
+        - PatchApplicationRequested: { threadId: $thread, index: 1 }
+        - GitEffectCompleted: { commit: $correction }
+        - PatchApplied: { threadId: $thread, index: 1, commit: $correction }
       response: { status: 200, body: { commit: $correction } }
       reads:
         - path: $change
@@ -118,3 +120,28 @@ scenarios:
       reads:
         - path: $change
           response: { status: 200, body: { review: { threads: [{ id: $thread, status: resolved }] } } }
+
+  - id: retain-unconfirmed-patch
+    scenario: Keep a patch unconfirmed when its Git commit fails
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { patch: true }
+      - GitCommitUnavailable: {}
+    when:
+      ApplyReviewPatch: { thread: $thread, summary: Correct the response. }
+    then:
+      events:
+        - GitEffectRequested: { effect: { purpose: { kind: review-patch } } }
+        - PatchApplicationRequested: { threadId: $thread, index: 1 }
+        - GitEffectPending: {}
+        - PatchApplicationPending: { threadId: $thread, index: 1 }
+      response: { status: 409, body: { error: { code: patch_application_pending } } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - messages: [{ role: owner }, { patch: { state: applying, commit: null } }]
+              readiness: { ready: false }

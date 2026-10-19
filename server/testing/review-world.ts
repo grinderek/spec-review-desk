@@ -1,3 +1,4 @@
+import { executeOwnerDecision } from '../decision-commands.ts'
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -10,7 +11,7 @@ import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import {
   readReviewEvents, recordApprovalEvents, recordReviewEvents,
-  updateReview, type ApprovalEvent, type DecisionRecord, type Entry, type Section,
+  type ApprovalEvent, type DecisionRecord, type Entry, type Section,
 } from '../review-store.ts'
 import { registerReadRoutes } from '../routes/read.ts'
 import { registerReviewRoutes } from '../routes/review.ts'
@@ -102,7 +103,16 @@ export class ReviewWorld {
         scope: data.scope ?? { kind: 'change' }, options: data.options ?? [], recommended: data.recommended ?? null, blocking: data.blocking ?? true, status: data.status ?? 'open',
         choice: data.choice ?? null, recorded: data.recorded ?? null, dismissed: data.dismissed ?? null, created_at: String(this.vars.at),
         ...(data.requested_domains ? { requested_domains: data.requested_domains } : {}), }
-      await updateReview(this.dir, (review) => ({ ...review, decisions: [...review.decisions, decision] }))
+      const status = decision.status
+      await executeOwnerDecision(this.dir, { type: 'RaiseOwnerDecisions', decisions: [{ ...decision, status: 'open', choice: null, recorded: null, dismissed: null }] }, 'fixture')
+      if (status === 'decided' || status === 'recorded') {
+        await executeOwnerDecision(this.dir, { type: 'ChooseOwnerDecision', id: decision.id,
+          choice: decision.choice ?? { option: decision.options[0]?.id ?? null, note: 'Fixture owner choice' }, at: String(this.vars.at) }, 'fixture')
+      }
+      if (status === 'recorded') await executeOwnerDecision(this.dir, { type: 'RecordOwnerDecision', id: decision.id,
+        recorded: decision.recorded ?? { how: 'decisions_md', commit: (await git(this.repo, ['rev-parse', 'HEAD'])).trim() } }, 'fixture')
+      if (status === 'dismissed') await executeOwnerDecision(this.dir, { type: 'DismissOwnerDecision', id: decision.id,
+        reason: decision.dismissed?.reason ?? 'Outside the fixture scope', at: String(this.vars.at) }, 'fixture')
     } else throw Error(`Unsupported Given event ${name}`)
   }
   async ready(): Promise<void> {

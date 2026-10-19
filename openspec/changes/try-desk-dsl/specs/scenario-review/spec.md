@@ -159,3 +159,35 @@ Discussion messages and status are projected from the review journal.
 #### Scenario: Restore a closed discussion from its event history
 
 Losing the derived review view preserves the closed conversation without repeating the agent call.
+
+#### Scenario: Keep a patch unconfirmed when its Git commit fails
+
+A materialized correction is not applied until a verified Git commit exists. Pending application blocks readiness.
+
+#### Scenario: Keep the owner choice blocking when its decision commit fails
+
+The executable contract records the command, journal events and public observations.
+
+#### Scenario: Retry the pending decision commit without choosing again
+
+The executable contract records the command, journal events and public observations.
+
+#### Scenario: Recover the recorded choice and its readable log from event history
+
+The executable contract records the command, journal events and public observations.
+
+#### Scenario: Restore the approved plan and research material from initiative history
+
+The executable contract records the command, journal events and public observations.
+
+#### Scenario: Discard research without accepting it as agent input
+
+The executable contract records the command, journal events and public observations.
+
+#### Scenario: Record the owner's allowed research domains
+
+The executable contract records the command, journal events and public observations.
+
+#### Scenario: Refuse an old correction after its owner choice moves to another scenario
+
+A correction remains bound to the exact scenario and choice shown to its agent. Reattaching the decision requires a fresh resolving correction.
