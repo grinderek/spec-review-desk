@@ -8,7 +8,7 @@ smoke scripts or adapters on your own initiative.
 The previous 488 checks in 58 files remain deleted. Vitest, its configuration, isolated temporary
 root, coverage support and dependencies remain available for future owner-requested tests.
 The suite is currently empty; Vitest succeeds with `passWithNoTests`, without claiming test coverage.
-The existing product corpus remains 37 contracts / 50 executions; no extra cases were added to
+The existing product corpus remains 40 contracts / 53 executions; no extra cases were added to
 compensate for the deletion.
 
 ## Verification
@@ -38,6 +38,7 @@ The removed suite separately checked malformed input, compatibility, concurrency
 Git rollback, process recovery and helper/UI details. Those cases no longer have dedicated automated
 coverage. The remaining product and browser flows do not claim equivalent coverage.
 
-Approval events remain replayable. Other domains retain their YAML storage. Contract event assertions
-refer to the approval journal; other state is observed through public views. All verification runs
+Approval and discussion events are replayable, including messages, status, patches and reviewer sessions.
+Other domains retain YAML storage. Contract event assertions refer to the complete review journal;
+other state is observed through public views. All verification runs
 use disposable fixture repositories and never forge owner approvals in the real repository.

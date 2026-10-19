@@ -9,7 +9,8 @@ scenarios:
     when:
       ResolveDiscussion: { thread: $thread }
     then:
-      events: []
+      events:
+        - DiscussionResolved: { threadId: $thread }
       response: { status: 200, body: { ok: true } }
       reads:
         - path: $change
@@ -30,7 +31,9 @@ scenarios:
       ApplyReviewPatch: { thread: $thread, summary: Correct the response. }
     then:
       bind: { correction: response.body.commit }
-      events: []
+      events:
+        - DiscussionPatchUpdated: { threadId: $thread, index: 1, patch: { state: applied } }
+        - DiscussionPatchUpdated: { threadId: $thread, index: 1, patch: { state: applied, commit: $correction } }
       response: { status: 200, body: { commit: $correction } }
       reads:
         - path: $change
@@ -48,7 +51,9 @@ scenarios:
     when:
       ReplyToDiscussion: { thread: $thread, text: What does the revision mean? }
     then:
-      events: []
+      events:
+        - DiscussionOwnerReplied: { threadId: $thread, message: { role: owner, text: What does the revision mean? } }
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: The revised response expresses acceptance. }, status: answered }
       response: { status: 202, body: { ok: true } }
       reads:
         - path: $change
@@ -64,3 +69,52 @@ scenarios:
                       - { role: agent, text: The response confirms success. }
                       - { role: owner, text: What does the revision mean? }
                       - { role: agent, text: The revised response expresses acceptance. }
+
+  - id: open-discussion
+    scenario: Open a discussion and retain the verified agent answer
+    given:
+      - ScenarioDiscovered: {}
+      - AgentReplyPrepared: { answer: The response confirms success. }
+    when:
+      OpenDiscussion: { anchor: scenario, ref: $key, text: Explain the contract. }
+    then:
+      bind: { thread: response.body.id }
+      events:
+        - DiscussionOpened: { thread: { id: $thread, anchor: scenario, ref: $key, status: open, messages: [{ role: owner, text: Explain the contract. }] } }
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: The response confirms success. }, status: answered }
+      response: { status: 201 }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - id: $thread
+                    status: answered
+                    messages: [{ role: owner, text: Explain the contract. }, { role: agent, text: The response confirms success. }]
+  - id: recover-closed-discussion
+    scenario: Restore a closed discussion from its event history
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { text: Explain the contract., answer: The response confirms success. }
+      - DiscussionClosed: {}
+      - ReviewProjectionUnavailable: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          review:
+            threads:
+              - id: $thread
+                anchor: scenario
+                ref: $key
+                status: resolved
+                messages: [{ role: owner, text: Explain the contract. }, { role: agent, text: The response confirms success. }]
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { threads: [{ id: $thread, status: resolved }] } } }

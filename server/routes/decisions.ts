@@ -1,3 +1,4 @@
+import { decideDiscussion } from '../discussion-commands.ts'
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
@@ -10,7 +11,7 @@ import type { ChangeRef, WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { OptionSchema, ScopeSchema } from '../protocol.ts'
 import { ownerMessage, type QuestionService } from '../questions.ts'
-import { addThread, appendMessage, newId, nowIso, readReview, type ReviewDoc, setThreadStatus, updateReview } from '../review-store.ts'
+import { newId, nowIso, readReview, recordReviewEvents, type ReviewDoc, type DiscussionEvent, updateReview } from '../review-store.ts'
 import { assertWritable, relDirOf, resolveChange } from './resolve.ts'
 
 const NewDecision = z
@@ -30,15 +31,15 @@ export interface DecisionRouteDeps { questions: QuestionService }
 
 // Spec §6: a decided scenario decision goes back to the agent — into the thread that raised it, or
 // a new thread on its scenario — asking for the "# Owner decision" patch that resolves it.
-function postDecision(doc: ReviewDoc, decisionId: string, newThreadId: string, at: string): { doc: ReviewDoc; threadId: string } {
+function postDecision(doc: ReviewDoc, decisionId: string, newThreadId: string, at: string): { events: DiscussionEvent[]; threadId: string } {
   const decided = findDecision(doc, decisionId)
-  if (decided.scope.kind !== 'scenario') return { doc, threadId: newThreadId }
+  if (decided.scope.kind !== 'scenario') return { events: [], threadId: newThreadId }
   const message = ownerMessage(ownerDecisionText(decided, at.slice(0, 10)), new Date(at))
   const source = decided.source
   const existing = source.kind === 'thread' ? doc.threads.find((t) => t.id === source.id && t.anchor !== 'apply') : undefined
-  if (existing) return { doc: setThreadStatus(appendMessage(doc, existing.id, message), existing.id, 'open'), threadId: existing.id }
+  if (existing) return { events: decideDiscussion(doc, { type: 'ReplyToDiscussion', threadId: existing.id, message }), threadId: existing.id }
   return {
-    doc: addThread(doc, { id: newThreadId, anchor: 'scenario', ref: decided.scope.key, status: 'open', messages: [message] }),
+    events: decideDiscussion(doc, { type: 'OpenDiscussion', thread: { id: newThreadId, anchor: 'scenario', ref: decided.scope.key, status: 'open', messages: [message] } }),
     threadId: newThreadId,
   }
 }
@@ -93,10 +94,11 @@ export function registerDecisionRoutes(app: Hono, ctx: AppContext, deps: Decisio
     const at = nowIso()
     const fresh = newId('t')
     let threadId = fresh
-    await updateReview(ref.dir, (doc) => {
-      const posted = postDecision(decideDecision(doc, id, choice, at), id, fresh, at)
+    await recordReviewEvents(ref.dir, async (doc) => {
+      const decided = decideDecision(doc, id, choice, at)
+      const posted = postDecision(decided, id, fresh, at)
       threadId = posted.threadId
-      return posted.doc
+      return { events: posted.events, review: decided }
     })
     void deps.questions.ask(wt, ref, threadId)
     changed(wt, ref)

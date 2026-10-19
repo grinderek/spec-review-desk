@@ -1,9 +1,9 @@
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { ApplyService } from '../apply.ts'
 import { worktreeId } from '../discovery.ts'
 import { git } from '../git.ts'
-import { readReview, readReviewEvents, ReviewSchema, updateReview } from '../review-store.ts'
+import { readReview, readReviewEvents, REVIEW_FILE, ReviewSchema, updateReview } from '../review-store.ts'
 import { FINISHERS } from '../run-kinds.ts'
 import { InitiativeRunService } from '../run-service.ts'
 import { RunnerService } from '../runner.ts'
@@ -75,6 +75,10 @@ export class DeskWorld {
       this.review.agentReply = { answer: data.answer ?? 'Noted.', patch: data.patch ? await this.patch() : null, decisions: [], resolves: data.resolves ?? [], status: 'answered' }
       const r = await this.setupCommand('OpenDiscussion', { anchor: 'scenario', ref: this.vars.key, text: data.text ?? 'Explain the contract.' })
       this.vars.thread = r.body.id
+    } else if (name === 'DiscussionClosed') {
+      await this.setupCommand('ResolveDiscussion', { thread: this.vars.thread })
+    } else if (name === 'ReviewProjectionUnavailable') {
+      await rm(path.join(this.changeDir || this.review.dir, REVIEW_FILE), { force: true })
     } else if (name === 'AgentReplyPrepared') {
       this.review.agentReply = { answer: data.answer ?? 'Noted.', patch: data.patch ? await this.patch() : null, decisions: data.decisions ?? [], resolves: data.resolves ?? [], status: 'answered' }
     } else if (name === 'InitiativeOpened') {

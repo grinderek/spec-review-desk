@@ -19,9 +19,9 @@ and keep `specs/**/spec.md` titles equal to those contracts. Use stable scenario
 approved contracts to make an implementation pass.
 
 Given facts prepare prior history and environment; When executes one public command; Then checks
-new approval-journal events and public responses. Use response bindings for generated values and subsequent
+new review-journal events and public responses. Use response bindings for generated values and subsequent
 GET observations for persisted state. Keep domain adapters small and add them for operations,
-not scenario wording. Discussion, decision and agent-run state retains its existing persistence.
+not scenario wording. Discussions and reviewer sessions project from the review journal; decision and agent-run state retains its existing persistence.
 
 Run `npm test`, `npm run typecheck` and relevant browser checks. `npm run desk` opens this repository
 with its local contract runner. `npm test` runs the product corpus and any owner-requested Vitest tests;
@@ -29,4 +29,4 @@ an empty Vitest suite succeeds. `npm run test:self` checks execution through Des
 
 Desk owns review.yaml, review.events.jsonl and decisions.md. Agents must not forge approvals or
 edit their history. Scenario, phrase and whole-change approvals project from review.events.jsonl;
-other review fields still use YAML. Use the existing serialized update path for mutations.
+discussion messages, status, patch metadata and reviewer sessions also project from that journal; other review fields still use YAML. Use the existing serialized update path for mutations.

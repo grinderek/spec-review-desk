@@ -14,12 +14,15 @@ scenarios:
             key: $key
             hash: $hash
             commit: null
+        - DiscussionOpened:
             thread:
               id: $thread
               anchor: scenario
               ref: $key
               status: open
               messages: [{ role: owner, text: The expected response looks wrong. }]
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: Noted. }, status: answered }
       response: { status: 200, body: { threadId: $thread } }
       reads:
         - path: $change

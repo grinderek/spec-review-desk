@@ -3,7 +3,7 @@ import { allScenarios, findPhrase, findScenario, loadChangeView } from './change
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { headSha } from './git.ts'
 import type { Readiness } from './readiness.ts'
-import { nowIso, recordApprovalEvents, withReviewLock, type ApprovalEvent, type Entry, type ReviewDoc, type Section, type Thread } from './review-store.ts'
+import { nowIso, recordApprovalEvents, withReviewLock, type ApprovalEvent, type ReviewDomainEvent, type Entry, type ReviewDoc, type Section, type Thread } from './review-store.ts'
 
 export type ApprovalCommand =
   | { type: 'ApproveScenario' | 'RevokeScenario' | 'ApprovePhrase' | 'RevokePhrase'; key: string }
@@ -36,7 +36,7 @@ function requestedThread(command: Extract<ApprovalCommand, { type: 'RequestScena
 
 // The state passed here is replayed approval history,
 // rather than an edited target ReviewDoc. Only this decision produces command events.
-export function decideApproval(state: ReviewDoc, command: ApprovalCommand, facts: ApprovalFacts, at: string): ApprovalEvent[] {
+export function decideApproval(state: ReviewDoc, command: ApprovalCommand, facts: ApprovalFacts, at: string): ReviewDomainEvent[] {
   if (command.type === 'RecordChangeApproval') {
     if (!facts.readiness?.ready) throw new HttpError(409, 'not_ready', `Not ready: ${facts.readiness?.reasons.join('; ') ?? 'readiness unavailable'}`)
     if (!facts.commit) throw new Error('Git HEAD is required to record change approval')
@@ -58,7 +58,7 @@ export function decideApproval(state: ReviewDoc, command: ApprovalCommand, facts
   if (!facts.hash) throw new HttpError(404, section === 'scenarios' ? 'unknown_scenario' : 'unknown_phrase', `No ${section === 'scenarios' ? 'scenario' : 'phrase'} ${command.key}`)
   if (command.type === 'RequestScenarioChanges') {
     const entry = { status: 'changes_requested' as const, text_hash: facts.hash, approved_commit: null, at }
-    return [{ type: 'ScenarioChangesRequested', key: command.key, entry, thread: requestedThread(command, at) }]
+    return [{ type: 'ScenarioChangesRequested', key: command.key, entry }, { type: 'DiscussionOpened', thread: requestedThread(command, at) }]
   }
   const entry = { status: 'approved' as const, text_hash: facts.hash, approved_commit: section === 'scenarios' ? facts.commit ?? null : null, at }
   return [entryEvent(section, command.key, entry)]

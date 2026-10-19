@@ -33,7 +33,8 @@ function payload(event: ReviewEvent): unknown {
   if ('entry' in event) return { key: event.key, hash: event.entry.text_hash, commit: event.entry.approved_commit, at: event.entry.at, ...('thread' in event && event.thread ? { thread: event.thread } : {}) }
   if ('key' in event) return { key: event.key }
   if ('commit' in event) return { at: event.at, commit: event.commit }
-  return {}
+  const { version, stream, sequence, id, command, at, origin, type, ...data } = event
+  return data
 }
 for (const file of files) {
   const doc = parseDeskDsl(await readFile(path.join(root, file), 'utf8'), `features/${file}`)

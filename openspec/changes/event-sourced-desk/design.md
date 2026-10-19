@@ -144,11 +144,12 @@ Desk проверяет уже существующий process/container/log/co
 | S3. Инициативы и research | План, inputs, зависимости, owner decisions, разрешения чтения; отдельный cutover без автоматического импорта. Lifecycle общего execution остается в YAML до S4. | Согласование плана и исследовательские разрешения восстановимы из истории, drafts не становятся принятыми inputs. | S2; отдельное согласование изменения политики persistence. |
 | S4. Исполнение | Устойчивые intents/results для reviewer, research, planner, author, Apply и verification; resume/stop/recovery. | Restart не дает самовольного повторного исполнения; реальный outcome и owner gate сохранены, неопределенный outcome виден явно. | S2-S3. Effect handling для уже перенесенного workflow делается в его срезе, а не откладывается целиком сюда. |
 | S5. Проекции и отчеты | Rebuild, journal-based views и читаемый отчет; убрать авторитетные snapshots перенесенных областей. | Удаление только производных views восстанавливает те же публичные ответы без новых owner events и внешних действий. | S1-S4. |
-| S6. Собственный пакет изменений | Общее представление change package; native Desk layout, stable-id corpus/results, независимое vetting и author/apply prompts. | Новый change проходит создание, review, исполнение и проверку без установки OpenSpec. Старый проект продолжает работать через adapter. | S5. Интерфейс пакета можно начать выделять раньше без смены поведения. |
-| S7. Переключение Desk | Self-review использует native packages; удалить обязательный title join и CLI validation из native path. | Основной процесс Desk не требует OpenSpec; история и старые ссылки доступны; legacy/import/export остаются явной опцией. | S6 и сравнение результатов обоих путей. |
+| S6. Собственный пакет изменений | Общее представление change package; native Desk layout, stable-id corpus/results, независимое vetting и author/apply prompts. | Новый change проходит создание, review, исполнение и проверку без установки OpenSpec. Старые внутренние форматы не поддерживаются. | S5. Интерфейс пакета можно начать выделять раньше без смены поведения. |
+| S7. Переключение Desk | Self-review использует native packages; удалить обязательный title join и CLI validation из native path. | Основной процесс Desk не требует OpenSpec; история текущего формата доступна; внутренние legacy/import/export удалены. | S6 и полный native workflow. |
 
 S1 начат с approve/revoke scenario и завершен переносом остальных approval operations в
-[approval-command-events](../approval-command-events/design.md). Следующий бизнес-срез - S2. Инфраструктура растет ровно
+[approval-command-events](../approval-command-events/design.md). Первый discussion срез S2 реализуется в [discussion-events](../discussion-events/design.md).
+Решения и durable patch effects остаются следующими срезами S2. Инфраструктура растет ровно
 на потребности этих срезов. Полный generic framework заранее не строим.
 
 ## Собственный пакет Desk
@@ -170,10 +171,8 @@ gitignored runtime directory. Markdown остается удобным форм�
 редактируемую копию expectations.
 
 Stable-id mapping нужен для approval keys, corpus comparison, verification results и ссылок UI.
-Изменение места пакета не должно менять `features/<relative-file>::<scenario-id>`. Старые
-title-based results разрешаются адаптером; неоднозначность требует явного исправления.
-Импорт сохраняет hashes, history и происхождение, не создает approvals. Каталоги фраз Gherkin
-и внешние OpenSpec проекты обслуживаются legacy adapter, пока они нужны пользователю.
+Изменение места пакета не должно менять `features/<relative-file>::<scenario-id>`. Результаты используют stable ids. Поддержка старых внутренних title-based results и
+автоматический импорт не требуются. Старые workspaces не преобразуются агентом.
 
 Вынос OpenSpec за интерфейс включает discovery, room assembly, author output validation,
 installation, Apply prompts, archive/import, конфигурацию и self-review scripts. Проверяем

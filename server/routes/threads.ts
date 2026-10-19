@@ -1,3 +1,4 @@
+import { executeDiscussionCommand } from '../discussion-commands.ts'
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
@@ -9,7 +10,7 @@ import { commitFiles, resetStaged } from '../git.ts'
 import { applyPatch, commitMessage, revertPatch } from '../patch.ts'
 import { ownerMessage, type QuestionService, vetPatch } from '../questions.ts'
 import {
-  addThread, appendMessage, newId, readReview, REVIEW_FILE, type ReviewDoc, setThreadStatus, type Thread, updatePatch, updateReview,
+  newId, readReview, REVIEW_FILE, REVIEW_EVENTS_FILE, type ReviewDoc, type Thread,
 } from '../review-store.ts'
 import { assertWritable, relDirOf, resolveChange } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
@@ -46,7 +47,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     if (body.anchor === 'scenario' && !findScenario(view, body.ref)) throw new HttpError(404, 'unknown_scenario', `No scenario ${body.ref}`)
     if (body.anchor === 'phrase' && !findPhrase(view, body.ref)) throw new HttpError(404, 'unknown_phrase', `No phrase ${body.ref}`)
     const id = newId('t')
-    await updateReview(ref.dir, (doc) => addThread(doc, { id, anchor: body.anchor, ref: body.ref, status: 'open', messages: [ownerMessage(body.text)] }))
+    await executeDiscussionCommand(ref.dir, { type: 'OpenDiscussion', thread: { id, anchor: body.anchor, ref: body.ref, status: 'open', messages: [ownerMessage(body.text)] } })
     void deps.questions.ask(wt, ref, id)
     changed(wt, ref)
     return c.json({ id }, 201)
@@ -57,7 +58,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const id = c.req.param('id')
     const { text } = Reply.parse(await c.req.json())
     const thread = threadOf(await readReview(ref.dir), id)
-    await updateReview(ref.dir, (doc) => setThreadStatus(appendMessage(doc, id, ownerMessage(text)), id, 'open'))
+    await executeDiscussionCommand(ref.dir, { type: 'ReplyToDiscussion', threadId: id, message: ownerMessage(text) })
     if (thread.anchor === 'apply') {
       if (!deps.resumeApply) throw new HttpError(503, 'apply_unavailable', 'Apply is not available')
       void deps.resumeApply(wt, ref, id)
@@ -72,7 +73,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
     const id = c.req.param('id')
     threadOf(await readReview(ref.dir), id)
-    await updateReview(ref.dir, (doc) => setThreadStatus(doc, id, 'resolved'))
+    await executeDiscussionCommand(ref.dir, { type: 'ResolveDiscussion', threadId: id })
     changed(wt, ref)
     return c.json({ ok: true })
   })
@@ -83,7 +84,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const index = Number(c.req.param('msg'))
     const message = threadOf(await readReview(ref.dir), id).messages[index]
     if (!message?.patch) throw new HttpError(404, 'unknown_patch', `Message ${index} has no patch`)
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'rejected' }))
+    await executeDiscussionCommand(ref.dir, { type: 'UpdateDiscussionPatch', threadId: id, index, change: { state: 'rejected' } })
     changed(wt, ref)
     return c.json({ ok: true })
   })
@@ -96,7 +97,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     if (!patch) throw new HttpError(404, 'unknown_patch', `Message ${index} has no patch`)
     if (patch.state !== 'stale') throw new HttpError(409, 'patch_not_stale', 'Only a stale patch can be re-checked')
     const vetted = await vetPatch(wt.path, relDirOf(wt, ref), patch.diff)
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: vetted.state, error: vetted.error, files: vetted.files }))
+    await executeDiscussionCommand(ref.dir, { type: 'UpdateDiscussionPatch', threadId: id, index, change: { state: vetted.state, error: vetted.error, files: vetted.files } })
     changed(wt, ref)
     return c.json({ state: vetted.state, error: vetted.error })
   })
@@ -113,13 +114,13 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const relDir = relDirOf(wt, ref)
     const vetted = await vetPatch(wt.path, relDir, patch.diff)
     if (vetted.state !== 'proposed') {
-      await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'stale', error: vetted.error }))
+      await executeDiscussionCommand(ref.dir, { type: 'UpdateDiscussionPatch', threadId: id, index, change: { state: 'stale', error: vetted.error } })
       changed(wt, ref)
       throw new HttpError(409, 'patch_stale', vetted.error ?? 'The patch no longer applies')
     }
     await applyPatch(wt.path, patch.diff)
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'applied', files: vetted.files }))
-    const staged = [...vetted.files, `${relDir}/${REVIEW_FILE}`]
+    await executeDiscussionCommand(ref.dir, { type: 'UpdateDiscussionPatch', threadId: id, index, change: { state: 'applied', files: vetted.files } })
+    const staged = [...vetted.files, `${relDir}/${REVIEW_FILE}`, `${relDir}/${REVIEW_EVENTS_FILE}`]
     let sha: string
     try {
       sha = await commitFiles(wt.path, staged, commitMessage(ref.name, summary, ctx.config.commitTrailer))
@@ -127,14 +128,14 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
       try {
         await resetStaged(wt.path, staged)
         await revertPatch(wt.path, patch.diff)
-        await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'proposed' }))
+        await executeDiscussionCommand(ref.dir, { type: 'UpdateDiscussionPatch', threadId: id, index, change: { state: 'proposed' } })
       } catch (revertError) {
-        await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'stale', error: (revertError as Error).message }))
+        await executeDiscussionCommand(ref.dir, { type: 'UpdateDiscussionPatch', threadId: id, index, change: { state: 'stale', error: (revertError as Error).message } })
       }
       throw error
     }
     // Spec §6: the decisions this patch resolves become recorded only once its commit exists.
-    await updateReview(ref.dir, (doc) => recordResolved(updatePatch(doc, id, index, { commit: sha }), message.resolves ?? [], sha))
+    await executeDiscussionCommand(ref.dir, { type: 'UpdateDiscussionPatch', threadId: id, index, change: { commit: sha } }, doc => recordResolved(doc, message.resolves ?? [], sha))
     changed(wt, ref)
     return c.json({ commit: sha })
   })

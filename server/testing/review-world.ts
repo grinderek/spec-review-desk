@@ -9,7 +9,7 @@ import { parseCatalog } from '../catalog.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import {
-  addThread, readReviewEvents, recordApprovalEvents,
+  readReviewEvents, recordApprovalEvents, recordReviewEvents,
   updateReview, type ApprovalEvent, type DecisionRecord, type Entry, type Section,
 } from '../review-store.ts'
 import { registerReadRoutes } from '../routes/read.ts'
@@ -31,8 +31,8 @@ export class ReviewWorld {
     this.app = createBaseApp(this.ctx)
     this.questions = new QuestionService({ config: this.ctx.config, bus: this.ctx.bus,
       // The external LLM is deterministic; the real service still validates and persists its reply.
-      runCodex: async () => ({ ok: true, text: String(this.agentReply.answer), structured: this.agentReply,
-        sessionId: '00000000-0000-4000-8000-000000000001', numTurns: 1, error: null, timedOut: false }),
+      runCodex: async spec => ({ ok: true, text: String(this.agentReply.answer), structured: this.agentReply,
+        sessionId: spec.sessionId, numTurns: 1, error: null, timedOut: false }),
     })
     registerReadRoutes(this.app, this.ctx, { codex: false, docker: false })
     registerReviewRoutes(this.app, this.ctx, { questions: this.questions })
@@ -95,7 +95,7 @@ export class ReviewWorld {
       const entry = parseCatalog(source).phrases[0]!
       this.vars.phrase = entry.key; this.vars.phraseHash = entry.hash
     } else if (name === 'ReviewThreadOpened') {
-      await updateReview(this.dir, (review) => addThread(review, { id: data.id ?? 't_fixture', anchor: data.anchor ?? 'change', ref: data.ref ?? '', status: data.status ?? 'open', messages: data.messages ?? [] }))
+      await recordReviewEvents(this.dir, async () => ({ events: [{ type: 'DiscussionOpened', thread: { id: data.id ?? 't_fixture', anchor: data.anchor ?? 'change', ref: data.ref ?? '', status: data.status ?? 'open', messages: data.messages ?? [] } }] }), 'fixture')
     } else if (name === 'DecisionRaised') {
       this.vars.decision = data.id ?? 'd_fixture'
       const decision: DecisionRecord = { id: data.id ?? 'd_fixture', agent_id: data.agent_id ?? null, source: data.source ?? { kind: 'owner' }, question: data.question ?? 'Owner choice?',

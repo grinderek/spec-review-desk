@@ -144,13 +144,21 @@ async function readReviewSnapshot(changeDir: string): Promise<ReviewDoc> {
 export const REVIEW_EVENTS_FILE = 'review.events.jsonl'
 export type ApprovalEvent =
   | { type: 'ScenarioApproved'; key: string; entry: Entry & { status: 'approved' } }
-  | { type: 'ScenarioChangesRequested'; key: string; entry: Entry & { status: 'changes_requested' }; thread?: Thread }
+  | { type: 'ScenarioChangesRequested'; key: string; entry: Entry & { status: 'changes_requested' } }
   | { type: 'ScenarioReviewRemoved'; key: string }
   | { type: 'PhraseApproved'; key: string; entry: Entry & { status: 'approved' } }
   | { type: 'PhraseChangesRequested'; key: string; entry: Entry & { status: 'changes_requested' } }
   | { type: 'PhraseReviewRemoved'; key: string }
   | { type: 'ChangeApprovalRecorded'; at: string; commit: string }
   | { type: 'ChangeApprovalRemoved' }
+export type DiscussionEvent =
+  | { type: 'DiscussionOpened'; thread: Thread }
+  | { type: 'DiscussionOwnerReplied'; threadId: string; message: Message }
+  | { type: 'DiscussionAgentReplied'; threadId: string; message: Message; status: 'open' | 'answered' }
+  | { type: 'DiscussionResolved'; threadId: string }
+  | { type: 'DiscussionPatchUpdated'; threadId: string; index: number; patch: Patch }
+  | { type: 'ReviewAgentSessionSet'; session: string }
+export type ReviewDomainEvent = ApprovalEvent | DiscussionEvent
 const ApprovalEnvelopeSchema = z.object({
   version: z.literal(2),
   stream: z.string().uuid(),
@@ -158,17 +166,23 @@ const ApprovalEnvelopeSchema = z.object({
   id: z.string().uuid(),
   command: z.string().uuid(),
   at: z.string(),
-  origin: z.enum(['approval-command', 'fixture']),
+  origin: z.enum(['approval-command', 'discussion-command', 'fixture']),
 })
 const ReviewEventSchema = z.discriminatedUnion('type', [
   ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
-  ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioChangesRequested'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('changes_requested') }), thread: ThreadSchema.optional() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioChangesRequested'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('changes_requested') }) }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioReviewRemoved'), key: z.string() }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('PhraseApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('PhraseChangesRequested'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('changes_requested') }) }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('PhraseReviewRemoved'), key: z.string() }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('ChangeApprovalRecorded'), at: z.string(), commit: z.string() }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('ChangeApprovalRemoved') }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionOpened'), thread: ThreadSchema }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionOwnerReplied'), threadId: z.string(), message: MessageSchema.extend({ role: z.literal('owner') }) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionAgentReplied'), threadId: z.string(), message: MessageSchema.extend({ role: z.literal('agent') }), status: z.enum(['open', 'answered']) }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionResolved'), threadId: z.string() }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('DiscussionPatchUpdated'), threadId: z.string(), index: z.number().int().nonnegative(), patch: PatchSchema }).strict(),
+  ApprovalEnvelopeSchema.extend({ type: z.literal('ReviewAgentSessionSet'), session: z.string() }).strict(),
 ])
 export type ReviewEvent = z.infer<typeof ReviewEventSchema>
 export interface ReviewStream { events: ReviewEvent[]; text: string; version: string }
@@ -206,15 +220,36 @@ export async function readReview(changeDir: string): Promise<ReviewDoc> {
   return projectReview(doc, (await readReviewStream(changeDir)).events)
 }
 export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): ReviewDoc {
-  if (!events.length && (Object.keys(doc.scenarios).length || Object.keys(doc.phrases).length || doc.approved_at || doc.approved_commit)) {
-    throw new ReviewFileError(REVIEW_FILE, ['Approval snapshot has no supported event history. Legacy snapshot imports are not supported.'])
+  if (!events.length && (Object.keys(doc.scenarios).length || Object.keys(doc.phrases).length || doc.approved_at || doc.approved_commit || doc.threads.length || doc.agent_session)) {
+    throw new ReviewFileError(REVIEW_FILE, ['Review snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
-  const next: ReviewDoc = { ...doc, scenarios: replayScenarioReviews(events), phrases: {}, approved_at: null, approved_commit: null }
+  const next: ReviewDoc = { ...doc, scenarios: replayScenarioReviews(events), phrases: {}, approved_at: null, approved_commit: null, threads: [], agent_session: null }
   for (const event of events) {
     if (event.type === 'PhraseReviewRemoved') delete next.phrases[event.key]
     else if (event.type === 'PhraseApproved' || event.type === 'PhraseChangesRequested') putEntry(next.phrases, event.key, event.entry)
     else if (event.type === 'ChangeApprovalRecorded') { next.approved_at = event.at; next.approved_commit = event.commit }
     else if (event.type === 'ChangeApprovalRemoved') { next.approved_at = null; next.approved_commit = null }
+    else if (event.type === 'DiscussionOpened') {
+      if (next.threads.some(t => t.id === event.thread.id)) throw new ReviewFileError(REVIEW_EVENTS_FILE, ['Duplicate discussion id'])
+      next.threads.push(structuredClone(event.thread))
+    }
+    else if (event.type === 'ReviewAgentSessionSet') next.agent_session = event.session
+    else if (event.type === 'DiscussionOwnerReplied' || event.type === 'DiscussionAgentReplied' || event.type === 'DiscussionResolved' || event.type === 'DiscussionPatchUpdated') {
+      const thread = next.threads.find(t => t.id === event.threadId)
+      if (!thread) throw new ReviewFileError(REVIEW_EVENTS_FILE, [`Event refers to missing discussion ${event.threadId}`])
+      if (event.type === 'DiscussionResolved') thread.status = 'resolved'
+      else if (event.type === 'DiscussionPatchUpdated') {
+        const message = thread.messages[event.index]
+        if (!message?.patch) throw new ReviewFileError(REVIEW_EVENTS_FILE, ['Patch event refers to missing patch'])
+        message.patch = structuredClone(event.patch)
+      } else {
+        thread.messages.push(structuredClone(event.message))
+        thread.status = event.type === 'DiscussionOwnerReplied' ? 'open' : event.status
+      }
+    }
+  }
+  if (doc.threads.some(t => !next.threads.some(recorded => recorded.id === t.id)) || (doc.agent_session && !events.some(e => e.type === 'ReviewAgentSessionSet'))) {
+    throw new ReviewFileError(REVIEW_FILE, ['Discussion snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
   return next
 }
@@ -222,7 +257,7 @@ function putEntry(entries: Record<string, Entry>, key: string, entry: Entry): vo
   Object.defineProperty(entries, key, { value: entry, writable: true, configurable: true, enumerable: true })
 }
 function approvalState(doc: ReviewDoc) {
-  return { scenarios: doc.scenarios, phrases: doc.phrases, approved_at: doc.approved_at, approved_commit: doc.approved_commit }
+  return { scenarios: doc.scenarios, phrases: doc.phrases, approved_at: doc.approved_at, approved_commit: doc.approved_commit, threads: doc.threads, agent_session: doc.agent_session }
 }
 async function replaceFile(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
@@ -237,14 +272,14 @@ async function writeReviewSnapshotMutation(changeDir: string, doc: ReviewDoc): P
   const stream = await readReviewStream(changeDir)
   const previous = projectReview(await readReviewSnapshot(changeDir), stream.events)
   if (!isDeepStrictEqual(approvalState(next), approvalState(previous))) {
-    throw new ReviewFileError(path.join(changeDir, REVIEW_FILE), ['Approval state can only be changed by an explicit approval command.'])
+    throw new ReviewFileError(path.join(changeDir, REVIEW_FILE), ['Journaled review state can only be changed by an explicit domain command.'])
   }
   await commitReviewEvents(changeDir, stream, [])
-  // Snapshot mutations persist only the non-approval part of the mixed document.
+  // Snapshot mutations persist only fields not yet migrated to the journal.
   await replaceFile(path.join(changeDir, REVIEW_FILE), stringify(next, { lineWidth: 0 }))
 }
 
-// All explicit approval commands commit through this path.
+// All explicit review domain commands commit through this path.
 // The caller holds withReviewLock from loading history through projection writing.
 async function commitReviewEvents(changeDir: string, expected: ReviewStream, events: readonly ReviewEvent[]): Promise<ReviewEvent[]> {
   if ((await readReviewStream(changeDir)).version !== expected.version) {
@@ -256,22 +291,21 @@ async function commitReviewEvents(changeDir: string, expected: ReviewStream, eve
   return [...expected.events, ...events]
 }
 
-export async function recordApprovalEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ApprovalEvent[]; verify?: () => Promise<void> }>, origin: 'approval-command' | 'fixture' = 'approval-command'): Promise<void> {
+export async function recordReviewEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; review?: ReviewDoc; verify?: () => Promise<void> }>, origin: 'approval-command' | 'discussion-command' | 'fixture' = 'discussion-command'): Promise<void> {
   await withReviewLock(changeDir, async () => {
     const stream = await readReviewStream(changeDir)
     const previous = projectReview(await readReviewSnapshot(changeDir), stream.events)
-    const decision = await decide(previous)
+    const decision = await decide(structuredClone(previous))
     const streamId = stream.events[0]?.stream ?? randomUUID()
     const command = randomUUID()
     const events: ReviewEvent[] = decision.events.map((event, index) => ReviewEventSchema.parse({ ...event,
       version: 2, stream: streamId, sequence: stream.events.length + index + 1,
       id: randomUUID(), command, at: 'at' in event ? event.at : nowIso(), origin }))
     await decision.verify?.()
-    const history = await commitReviewEvents(changeDir, stream, events)
-    // Only the thread created by this command joins mixed YAML state. Historical threads
-    // are not replayed over later discussion state; that migration belongs to S2.
-    const threads = events.flatMap((event) => event.type === 'ScenarioChangesRequested' && event.thread ? [event.thread] : [])
-    const next = projectReview({ ...previous, threads: [...previous.threads, ...threads] }, history)
+    const mixed = ReviewSchema.parse(decision.review ?? previous)
+    if (!isDeepStrictEqual(approvalState(mixed), approvalState(previous))) throw new ReviewFileError(REVIEW_FILE, ['Command mixed state cannot alter journaled fields'])
+    const next = projectReview(mixed, [...stream.events, ...events])
+    await commitReviewEvents(changeDir, stream, events)
     await replaceFile(path.join(changeDir, REVIEW_FILE), stringify(next, { lineWidth: 0 }))
   })
 }
@@ -298,32 +332,6 @@ export function findThread(doc: ReviewDoc, id: string): Thread {
   return thread
 }
 
-function mapThread(doc: ReviewDoc, id: string, fn: (t: Thread) => Thread): ReviewDoc {
-  findThread(doc, id)
-  return { ...doc, threads: doc.threads.map((t) => (t.id === id ? fn(t) : t)) }
-}
-
-export const addThread = (doc: ReviewDoc, thread: Thread): ReviewDoc => ({ ...doc, threads: [...doc.threads, thread] })
-
-export const appendMessage = (doc: ReviewDoc, id: string, message: Message): ReviewDoc =>
-  mapThread(doc, id, (t) => ({ ...t, messages: [...t.messages, message] }))
-
-export const setThreadStatus = (doc: ReviewDoc, id: string, status: Thread['status']): ReviewDoc =>
-  mapThread(doc, id, (t) => ({ ...t, status }))
-
-export function updatePatch(doc: ReviewDoc, id: string, index: number, change: Partial<Patch>): ReviewDoc {
-  return mapThread(doc, id, (t) => ({
-    ...t,
-    messages: t.messages.map((m, i) => {
-      if (i !== index) return m
-      if (!m.patch) throw new Error(`message ${index} of ${id} has no patch`)
-      return { ...m, patch: { ...m.patch, ...change } }
-    }),
-  }))
-}
-
-export const setAgentSession = (doc: ReviewDoc, session: string): ReviewDoc => ({ ...doc, agent_session: session })
-
 export function upsertApplyRun(doc: ReviewDoc, run: ApplyRun): ReviewDoc {
   const exists = doc.apply_runs.some((r) => r.id === run.id)
   return { ...doc, apply_runs: exists ? doc.apply_runs.map((r) => (r.id === run.id ? run : r)) : [...doc.apply_runs, run] }
@@ -341,3 +349,5 @@ export function orphanKeys(
     phrases: Object.keys(doc.phrases).filter((k) => !phrases.has(k)),
   }
 }
+
+export const recordApprovalEvents = (changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; verify?: () => Promise<void> }>, origin: 'approval-command' | 'fixture' = 'approval-command') => recordReviewEvents(changeDir, decide, origin)

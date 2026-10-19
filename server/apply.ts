@@ -1,3 +1,4 @@
+import { decideDiscussion, executeDiscussionCommand } from './discussion-commands.ts'
 import { spawn } from 'node:child_process'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { closeSync, openSync } from 'node:fs'
@@ -19,8 +20,8 @@ import { buildResumePrompt, decisionsSection, scenarioKeysSection } from './prom
 import { AGENT_REPLY_SCHEMA_ARG, retryPrompt, validateReply } from './protocol.ts'
 import { replyContext } from './questions.ts'
 import {
-  addThread, appendMessage, type ApplyRun, type DecisionRecord, findThread, type Message, newId, nowIso, readReview, type ReviewDoc,
-  setThreadStatus, updateReview, upsertApplyRun,
+  type ApplyRun, type DecisionRecord, findThread, type Message, newId, nowIso, readReview, type ReviewDoc,
+  recordReviewEvents, type DiscussionEvent, updateReview, upsertApplyRun,
 } from './review-store.ts'
 
 export { NEEDS_OWNER, outcomeOf, readEvents } from './apply-outcome.ts'
@@ -202,7 +203,7 @@ export class ApplyService {
       const thread = doc.threads.find((t) => t.anchor === 'apply' && t.ref === runId)
       if (thread) {
         const message: Message = { role: 'owner', at: nowIso(this.#now()), text: prompt, note: null, patch: null }
-        await updateReview(ref.dir, (d) => setThreadStatus(appendMessage(d, thread.id, message), thread.id, 'open'))
+        await executeDiscussionCommand(ref.dir, { type: 'ReplyToDiscussion', threadId: thread.id, message })
       }
       await this.#launch(wt, ref, { ...run, outcome: 'running', ended_at: null, validation_retry: false }, prompt, true)
     } finally {
@@ -384,7 +385,7 @@ export class ApplyService {
       ...(decisions.length ? { decision_ids: decisions.map((d) => d.id) } : {}),
       ...(issues.length ? { invalid: { issues, raw: result.raw ?? result.text } } : {}),
     }
-    await updateReview(ref.dir, (doc) => this.#record(addDecisions(doc, decisions), final, message))
+    await recordReviewEvents(ref.dir, async doc => this.#record(addDecisions(doc, decisions), final, message))
     if (current?.runId === run.id) this.#active.delete(wt.path)
     this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome: final.outcome })
     this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })
@@ -395,17 +396,17 @@ export class ApplyService {
     const at = nowIso(this.#now())
     const final: ApplyRun = { ...run, outcome: 'failed', ended_at: at }
     const message: Message = { role: 'agent', at, text: `The apply run could not be reattached: ${reason}`, note: `apply run ${run.id}: failed`, patch: null }
-    await updateReview(ref.dir, (doc) => this.#record(doc, final, message))
+    await recordReviewEvents(ref.dir, async doc => this.#record(doc, final, message))
     this.deps.bus.publish(`run:${run.id}`, { type: 'done', outcome: 'failed' })
     this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }
 
-  #record(doc: ReviewDoc, run: ApplyRun, message: Message): ReviewDoc {
+  #record(doc: ReviewDoc, run: ApplyRun, message: Message): { review: ReviewDoc; events: DiscussionEvent[] } {
     const withRun = upsertApplyRun(doc, run)
     const existing = withRun.threads.find((t) => t.anchor === 'apply' && t.ref === run.id)
-    if (existing) return setThreadStatus(appendMessage(withRun, existing.id, message), existing.id, 'answered')
-    if (run.outcome !== 'needs_owner' && !message.invalid) return withRun
-    return addThread(withRun, { id: newId('t'), anchor: 'apply', ref: run.id, status: 'answered', messages: [message] })
+    if (existing) return { review: withRun, events: decideDiscussion(withRun, { type: 'AgentReply', threadId: existing.id, message, status: 'answered' }) }
+    if (run.outcome !== 'needs_owner' && !message.invalid) return { review: withRun, events: [] }
+    return { review: withRun, events: decideDiscussion(withRun, { type: 'OpenDiscussion', thread: { id: newId('t'), anchor: 'apply', ref: run.id, status: 'answered', messages: [message] } }) }
   }
 
   #untilDead(pid: number): Promise<void> {

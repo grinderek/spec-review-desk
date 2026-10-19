@@ -1,3 +1,4 @@
+import { executeDiscussionCommand } from './discussion-commands.ts'
 import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { allScenarios, type ChangeView, findPhrase, findScenario, loadChangeView } from './change-view.ts'
@@ -15,8 +16,7 @@ import {
   AGENT_REPLY_SCHEMA_ARG, type AgentKind, type AgentReply, parseReply, type ReplyContext, retryPrompt, validateReply,
 } from './protocol.ts'
 import {
-  appendMessage, type DecisionRecord, findThread, type Message, nowIso, type Patch, REVIEW_EVENTS_FILE, REVIEW_FILE, setAgentSession, setThreadStatus, type Thread,
-  updateReview,
+  type DecisionRecord, findThread, type Message, nowIso, type Patch, REVIEW_EVENTS_FILE, REVIEW_FILE, type Thread,
 } from './review-store.ts'
 
 export const QUESTION_TOOLS = { allowed: ['Read', 'Grep', 'Glob'], disallowed: ['Edit', 'Write', 'Bash', 'NotebookEdit', 'WebFetch', 'WebSearch'] }
@@ -183,7 +183,7 @@ export class QuestionService {
       }
       const fresh = randomUUID()
       session = fresh
-      await updateReview(ref.dir, (doc) => setAgentSession(doc, fresh))
+      await executeDiscussionCommand(ref.dir, { type: 'SetReviewAgentSession', session: fresh })
       outcome = await exec(spec(fresh, false, prompt), options)
     }
     let checked = outcome.ok ? await checkReply(wt, ref, 'question', outcome) : null
@@ -194,11 +194,11 @@ export class QuestionService {
       checked = outcome.ok ? await checkReply(wt, ref, 'question', outcome) : null
     }
 
-    if (outcome.sessionId) await updateReview(ref.dir, (doc) => setAgentSession(doc, outcome.sessionId))
+    if (outcome.sessionId) await executeDiscussionCommand(ref.dir, { type: 'SetReviewAgentSession', session: outcome.sessionId })
 
     const { message, decisions } = await this.#compose(wt.path, view.relDir, threadId, outcome, checked, note, nowIso(now()))
     const ok = Boolean(checked?.reply)
-    await updateReview(ref.dir, (doc) => setThreadStatus(appendMessage(addDecisions(doc, decisions), threadId, message), threadId, ok ? 'answered' : 'open'))
+    await executeDiscussionCommand(ref.dir, { type: 'AgentReply', threadId, message, status: ok ? 'answered' : 'open' }, doc => addDecisions(doc, decisions))
     bus.publish(topic, { type: 'done', ok })
     bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }

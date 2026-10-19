@@ -29,7 +29,10 @@ scenarios:
       DecideOwnerQuestion: { id: $decision, note: Use the revised response. }
     then:
       bind: { decisionThread: response.body.threadId }
-      events: []
+      events:
+        - DiscussionOpened: { thread: { id: $decisionThread, anchor: scenario, ref: $key } }
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $decisionThread, message: { role: agent, resolves: [$decision] }, status: answered }
       response: { status: 200, body: { status: decided, threadId: $decisionThread } }
       reads:
         - path: $change
@@ -49,7 +52,9 @@ scenarios:
       ApplyReviewPatch: { thread: $thread, summary: Record the choice. }
     then:
       bind: { choiceCommit: response.body.commit }
-      events: []
+      events:
+        - DiscussionPatchUpdated: { threadId: $thread, index: 1, patch: { state: applied } }
+        - DiscussionPatchUpdated: { threadId: $thread, index: 1, patch: { state: applied, commit: $choiceCommit } }
       response: { status: 200 }
       reads:
         - path: $change

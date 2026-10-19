@@ -29,8 +29,9 @@
 
 ## S2-S5. Бизнес-состояние и восстановление
 
-- [ ] Согласовать event observation boundary и persistence policy для обсуждений/решений.
-- [ ] Перенести threads, messages, patch lifecycle и owner decisions в review stream.
+- [x] Определить общую review-journal boundary для обсуждений; решения пока mixed YAML.
+- [x] Перенести discussion identity, messages, status, patch metadata и reviewer session в review stream.
+- [ ] Завершить durable patch effects и owner decisions в review stream.
 - [ ] Перенести initiative plan, inputs, decisions и research permissions в initiative stream.
 - [ ] Разделить durable intents, внешнее выполнение и подтвержденные результаты.
 - [ ] Обработать resume/stop/restart и неопределенный результат без слепого повторного запуска.
@@ -41,13 +42,13 @@
 
 ## S6-S7. Удаление обязательной зависимости OpenSpec
 
-- [ ] Выделить change package interface и legacy OpenSpec adapter.
-- [ ] Согласовать native package layout и правила импорта существующих пакетов.
-- [ ] Перевести corpus comparison и результаты runner с title-based matching на stable ids с legacy mapping.
+- [ ] Выделить change package interface и native package implementation.
+- [ ] Согласовать native package layout без поддержки старого внутреннего формата.
+- [ ] Перевести corpus comparison и результаты runner с title-based matching на stable ids без legacy mapping.
 - [ ] Подключить native discovery, author validation, installation, Apply и self-review.
 - [ ] Генерировать читаемую документацию из контрактов вместо ручного дублирования сценариев.
 - [ ] Проверить полный native workflow с отсутствующим OpenSpec CLI.
-- [ ] Переключить разработку Desk на native packages; оставить совместимость явной опцией.
+- [ ] Переключить разработку Desk на native packages; удалить внутренние compatibility adapters.
 
 ## На каждом реализованном срезе
 
@@ -58,4 +59,4 @@
 - [ ] Ручная проверка disposable workspace, восстановления views и отсутствия повторных внешних эффектов.
 
 Первый срез approve/revoke реализуется в [scenario-approval-events](../scenario-approval-events/proposal.md).
-Остальные approval commands завершены в [approval-command-events](../approval-command-events/proposal.md). S2-S7 еще не перенесены. Этот список не является записью одобрения владельца.
+Остальные approval commands завершены в [approval-command-events](../approval-command-events/proposal.md). Первый discussion срез S2 реализуется в discussion-events; остальные срезы S2-S7 не завершены. Этот список не является записью одобрения владельца.

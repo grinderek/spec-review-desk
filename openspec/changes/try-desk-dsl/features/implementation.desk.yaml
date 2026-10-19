@@ -46,7 +46,9 @@ scenarios:
     when:
       ResumeApply: { run: $applyRun }
     then:
-      events: []
+      events:
+        - DiscussionOwnerReplied: { message: { role: owner } }
+        - DiscussionAgentReplied: { message: { role: agent }, status: answered }
       response: { status: 202, body: { ok: true } }
       reads:
         - path: $change

@@ -151,3 +151,11 @@ Desk SHALL execute and review the following event/command contracts.
 #### Scenario: Preserve approval after YAML formatting changes
 - **WHEN** the declared command executes with its given history and environment
 - **THEN** the declared events, response and observations match
+
+#### Scenario: Open a discussion and retain the verified agent answer
+
+Discussion messages and status are projected from the review journal.
+
+#### Scenario: Restore a closed discussion from its event history
+
+Losing the derived review view preserves the closed conversation without repeating the agent call.

@@ -35,7 +35,7 @@ Keep the owner corpus small: a scenario describes a product rule someone can rea
 Write standalone unit or technical integration tests only at the owner’s explicit request. Do not extend
 the language or add cases to reproduce removed implementation checks.
 The review corpus retains its 14 rules. Discussions, owner decisions, initiatives, research,
-implementation, verification and agent usage add 24 core rules: 38 contracts / 51 executions across the app.
+implementation, verification and agent usage add 24 core rules: 40 contracts / 53 executions across the app.
 See [the application testing map](testing.md) for the repository verification policy.
 
 ## Case tables and observations
@@ -67,7 +67,7 @@ then:
 
 Each `then.reads` entry issues a GET and compares its response. Observations must not emit events.
 Responses and event payloads match listed object fields recursively; arrays match length and order
-exactly. Approval-journal events match exact count, order and type. Response status is an HTTP number. Failures
+exactly. Review-journal events match exact count, order and type. Response status is an HTTP number. Failures
 identify the contract, case and field; empty or malformed corpora fail.
 
 ## The review adapter
@@ -89,42 +89,32 @@ fake Codex CLI and sandbox transport, with real protocol parsing, services, fini
 Git writes. Local verification executes a real subprocess with a controlled workload. No live LLM
 or Docker is required for this corpus.
 
-Other domains retain their existing storage: `then.events` checks the approval journal, not every
-notification on the event bus. Their product contracts observe persisted state through public
-views; `events: []` ensures they do not accidentally write approvals. No domain events are invented
-from expected states, and this migration does not claim event sourcing for the entire application.
+`then.events` observes every new event in the review journal, including discussions, patch
+metadata and reviewer session selection. Other domains still use their public persisted views.
+No events are invented from expected state or transient event-bus notifications.
 
-## Approval persistence
+## Review persistence
 
-`review.events.jsonl` stores versioned ScenarioApproved, ScenarioChangesRequested,
-ScenarioReviewRemoved, PhraseApproved, PhraseChangesRequested, PhraseReviewRemoved,
-ChangeApprovalRecorded and ChangeApprovalRemoved events. Entry payloads are stored under `entry`;
-the adapter exposes key/hash/commit/at for assertions. ScenarioChangesRequested can include the
-initial owner thread. Subsequent conversation, decisions and agent runs remain in `review.yaml`.
+`review.events.jsonl` stores explicit approval and discussion events. Approval assertions expose
+entry fields as key/hash/commit/at; other assertions expose the event's domain payload directly.
+DiscussionOpened records the initial thread; owner/agent replies append complete messages;
+DiscussionResolved closes the thread. DiscussionPatchUpdated records the current patch metadata,
+and ReviewAgentSessionSet preserves the reviewer session. Replay never executes external effects.
 
-All approval operations decide events explicitly from replayed state and current source facts.
-The single supported journal format is version 2: stream/event/command UUIDs, sequence starting
-at 1, time and origin (`approval-command` or disposable `fixture`). Version 1, import checkpoints
-and snapshot-diff mutation bridges are unsupported. Old approval snapshots without a supported
-journal fail explicitly; Desk never silently imports or invents owner approvals.
+The supported envelope is version 2 with stream/event/command UUIDs, sequence from 1, time and
+origin approval-command, discussion-command or disposable fixture. Legacy embedded threads,
+unsupported history and snapshots without their required journal fail explicitly. No imports,
+checkpoints or snapshot-diff bridges exist. A request-changes command records approval and initial
+discussion in the same batch. Agent replies preserve validation failures and decision references.
 
-Writers atomically replace the journal with existing history plus a complete command batch before
-updating the YAML projection. Reads replay approval state after projection loss. Journaled
-approvals override manual YAML approval edits; mixed fields still use YAML. Request-changes
-records its initial thread in the event and writes it once to YAML; replay does not overwrite
-later discussion state. Losing that mixed YAML can therefore lose conversations, even though
-approvals survive. Invalid YAML or history is rejected rather than silently repaired.
-
-Updates queue per canonical change path inside a process and acquire an advisory flock between
-cooperating processes on WSL/Linux with the same host temp directory. A busy lock returns a
-conflict; flock is a required runtime utility. Journal commits check an internal expected byte
-version and atomically replace complete batches. External editors, old writers and Git commands
-do not participate in this lock. Journal rewrite cost grows with history. A failed projection write
-can leave a successful journal write, from which approval state is recovered; mixed YAML fields
-still require their snapshot. Git commits and unstaging of review.yaml include its journal.
-Agents cannot supply or edit approval history. See the
-[complete approval command slice](../../openspec/changes/approval-command-events/design.md) for source
-revalidation, retry, rollback and storage limits.
+The complete journal is atomically replaced before updating its YAML projection. Approvals,
+threads, patch metadata and reviewer session recover on read after projection loss; snapshot
+writers cannot alter them. Decisions and agent runs still require their mixed YAML snapshot.
+Writers share a canonical per-scope queue, advisory flock on WSL/Linux and byte-version check.
+A busy lock returns conflict; flock is required. External editors do not participate in the lock;
+journal rewrite cost grows with history and power-loss durability is not promised. A failed YAML
+write can follow a successful event commit. Replay does not resume model or Git work. See the
+[discussion slice](../../openspec/changes/discussion-events/design.md) for process and limits.
 
 ## Review and run Desk itself
 
