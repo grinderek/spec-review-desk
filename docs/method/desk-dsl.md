@@ -35,7 +35,7 @@ Keep the owner corpus small: a scenario describes a product rule someone can rea
 Write standalone unit or technical integration tests only at the owner’s explicit request. Do not extend
 the language or add cases to reproduce removed implementation checks.
 The review corpus retains its 14 rules. Discussions, owner decisions, initiatives, research,
-implementation and verification add 23 core rules: 37 contracts / 50 executions across the app.
+implementation, verification and agent usage add 24 core rules: 38 contracts / 51 executions across the app.
 See [the application testing map](testing.md) for the repository verification policy.
 
 ## Case tables and observations
@@ -94,7 +94,7 @@ notification on the event bus. Their product contracts observe persisted state t
 views; `events: []` ensures they do not accidentally write approvals. No domain events are invented
 from expected states, and this migration does not claim event sourcing for the entire application.
 
-## Persistence and compatibility
+## Approval persistence
 
 `review.events.jsonl` stores versioned ScenarioApproved, ScenarioChangesRequested,
 ScenarioReviewRemoved, PhraseApproved, PhraseChangesRequested, PhraseReviewRemoved,
@@ -102,17 +102,29 @@ ChangeApprovalRecorded and ChangeApprovalRemoved events. Entry payloads are stor
 the adapter exposes key/hash/commit/at for assertions. ScenarioChangesRequested can include the
 initial owner thread. Subsequent conversation, decisions and agent runs remain in `review.yaml`.
 
-Writers atomically replace the journal with existing history plus new events before updating the
-YAML projection. Reads replay all approval state after projection loss. Original YAML reviews and
-older scenario-only journals import their prior approval state once through a versioned
-ReviewApprovalHistoryExtended checkpoint. Import checkpoints are excluded from new domain event
-assertions. Journaled approvals override manual YAML approval edits; other fields retain YAML
-behavior. Invalid YAML or history is rejected rather than silently repaired.
+All approval operations decide events explicitly from replayed state and current source facts.
+The single supported journal format is version 2: stream/event/command UUIDs, sequence starting
+at 1, time and origin (`approval-command` or disposable `fixture`). Version 1, import checkpoints
+and snapshot-diff mutation bridges are unsupported. Old approval snapshots without a supported
+journal fail explicitly; Desk never silently imports or invents owner approvals.
 
-The existing per-change, per-process lock serializes updates. Multiple server processes writing
-one change remain unsupported; journal rewrite cost grows with history. A failed projection write
-can leave a successful journal write, from which approval state is recovered. Git commits and
-unstaging of review.yaml include its journal. Agents cannot supply or edit approval history.
+Writers atomically replace the journal with existing history plus a complete command batch before
+updating the YAML projection. Reads replay approval state after projection loss. Journaled
+approvals override manual YAML approval edits; mixed fields still use YAML. Request-changes
+records its initial thread in the event and writes it once to YAML; replay does not overwrite
+later discussion state. Losing that mixed YAML can therefore lose conversations, even though
+approvals survive. Invalid YAML or history is rejected rather than silently repaired.
+
+Updates queue per canonical change path inside a process and acquire an advisory flock between
+cooperating processes on WSL/Linux with the same host temp directory. A busy lock returns a
+conflict; flock is a required runtime utility. Journal commits check an internal expected byte
+version and atomically replace complete batches. External editors, old writers and Git commands
+do not participate in this lock. Journal rewrite cost grows with history. A failed projection write
+can leave a successful journal write, from which approval state is recovered; mixed YAML fields
+still require their snapshot. Git commits and unstaging of review.yaml include its journal.
+Agents cannot supply or edit approval history. See the
+[complete approval command slice](../../openspec/changes/approval-command-events/design.md) for source
+revalidation, retry, rollback and storage limits.
 
 ## Review and run Desk itself
 

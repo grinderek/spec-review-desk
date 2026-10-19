@@ -9,8 +9,8 @@ import { parseCatalog } from '../catalog.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import {
-  addThread, readReviewEvents,
-  setEntry, updateReview, type DecisionRecord, type Entry,
+  addThread, readReviewEvents, recordApprovalEvents,
+  updateReview, type ApprovalEvent, type DecisionRecord, type Entry, type Section,
 } from '../review-store.ts'
 import { registerReadRoutes } from '../routes/read.ts'
 import { registerReviewRoutes } from '../routes/review.ts'
@@ -66,6 +66,14 @@ export class ReviewWorld {
   private entry(data: Record<string, any>, status: Entry['status'] = 'approved'): Entry {
     return { status, text_hash: data.hash, approved_commit: data.commit ?? null, at: data.at ?? String(this.vars.at) }
   }
+  private async priorEntry(section: Section, key: string, entry: Entry): Promise<void> {
+    const event: ApprovalEvent = section === 'scenarios'
+      ? entry.status === 'approved' ? { type: 'ScenarioApproved', key, entry: { ...entry, status: 'approved' } }
+        : { type: 'ScenarioChangesRequested', key, entry: { ...entry, status: 'changes_requested' } }
+      : entry.status === 'approved' ? { type: 'PhraseApproved', key, entry: { ...entry, status: 'approved' } }
+        : { type: 'PhraseChangesRequested', key, entry: { ...entry, status: 'changes_requested' } }
+    await recordApprovalEvents(this.dir, async () => ({ events: [event] }), 'fixture')
+  }
   async given(name: string, data: Record<string, any>): Promise<void> {
     if (name === 'ScenarioDiscovered' || name === 'ScenarioRevised') {
       if (data.file) this.subjectRel = data.file
@@ -75,9 +83,9 @@ export class ReviewWorld {
       this.vars.key = `${this.subjectRel}::subject`; this.vars.hash = contractHash(this.subject)
       if (name === 'ScenarioDiscovered') { sh(this.repo, 'git', ['add', '-A']); sh(this.repo, 'git', ['commit', '-q', '-m', 'source contract discovered']); this.vars.head = await headSha(this.repo) }
     } else if (name === 'ScenarioApproved' || name === 'ScenarioChangesRequested' || name === 'PhraseApproved') {
-      await updateReview(this.dir, (review) => setEntry(review, name === 'PhraseApproved' ? 'phrases' : 'scenarios', data.key, this.entry(data, name === 'ScenarioChangesRequested' ? 'changes_requested' : 'approved')))
+      await this.priorEntry(name === 'PhraseApproved' ? 'phrases' : 'scenarios', data.key, this.entry(data, name === 'ScenarioChangesRequested' ? 'changes_requested' : 'approved'))
     } else if (name === 'ReviewEntryRecorded') {
-      await updateReview(this.dir, (review) => setEntry(review, data.section, data.key, this.entry(data)))
+      await this.priorEntry(data.section, data.key, this.entry(data))
     } else if (name === 'ScenarioReformatted') await writeFile(this.sourceFile, '# Presentation-only change\n' + stringify({ scenarios: [this.subject], feature: 'Subject', version: 1 }))
     else if (name === 'PhraseProposed') {
       const phrase = data.phrase ?? 'the owner reviews {string}'
