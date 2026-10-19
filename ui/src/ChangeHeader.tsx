@@ -10,7 +10,7 @@ function RunnerStat({ id, runner, docker }: { id: ChangeId; runner: RunnerState 
   const act = useAction()
   let value: ReactNode
   if (!runner) value = <span className="pill">no runner profile</span>
-  else if (runner.running) value = <><span className="pill p-thread">running…</span><button className="btn" onClick={() => void act(() => api.stopCorpus(id.wt))}>Stop</button></>
+  else if (runner.running || runner.queued) value = <><span className="pill p-thread">{runner.running ? runner.queued ? 'running; rerun queued' : 'running' : 'rerun queued'}</span><button className="btn" onClick={() => void act(() => api.stopCorpus(id.wt))}>Stop</button></>
   else if (runner.up === false) value = (
     <>
       <span className="pill r-failed">runner off</span>

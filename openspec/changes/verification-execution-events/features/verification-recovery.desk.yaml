@@ -116,3 +116,49 @@ scenarios:
       response:
         status: 200
         body: { state: { outcome: done, running: false, stale: true } }
+  - id: recover-queued-verification
+    scenario: Restart preserves a requested rerun after accepting the previous result
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationReceiptAvailable: {}
+      - VerificationRerunPending: {}
+    when:
+      RestartVerification: {}
+    then:
+      stream: verification
+      bind: { run: response.body.state.runId }
+      events:
+        - ExecutionReceiptAccepted: { runId: $previousVerification }
+        - VerificationReportAccepted: { runId: $previousVerification, sourceUnchanged: true }
+        - ExecutionSettled: { runId: $previousVerification, outcome: done }
+        - VerificationSourceCaptured: { runId: $run }
+        - ExecutionQueued: { request: { id: $run, role: verification } }
+        - ExecutionAttemptRequested: { runId: $run }
+        - VerificationRerunStarted: { requestId: $verificationRerun, runId: $run }
+        - ExecutionAttemptObserved: { runId: $run }
+        - ExecutionReceiptAccepted: { runId: $run }
+        - VerificationReportAccepted: { runId: $run, sourceUnchanged: true }
+        - ExecutionSettled: { runId: $run, outcome: done }
+      response: { status: 200, body: { state: { outcome: done, running: false, queued: false, stale: false } } }
+  - id: cancel-queued-verification
+    scenario: Stop cancels the saved rerun together with the active verification
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationReceiptAvailable: {}
+      - VerificationRerunPending: {}
+    when:
+      StopVerification: {}
+    then:
+      stream: verification
+      events:
+        - VerificationRerunCancelled: { requestId: $verificationRerun }
+        - ExecutionStopRequested: { runId: $previousVerification }
+        - ExecutionReceiptAccepted: { runId: $previousVerification }
+        - VerificationReportAccepted: { runId: $previousVerification, commandError: Stopped by the owner }
+        - ExecutionSettled: { runId: $previousVerification, outcome: stopped }
+      response: { status: 202 }
+      reads:
+        - path: $runner
+          response: { status: 200, body: { state: { outcome: stopped, running: false, queued: false } } }

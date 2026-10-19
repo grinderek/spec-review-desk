@@ -46,12 +46,12 @@ export interface PreviewFields { name: string; repoPath: string; where: 'new' | 
 export function createPreview(f: PreviewFields): string[] {
   if (!f.name) return []
   const first = f.where === 'new'
-    ? `git -C ${f.repoPath} worktree add .codex/worktrees/${f.name} -b plan/${f.name} ${f.base}`
+    ? `create the owned branch plan/${f.name} at ${f.base}; git -C ${f.repoPath} worktree add .codex/worktrees/${f.name} plan/${f.name}`
     : `use the existing worktree ${f.worktreePath ?? '(pick one)'}`
   return [
     first,
-    `write openspec/initiatives/${f.name}/{initiative.yaml,brief.md,inputs/}`,
-    `git commit -m "docs(openspec): ${f.name} — initiative"`,
+    `write openspec/initiatives/${f.name}/{initiative.events.jsonl,initiative.yaml,brief.md,inputs/}`,
+    `git commit -m "docs(initiative): ${f.name} - initiative"`,
   ]
 }
 

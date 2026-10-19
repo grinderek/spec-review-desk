@@ -1,14 +1,14 @@
-import { lstat, mkdir, readFile, realpath, rename, stat, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { lstat, readFile, realpath, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { HttpError } from './errors.ts'
 import { git } from './git.ts'
-import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
-import { INITIATIVE_FILE, INPUT_FILE, type InitiativeDoc, type InputEntry, readInitiative, withInitiativeLock } from './initiative-store.ts'
+import { initiativeCommitMessage } from './initiative-git.ts'
+import { INPUT_FILE, type InitiativeDoc, type InputEntry, readInitiative } from './initiative-store.ts'
 import type { RunTarget } from './run-service.ts'
-import { INITIATIVE_EVENTS_FILE, storeInitiativeBlob } from './initiative-events.ts'
+import { storeInitiativeBlob } from './initiative-events.ts'
 import { executeInitiativeCommand } from './initiative-commands.ts'
-
-export const initiativeBusinessPaths = (rel: string): string[] => [`${rel}/${INITIATIVE_FILE}`, `${rel}/${INITIATIVE_EVENTS_FILE}`, `${rel}/blobs`]
+import { executeInitiativeOwnerOperation, initiativeBlobOutputs, initiativeOwnerGitInput, ownerRequestHash } from './initiative-owner-effects.ts'
 
 // Spec B §7: uploads and repo copies land in openspec/initiatives/<name>/inputs/, in git.
 export const INPUT_EXTENSIONS = ['.pdf', '.md', '.txt', '.yaml', '.yml', '.json', '.png', '.jpg', '.jpeg']
@@ -51,23 +51,6 @@ export function planInputs(doc: Pick<InitiativeDoc, 'inputs'>, files: readonly I
   })
 }
 
-// Temp file + rename inside inputs/, after a realpath containment check.
-export async function writeInputs(initiativeDir: string, planned: readonly { name: string; file: IncomingFile }[], at: string): Promise<InputEntry[]> {
-  const dir = path.join(initiativeDir, 'inputs')
-  await mkdir(dir, { recursive: true })
-  const real = await realpath(dir)
-  if (!real.startsWith(`${await realpath(initiativeDir)}${path.sep}`)) throw new HttpError(409, 'unsafe_path', 'inputs/ escapes the initiative')
-  const entries: InputEntry[] = []
-  for (const { name, file } of planned) {
-    const target = path.join(real, name)
-    const tmp = path.join(real, `.${name}.${process.pid}.tmp`)
-    await writeFile(tmp, file.bytes)
-    await rename(tmp, target)
-    entries.push({ file: name, bytes: file.bytes.byteLength, blob: await storeInitiativeBlob(initiativeDir, file.bytes), source: file.source, added_at: at, draft: false })
-  }
-  return entries
-}
-
 const inside = (root: string, file: string): boolean => file === root || file.startsWith(`${root}${path.sep}`)
 
 // "Add from repo": a regular file inside the hub or a configured repo; provenance = path + HEAD.
@@ -89,17 +72,17 @@ export async function readRepoFile(roots: readonly string[], hubRoot: string, re
 }
 
 export async function uploadInputs(target: RunTarget, files: readonly IncomingFile[], trailer: string, at: string): Promise<string[]> {
-  const { wt, ini } = target
   if (files.length === 0) throw new HttpError(400, 'no_files', 'Nothing to add')
-  return withInitiativeLock(ini.dir, async () => {
-    const planned = planInputs(await readInitiative(ini.dir), files)
-    const entries = await writeInputs(ini.dir, planned, at)
-    await executeInitiativeCommand(ini.dir, { type: 'add-inputs', inputs: entries }, at)
-    const names = entries.map((e) => e.file)
-    await commitPaths(wt.path, [...names.map((n) => `${ini.relDir}/inputs/${n}`), ...initiativeBusinessPaths(ini.relDir)],
-      initiativeCommitMessage(`${ini.name} - inputs: ${names.join(', ')}`, trailer))
-    return names
-  })
+  const requestHash=ownerRequestHash(files.map(file=>({name:file.name,source:file.source,hash:createHash('sha256').update(file.bytes).digest('hex')})))
+  const saved=await executeInitiativeOwnerOperation(target,{operation:'inputs',requestHash,prepare:async doc=>{
+    const planned=planInputs(doc,files)
+    const entries:InputEntry[]=await Promise.all(planned.map(async({name,file})=>({file:name,bytes:file.bytes.byteLength,blob:await storeInitiativeBlob(target.ini.dir,file.bytes),source:file.source,added_at:at,draft:false})))
+    const names=entries.map(entry=>entry.file)
+    return {command:{type:'add-inputs',inputs:entries},result:{files:names},git:async next=>initiativeOwnerGitInput(target,next,'inputs',
+      initiativeCommitMessage(`${target.ini.name} - inputs: ${names.join(', ')}`,trailer),
+      entries.flatMap(entry=>initiativeBlobOutputs(target,entry.blob,`inputs/${entry.file}`)).filter((output,index,outputs)=>outputs.findIndex(other=>other.path===output.path)===index))}
+  }})
+  return saved.result.files as string[]
 }
 
 // Desk fixes item 4: the Desk shows an input (a research draft before Accept, any other input on
@@ -121,7 +104,7 @@ export async function readInput(target: RunTarget, file: string): Promise<Served
   const dir = path.join(ini.dir, 'inputs')
   const unsafe = new HttpError(409, 'unsafe_path', `${entry.file} is not a regular file inside the inputs of ${ini.name}`)
   // inputs/ itself must be the initiative's own directory, not a symlink to elsewhere (review fix
-  // 2) — the same containment writeInputs checks before it writes.
+  // 2). Immutable content and reconstructed views remain inside this initiative.
   const root = path.join(await realpath(ini.dir), 'inputs')
   let real: string
   try {
@@ -144,16 +127,13 @@ function draftOf(doc: InitiativeDoc, file: string): InputEntry {
 }
 
 export async function acceptDraft(target: RunTarget, file: string, trailer: string): Promise<{ commit: string }> {
-  const { wt, ini } = target
-  return withInitiativeLock(ini.dir, async () => {
-    const doc = await readInitiative(ini.dir)
-    const entry = draftOf(doc, file)
-    const topic = entry.source.kind === 'research' ? (doc.runs.find((r) => r.id === (entry.source as { run: string }).run)?.topic ?? file) : file
-    await executeInitiativeCommand(ini.dir, { type: 'accept-input', file })
-    const commit = await commitPaths(wt.path, [`${ini.relDir}/inputs/${file}`, ...initiativeBusinessPaths(ini.relDir)],
-      initiativeCommitMessage(`${ini.name} - research: ${topic}`, trailer))
-    return { commit }
-  })
+  const saved=await executeInitiativeOwnerOperation(target,{operation:'research-accept',requestHash:ownerRequestHash({file}),prepare:async doc=>{
+    const entry=draftOf(doc,file)
+    const topic=entry.source.kind==='research'?(doc.runs.find(run=>run.id===(entry.source as {run:string}).run)?.topic??file):file
+    return {command:{type:'accept-input',file},result:{},git:async next=>initiativeOwnerGitInput(target,next,'research-accept',
+      initiativeCommitMessage(`${target.ini.name} - research: ${topic}`,trailer),initiativeBlobOutputs(target,entry.blob,`inputs/${file}`))}
+  }})
+  return {commit:saved.commit!}
 }
 
 export async function discardDraft(target: RunTarget, file: string): Promise<void> {
@@ -163,12 +143,10 @@ export async function discardDraft(target: RunTarget, file: string): Promise<voi
 
 // The domain allowlist editor (ruling 5); domain edits commit (ruling 9).
 export async function setDomains(target: RunTarget, raw: readonly string[], trailer: string): Promise<string[]> {
-  const { wt, ini } = target
-  return withInitiativeLock(ini.dir, async () => {
-    const before = await readInitiative(ini.dir)
-    const doc = await executeInitiativeCommand(ini.dir, { type: 'set-domains', domains: raw })
-    if (before.research.domains.join(',') === doc.research.domains.join(',')) return doc.research.domains
-    await commitPaths(wt.path, initiativeBusinessPaths(ini.relDir), initiativeCommitMessage(`${ini.name} - research domains`, trailer))
-    return doc.research.domains
-  })
+  const saved=await executeInitiativeOwnerOperation(target,{operation:'domains',requestHash:ownerRequestHash({domains:raw}),prepare:async()=>({
+    command:{type:'set-domains',domains:raw},result:{},noChange:true,
+    git:async next=>initiativeOwnerGitInput(target,next,'domains',initiativeCommitMessage(`${target.ini.name} - research domains`,trailer)),
+  })})
+  void saved
+  return (await readInitiative(target.ini.dir)).research.domains
 }

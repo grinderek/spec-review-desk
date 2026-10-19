@@ -7,7 +7,7 @@ import { browserFilter, egressFilter } from './egress.ts'
 import { run } from './git.ts'
 import {
   AUTH_STORE, AUTH_VOLUME, agentRunArgs, browserName, browserNetworkCreateArgs, browserOutNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs,
-  cleanupArgs, containerName, egressRunArgs, networkConnectArgs, networkCreateArgs, outNetworkCreateArgs, teardownArgs,
+  cleanupArgs, containerName, browserProxyName, egressName, egressRunArgs, networkConnectArgs, networkCreateArgs, outNetworkCreateArgs, teardownArgs,
 } from './sandbox-args.ts'
 
 // Spec B §5: one docker container per agent attempt, behind a per-run egress proxy (ruling 1).
@@ -99,10 +99,15 @@ export class DockerSandbox implements Sandbox {
 
   durableProvider() { return { module: import.meta.url, config: this.config } }
   async inspect(runId: string): Promise<'running' | 'exited' | 'missing' | 'unknown'> {
-    const result = await this.#docker(['inspect', '--format', '{{.State.Running}}', containerName(runId)], true).catch(() => null)
-    if (!result) return 'unknown'
-    if (result.code === 0) return result.stdout.trim() === 'true' ? 'running' : 'exited'
-    return /No such (?:object|container)/i.test(result.stderr) ? 'missing' : 'unknown'
+    const states=await Promise.all([containerName(runId),browserName(runId),browserProxyName(runId),egressName(runId)].map(async name=>{
+      const result=await this.#docker(['inspect','--format','{{.State.Running}}',name],true).catch(()=>null)
+      if(!result)return 'unknown' as const
+      if(result.code===0)return result.stdout.trim()==='true'?'running' as const:result.stdout.trim()==='false'?'exited' as const:'unknown' as const
+      return /No such (?:object|container)/i.test(result.stderr)?'missing' as const:'unknown' as const
+    }))
+    if(states.includes('running'))return 'running'
+    if(states.includes('unknown'))return 'unknown'
+    return states[0]!
   }
 
   #docker(args: readonly string[], allowFailure = false) {
@@ -194,7 +199,9 @@ export class DockerSandbox implements Sandbox {
     } finally {
       await rm(envFile, { force: true })
       if (chatgpt) await rm(path.join(spec.sessions, 'auth.json'), { force: true })
-      if (!spec.retain) for (const args of teardownArgs(spec.runId)) await this.#ok(args)
+      // Keep only the agent container identity for receipt reconciliation. Browsers, egress
+      // proxies and networks must not remain active while the domain consumes a sealed result.
+      for (const args of teardownArgs(spec.runId).slice(spec.retain ? 1 : 0)) await this.#ok(args)
     }
   }
 
@@ -264,6 +271,7 @@ export class DockerSandbox implements Sandbox {
   async stop(runId: string): Promise<void> {
     this.#stopped.add(runId)
     await this.#ok(['kill', containerName(runId)])
+    for(const args of teardownArgs(runId).slice(1))await this.#ok(args)
   }
 
   async cleanup(runId: string, runDir: string): Promise<void> {

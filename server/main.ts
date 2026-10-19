@@ -1,3 +1,4 @@
+import { reconcileInitiativeOwnerEffects } from './initiative-owner-effects.ts'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -6,6 +7,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { startRouter } from './router-runtime.ts'
 import { ApplyService } from './apply.ts'
 import { recoverChangeApproval } from './approval-effects.ts'
+import { recoverInitiativeCreations } from './initiative-create.ts'
 import { createBaseApp } from './app.ts'
 import { configPathFromArgs, loadConfig } from './config.ts'
 import { type ChangeRef, discover, listChanges, listWorktrees, Registry, type WorktreeInfo } from './discovery.ts'
@@ -81,8 +83,12 @@ export async function startServer(opts: StartOptions) {
   registerInitiativeRoutes(app, ctx, { runs, sandbox })
   registerInitiativeDecisionRoutes(app, ctx)
   for (const repo of config.repos) {
+    await recoverInitiativeCreations(config, repo.name).catch((error: unknown) => console.error(error))
     for (const wt of await listWorktrees(repo)) {
-      for (const ini of await listInitiatives(wt)) await runs.failStale({ wt, ini }).catch((error: unknown) => console.error(error))
+      for (const ini of await listInitiatives(wt)) {
+        await reconcileInitiativeOwnerEffects({wt,ini}).catch((error:unknown)=>console.error(error))
+        await runs.failStale({wt,ini}).catch((error:unknown)=>console.error(error))
+      }
     }
   }
   // SERVICES: later tasks create their services and register their routes here.

@@ -26,3 +26,7 @@ Executable contract: `features/verification-recovery.desk.yaml`, id `mark-verifi
 #### Scenario: An uncertain verification blocks implementation in its worktree
 
 #### Scenario: An uncertain verification blocks a new Git approval commit in its worktree
+
+#### Scenario: Restart preserves a requested rerun after accepting the previous result
+
+#### Scenario: Stop cancels the saved rerun together with the active verification

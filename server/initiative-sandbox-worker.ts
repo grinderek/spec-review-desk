@@ -1,4 +1,5 @@
-import { lstat, mkdir, readFile, readdir } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, readdir } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { EventBus } from './events.ts'
@@ -47,7 +48,19 @@ async function capture(dir: string, prefix = ''): Promise<void> {
     if (info.isDirectory()) await capture(file, relative)
     else if (info.isFile()) {
       if (info.size > 4_000_000 || bytes + info.size > 5_000_000 || outputs.length >= 200) throw new Error('Agent output exceeds its recoverable size limit')
-      const text = await readFile(file, 'utf8'); bytes += Buffer.byteLength(text)
+      const handle=await open(file,constants.O_RDONLY|constants.O_NOFOLLOW)
+      let content:Buffer
+      try {
+        const before=await handle.stat()
+        if(!before.isFile()||before.size>4_000_000||bytes+before.size>5_000_000)throw new Error('Agent output exceeds its recoverable size limit')
+        const buffer=Buffer.alloc(Math.min(before.size+1,4_000_001))
+        let bytesRead=0
+        while(bytesRead<buffer.length){const chunk=await handle.read(buffer,bytesRead,buffer.length-bytesRead,bytesRead);if(!chunk.bytesRead)break;bytesRead+=chunk.bytesRead}
+        const after=await handle.stat()
+        if(bytesRead!==before.size||before.size!==after.size||before.mtimeMs!==after.mtimeMs||before.ctimeMs!==after.ctimeMs)throw new Error('Agent output changed during capture')
+        content=buffer.subarray(0,bytesRead)
+      }finally{await handle.close()}
+      const text=new TextDecoder('utf-8',{fatal:true}).decode(content); bytes += content.byteLength
       outputs.push({ path: relative, content: text, mode: info.mode & 0o111 ? 0o755 : 0o644 })
     } else throw new Error('Agent output contains a non-regular file')
   }
@@ -64,5 +77,9 @@ if (captured.sawSecret || safe.secret || joined.secret) {
   safe.value.result = null; safe.value.outputs = []; safe.value.sawSecret = true
   safe.value.outcome.error = ROTATE_HINT
 }
-await writeExecutionArtifact(resultFile, InitiativeAttemptResultSchema.parse(safe.value))
+let result=InitiativeAttemptResultSchema.parse(safe.value)
+if(Buffer.byteLength(JSON.stringify(result))>8_000_000) {
+  result={...result,result:null,outputs:[],outcome:{...result.outcome,error:'Agent output exceeds its recoverable encoded size limit'}}
+}
+await writeExecutionArtifact(resultFile,result)
 // The exited container remains inspectable until the domain accepts the receipt and finalizes it.

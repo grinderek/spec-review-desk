@@ -6,6 +6,8 @@ import { ExecutionEventSchemas, executionBusy, projectExecution, type ExecutionE
 import { HttpError } from './errors.ts'
 import { withReviewLock } from './review-lock.ts'
 import { VerificationSourceSchema, type VerificationSource } from './verification-source.ts'
+import { VerificationRerunEventSchemas, type VerificationRerun } from './verification-rerun.ts'
+import { VerificationCleanupEventSchemas, projectVerificationCleanup, type VerificationCleanupState } from './verification-cleanup-model.ts'
 
 const Status = z.enum(['passed', 'failed', 'undefined', 'pending', 'skipped', 'ambiguous', 'unknown'])
 export const CorpusRunSchema = z.object({
@@ -15,6 +17,8 @@ export const CorpusRunSchema = z.object({
 })
 export const VerificationEventSchema = z.discriminatedUnion('type', [
   ...ExecutionEventSchemas,
+  ...VerificationRerunEventSchemas,
+  ...VerificationCleanupEventSchemas,
   z.object({ type: z.literal('VerificationSourceCaptured'), runId: z.uuid(), source: VerificationSourceSchema }),
   z.object({ type: z.literal('VerificationReportAccepted'), runId: z.uuid(), attemptId: z.uuid(), artifactHash: z.string().regex(/^[0-9a-f]{64}$/), sourceUnchanged: z.boolean(), commandError: z.string().nullable(), report: CorpusRunSchema }),
   z.object({ type: z.literal('VerificationReportRejected'), runId: z.uuid(), attemptId: z.uuid(), reason: z.string().min(1) }),
@@ -33,11 +37,40 @@ export interface VerificationProjection {
   rejections: Record<string, string>
   abandoned: string[]
   containers: Record<string, { name: string; id: string | null }>
+  rerun: VerificationRerun | null
+  cleanups: VerificationCleanupState
 }
 export function projectVerification(events: readonly VerificationEnvelope[]): VerificationProjection {
-  const state: VerificationProjection = { runs: [], sources: {}, reports: {}, rejections: {}, abandoned: [], containers: {} }
+  const state: VerificationProjection = { runs: [], sources: {}, reports: {}, rejections: {}, abandoned: [], containers: {}, rerun: null, cleanups: {} }
   for (const { event } of events) {
-    if (event.type === 'VerificationSourceCaptured') {
+    if (event.type === 'VerificationRerunRequested') {
+      const run = state.runs.find(run => run.request.id === event.request.afterRunId)
+      if (state.rerun || !run || !executionBusy(run) || state.abandoned.includes(run.request.id)) throw new Error('Rerun requires a busy verification and an empty queue')
+      state.rerun = { ...structuredClone(event.request), reason: null }
+    } else if (event.type === 'VerificationRerunStarted' || event.type === 'VerificationRerunCancelled' || event.type === 'VerificationRerunDeferred') {
+      const queued = state.rerun
+      if (!queued || queued.id !== event.requestId) throw new Error('Rerun event has no matching pending request')
+      if (event.type === 'VerificationRerunStarted') {
+        const previous = state.runs.find(run => run.request.id === queued.afterRunId)
+        const next = state.runs.at(-1)
+        if (!previous || executionBusy(previous) && !state.abandoned.includes(previous.request.id) || !next || next.request.id !== event.runId || next.request.id === previous.request.id) throw new Error('Rerun started before its predecessor settled')
+        state.rerun = null
+      } else if (event.type === 'VerificationRerunCancelled') state.rerun = null
+      else queued.reason = event.reason
+    } else if (event.type === 'VerificationAbandonedCleanupRequested') {
+      const run = state.runs.find(run => run.request.id === event.runId)
+      projectVerificationCleanup(state.cleanups, event, { runId: event.runId, attemptId: event.attemptId,
+        ownerAbandoned: state.abandoned.includes(event.runId) && run?.attempts.at(-1)?.id === event.attemptId,
+        terminal: event.terminal, container: state.containers[event.attemptId] ?? null })
+    } else if (event.type === 'VerificationCleanupRequested' || event.type === 'VerificationCleanupDeferred' || event.type === 'VerificationCleanupCompleted') {
+      const run = state.runs.find(run => run.request.id === event.runId), attempt = run?.attempts.at(-1)
+      projectVerificationCleanup(state.cleanups, event, {
+        runId: event.runId, attemptId: event.attemptId, receiptHash: attempt?.id === event.attemptId ? attempt.receiptHash ?? null : null,
+        artifactHash: state.reports[event.attemptId]?.artifactHash ?? null,
+        classified: Boolean(state.reports[event.attemptId] || state.rejections[event.attemptId]),
+        settled: Boolean(run && !executionBusy(run)), container: state.containers[event.attemptId] ?? null,
+      })
+    } else if (event.type === 'VerificationSourceCaptured') {
       if (state.sources[event.runId] || state.runs.some(run => run.request.id === event.runId)) throw new Error('Duplicate verification input version')
       state.sources[event.runId] = structuredClone(event.source)
     } else if (event.type === 'VerificationContainerPlanned' || event.type === 'VerificationContainerObserved') {
@@ -84,6 +117,7 @@ export function projectVerification(events: readonly VerificationEnvelope[]): Ve
       projectExecution(state.runs, event as ExecutionEvent)
     }
   }
+  if (state.rerun && state.runs.some(run => run.request.id !== state.rerun!.afterRunId && executionBusy(run) && !state.abandoned.includes(run.request.id))) throw new Error('New verification did not consume its queued rerun')
   return state
 }
 export interface VerificationStream { events: VerificationEnvelope[]; bytes: string; version: string; projection: VerificationProjection }

@@ -19,7 +19,7 @@ and keep `specs/**/spec.md` titles equal to those contracts. Use stable scenario
 approved contracts to make an implementation pass.
 
 Given facts prepare prior history and environment; When executes one public command; Then checks
-new events in the selected review, initiative or verification journal and public responses. Use response bindings for generated values and subsequent
+new events in the selected review, initiative, verification or worktree journal and public responses. Use response bindings for generated values and subsequent
 GET observations for persisted state. Keep domain adapters small and add them for operations,
 not scenario wording. Approvals, discussions, owner decisions, patch lifecycle and Git receipts project
 from the review journal. Initiative metadata, brief/input references, permissions and plans project
@@ -46,3 +46,9 @@ Replay must never repeat external effects. Recovery observes the existing attemp
 outcome requires explicit owner action and proof that the previous processes/container are inactive.
 Verification uses one immutable result artifact per attempt, with complete case coverage and
 source binding. Do not restore the shared last-run file or accept a partial report as success.
+
+Initiative creation requests and ownership proofs project from the anchor worktree journal.
+Verification reruns and container cleanup intents also belong to its verification journal.
+Mutating Git subprocesses preserve durable effect/creation and outer execution markers; require
+inactivity before accepting their receipts or retrying. Keep derived projection dirtiness separate
+from uncommitted business edits.

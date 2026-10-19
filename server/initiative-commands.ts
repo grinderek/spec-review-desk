@@ -78,6 +78,8 @@ export function executeInitiativeCommand(dir: string, command: InitiativeCommand
   return withInitiativeLock(dir, async () => {
     const history = await readInitiativeStream(dir)
     const doc = await readInitiative(dir)
+    const pending=doc.git_effects.find(effect=>effect.status!=='completed')
+    if(pending)throw new HttpError(409,'initiative_git_pending',`Finish recorded effect ${pending.plan.effectId} before changing initiative state`)
     if ((await readInitiativeStream(dir)).version !== history.version) throw new HttpError(409, 'initiative_conflict', 'Initiative changed; retry command')
     return recordInitiativeEvents(dir, history, decideInitiative(doc, command, at, history.events), at, doc.runs)
   })

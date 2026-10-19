@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { RoutingDecisionSchema } from './agent-routing.ts'
 import { ExecutionRunSchema } from './execution-model.ts'
+import { InitiativeOwnerGitStateSchema } from './initiative-owner-effect-model.ts'
 
 // openspec/initiatives/<name>/initiative.yaml (spec B §3). Slice statuses are derived, never stored.
 export const INITIATIVE_FILE = 'initiative.yaml'
@@ -82,6 +83,7 @@ export const InitiativeSchema = z.object({
     .default({ status: 'none', approved_at: null, slices: [] }),
   runs: z.array(RunSchema).default([]),
   executions: z.array(ExecutionRunSchema).default([]),
+  git_effects: z.array(InitiativeOwnerGitStateSchema).default([]),
 })
 
 export type InitiativeDoc = z.infer<typeof InitiativeSchema>

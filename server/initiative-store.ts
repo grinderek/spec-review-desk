@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { HttpError } from './errors.ts'
@@ -56,6 +56,7 @@ export async function writeInitiativeProjection(dir: string, doc: InitiativeDoc)
   const file = path.join(dir, INITIATIVE_FILE)
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
   await writeFile(tmp, renderInitiative(doc))
+  await chmod(tmp,0o644)
   await rename(tmp, file)
 }
 

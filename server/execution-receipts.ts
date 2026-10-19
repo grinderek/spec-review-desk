@@ -9,6 +9,24 @@ import { z } from 'zod'
 import type { CodexEvent } from './codex.ts'
 import { ExecutionAttemptSchema, type ExecutionAttempt, ProcessBoundarySchema, type ProcessBoundary, ProcessIdentitySchema, type ProcessIdentity } from './execution-model.ts'
 
+const AncestorsSchema = z.array(z.uuid()).max(16)
+function executionAncestors(value: string | undefined): string[] {
+  if (!value) return []
+  if (value.length > 1024) throw new Error('Execution ancestor markers exceed their size limit')
+  return AncestorsSchema.parse(JSON.parse(value))
+}
+// Preserve the complete bounded ancestry when nested workers or Git effects take ownership.
+// Refuse an overflowing chain rather than dropping proof needed by an outer execution.
+export function executionEnvironment(id: string, overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
+  z.uuid().parse(id)
+  const previous = [process.env.DESK_ATTEMPT_ID, overrides.DESK_ATTEMPT_ID].filter((value): value is string => !!value)
+  for (const marker of previous) z.uuid().parse(marker)
+  const ancestors = [...new Set([...executionAncestors(process.env.DESK_EXECUTION_ANCESTORS),
+    ...executionAncestors(overrides.DESK_EXECUTION_ANCESTORS), ...previous])].filter(marker => marker !== id)
+  AncestorsSchema.parse(ancestors)
+  return { ...process.env, ...overrides, DESK_ATTEMPT_ID: id, DESK_EXECUTION_ANCESTORS: JSON.stringify(ancestors) }
+}
+
 const ReceiptBase = z.object({
   version: z.literal(1), attemptId: z.uuid(), at: z.string(), identity: ProcessIdentitySchema,
   stopped: z.boolean(),
@@ -112,6 +130,8 @@ export async function observeAttempt(cwd: string, attemptId: string): Promise<At
   } catch (error) { return { kind: 'uncertain', reason: `Cannot prove execution outcome: ${error instanceof Error ? error.message : String(error)}` } }
 }
 export async function startLocalAttempt(attempt: ExecutionAttempt, timeoutMs: number, environment?: NodeJS.ProcessEnv): Promise<void> {
+  if (attempt.spec.kind === 'command' && 'DESK_EXECUTION_ANCESTORS' in attempt.spec.environment) throw new Error('Execution ancestor markers are reserved transport state')
+  const childEnvironment = executionEnvironment(attempt.id, environment)
   const dir = attemptDirectory(attempt.spec.cwd, attempt.id)
   const root = await realpath(attempt.spec.cwd)
   for (const relative of ['.spec-review', '.spec-review/executions']) {
@@ -123,7 +143,7 @@ export async function startLocalAttempt(attempt: ExecutionAttempt, timeoutMs: nu
   await mkdir(dir, { mode: 0o700 })
   await writeExecutionArtifact(path.join(dir, 'intent.json'), { attempt, timeoutMs, launch: await captureExecutionBoundary() })
   const child = spawn(process.execPath, ['--import', import.meta.resolve('tsx'), worker, dir, attempt.id], {
-    cwd: attempt.spec.cwd, detached: true, stdio: 'ignore', env: { ...process.env, ...environment, DESK_ATTEMPT_ID: attempt.id },
+    cwd: attempt.spec.cwd, detached: true, stdio: 'ignore', env: childEnvironment,
   })
   await new Promise<void>((resolve, reject) => { child.once('spawn', resolve); child.once('error', reject) })
   child.unref()
@@ -181,7 +201,12 @@ async function attemptProcesses(cwd: string, attemptId: string, hint?: ProcessBo
       let matches = !!wrapper && pid === wrapper.pid && fields[19] === wrapper.startTicks && await identityLive(wrapper)
       matches ||= childGroup !== null && Number(fields[2]) === childGroup
       if (!matches) {
-        matches = (await readFile(`/proc/${pid}/environ`, 'utf8')).split('\0').includes(`DESK_ATTEMPT_ID=${attemptId}`)
+        const environment = (await readFile(`/proc/${pid}/environ`, 'utf8')).split('\0')
+        matches = environment.includes(`DESK_ATTEMPT_ID=${attemptId}`)
+        if (!matches) {
+          const inherited = environment.find(entry => entry.startsWith('DESK_EXECUTION_ANCESTORS='))
+          matches = executionAncestors(inherited?.slice('DESK_EXECUTION_ANCESTORS='.length)).includes(attemptId)
+        }
       }
       if (matches) active.push(ProcessIdentitySchema.parse({ pid, bootId, startTicks: fields[19], attemptId }))
     } catch (error) {

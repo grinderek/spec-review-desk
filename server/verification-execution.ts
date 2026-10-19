@@ -10,6 +10,9 @@ import { withDetachedReviewLocks } from './review-lock.ts'
 import { acceptVerificationReport } from './verification-report.ts'
 import { readVerificationStream, updateVerification, type VerificationEvent, type VerificationProjection } from './verification-events.ts'
 import { captureVerificationSource } from './verification-source.ts'
+import { captureVerificationProfile, restoreVerificationProfile } from './verification-rerun.ts'
+import { decideVerificationCleanupRequest, verificationCleanupTerminalProof } from './verification-cleanup-model.ts'
+import { executeVerificationCleanup, reconcileVerificationCleanups, type VerificationCleanupJournal } from './verification-cleanup.ts'
 
 const message = (error: unknown): string => error instanceof Error ? error.message : String(error)
 const pause = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
@@ -17,7 +20,8 @@ const pending = (projection: VerificationProjection): ExecutionRun | undefined =
 export interface VerificationExecutionDeps { timeoutMs?: number; changed?: (cwd: string) => void }
 
 // Domain coordinator. Replay supplies state, the detached worker supplies process evidence,
-// and only an explicit request authorizes a new command. Startup only observes existing work.
+// and only a durable request authorizes a new command. Startup observes existing attempts
+// and may activate an already recorded rerun after its predecessor is safely settled.
 export class VerificationExecution {
   #drivers = new Map<string, Promise<void>>()
   constructor(private readonly deps: VerificationExecutionDeps = {}) {}
@@ -25,69 +29,153 @@ export class VerificationExecution {
   async request(profile: RunnerProfile, explicit = true): Promise<string> {
     const cwd = profile.worktreePath
     await this.recover(cwd)
-    const id = await withWorktreeAdmission(cwd, () => updateVerification(cwd, async stream => {
+    await this.#cleanup(cwd, true)
+    const result = await withWorktreeAdmission(cwd, () => updateVerification(cwd, async stream => {
       const active = pending(stream.projection)
       const events: VerificationEvent[] = []
+      const queued = stream.projection.rerun
+      if (active && active.outcome !== 'uncertain') {
+        const snapshot = captureVerificationProfile(profile)
+        if (queued && JSON.stringify(queued.profile) !== JSON.stringify(snapshot)) throw new HttpError(409, 'verification_profile_changed', 'Cancel the queued verification before changing its profile')
+        if (!queued) events.push({ type: 'VerificationRerunRequested', request: { id: randomUUID(), afterRunId: active.request.id, at: new Date().toISOString(), profile: snapshot } })
+        return { events, value: { id: active.request.id, dispatch: false, retry: false } }
+      }
       if (active) {
-        if (active.outcome !== 'uncertain') return { events, value: active.request.id }
         if (!explicit) throw new HttpError(409, 'verification_uncertain', 'The previous verification outcome is unknown; explicitly run it again after its processes stop')
+        await assertWorktreeAdmission(cwd, { operation: 'verification', runId: active.request.id })
         const attempt = active.attempts.at(-1)
+        let observedContainer: ContainerObservation | null = null
+        const container = attempt ? stream.projection.containers[attempt.id] : undefined
         if (attempt) {
           try { await requireAttemptInactive(cwd, attempt.id, attempt.processBoundary) }
           catch (error) { throw new HttpError(409, 'verification_still_active', message(error)) }
-          const container = stream.projection.containers[attempt.id]
-          if (container) {
-            await this.#containerInactive(cwd, active.request.id, attempt.id, container, false)
-          }
+          if (container) observedContainer = await this.#containerInactive(cwd, active.request.id, attempt.id, container, false)
         }
+        if (queued && JSON.stringify(queued.profile) !== JSON.stringify(captureVerificationProfile(profile))) throw new HttpError(409, 'verification_profile_changed', 'Cancel the queued verification before changing its profile')
+        if (!queued) events.push({ type: 'VerificationRerunRequested', request: { id: randomUUID(), afterRunId: active.request.id, at: new Date().toISOString(), profile: captureVerificationProfile(profile) } })
+        if (attempt && container && !container.id && observedContainer?.kind === 'terminal') events.push({ type: 'VerificationContainerObserved', runId: active.request.id, attemptId: attempt.id, containerId: observedContainer.id })
         events.push({ type: 'VerificationRetryAuthorized', runId: active.request.id, attemptId: attempt?.id ?? null })
+        if (attempt && container && observedContainer?.kind === 'terminal') events.push({ type: 'VerificationAbandonedCleanupRequested', runId: active.request.id, attemptId: attempt.id,
+          name: container.name, containerId: observedContainer.id, terminal: verificationCleanupTerminalProof(observedContainer) })
+        return { events, value: { id: active.request.id, dispatch: false, retry: true } }
       }
-      await assertWorktreeAdmission(cwd, { operation: 'verification', runId: active?.request.id })
-      const source = await captureVerificationSource(cwd)
-      if (!source.contracts.length) throw new HttpError(409, 'empty_corpus', 'No executable contracts are available for verification')
-      const runId = randomUUID(), attemptId = randomUUID(), at = new Date().toISOString()
-      const resultFile = path.relative(cwd, path.join(attemptDirectory(cwd, attemptId), 'result.ndjson'))
-      const environment = { DESK_RUN_ID: runId, DESK_ATTEMPT_ID: attemptId, DESK_SOURCE_HASH: source.hash, DESK_RESULT_FILE: resultFile }
-      const command = profile.command.map(argument => argument.replaceAll('{resultFile}', resultFile))
-      const compose = profile.execution !== 'local'
-      if (compose && !profile.compose) throw new Error('Compose verification settings are missing')
-      const containerName = verificationContainerName(attemptId)
-      const args = compose ? ['compose', '-p', profile.compose!.project, ...profile.compose!.files.flatMap(file => ['-f', file]), 'run', '--no-deps', '--name', containerName, '--label', `dev.desk.attempt=${attemptId}`, '--label', `dev.desk.run=${runId}`, '-T', '--interactive=false', ...Object.entries(environment).flatMap(([key, value]) => ['-e', `${key}=${value}`]), profile.compose!.service, ...command] : command.slice(1)
-      const attempt: ExecutionAttempt = { id: attemptId, at, cause: 'initial', processBoundary: await captureExecutionBoundary(), head: source.head, sourceHash: source.hash, routing: null, decisions: [],
-        spec: { kind: 'command', bin: compose ? 'docker' : command[0]!, cwd, args, environment, resultFile } }
-      events.push({ type: 'VerificationSourceCaptured', runId, source },
-        { type: 'ExecutionQueued', request: { id: runId, role: 'verification', threadId: null, messageCount: 0, at } },
-        { type: 'ExecutionAttemptRequested', runId, attempt })
-      if (compose) events.push({ type: 'VerificationContainerPlanned', runId, attemptId, name: containerName })
-      return { events, value: runId }
+      await assertWorktreeAdmission(cwd, { operation: 'verification', runId: queued?.afterRunId })
+      const prepared = await this.#prepare(profile)
+      events.push(...prepared.events)
+      if (queued && !active) events.push({ type: 'VerificationRerunStarted', requestId: queued.id, runId: prepared.runId })
+      return { events, value: { id: prepared.runId, dispatch: true, retry: false } }
     }))
     this.#changed(cwd)
-    this.#drive(cwd, id, true)
-    return id
+    if (result.retry) {
+      await this.#cleanup(cwd, true)
+      const next = await this.#activateQueued(cwd)
+      if (next) { this.#drive(cwd, next, true); return next }
+    }
+    if (result.dispatch) this.#drive(cwd, result.id, true)
+    return result.id
+  }
+
+  async #prepare(profile: RunnerProfile): Promise<{ runId: string; events: VerificationEvent[] }> {
+    const cwd = profile.worktreePath
+    const source = await captureVerificationSource(cwd)
+    if (!source.contracts.length) throw new HttpError(409, 'empty_corpus', 'No executable contracts are available for verification')
+    const runId = randomUUID(), attemptId = randomUUID(), at = new Date().toISOString()
+    const resultFile = path.relative(cwd, path.join(attemptDirectory(cwd, attemptId), 'result.ndjson'))
+    const environment = { DESK_RUN_ID: runId, DESK_ATTEMPT_ID: attemptId, DESK_SOURCE_HASH: source.hash, DESK_RESULT_FILE: resultFile }
+    const command = profile.command.map(argument => argument.replaceAll('{resultFile}', resultFile))
+    const compose = profile.execution !== 'local'
+    if (compose && !profile.compose) throw new Error('Compose verification settings are missing')
+    const containerName = verificationContainerName(attemptId)
+    const args = compose ? ['compose', '-p', profile.compose!.project, ...profile.compose!.files.flatMap(file => ['-f', file]), 'run', '--no-deps', '--name', containerName, '--label', `dev.desk.attempt=${attemptId}`, '--label', `dev.desk.run=${runId}`, '-T', '--interactive=false', ...Object.entries(environment).flatMap(([key, value]) => ['-e', `${key}=${value}`]), profile.compose!.service, ...command] : command.slice(1)
+    const attempt: ExecutionAttempt = { id: attemptId, at, cause: 'initial', processBoundary: await captureExecutionBoundary(), head: source.head, sourceHash: source.hash, routing: null, decisions: [],
+      spec: { kind: 'command', bin: compose ? 'docker' : command[0]!, cwd, args, environment, resultFile } }
+    const events: VerificationEvent[] = [{ type: 'VerificationSourceCaptured', runId, source },
+      { type: 'ExecutionQueued', request: { id: runId, role: 'verification', threadId: null, messageCount: 0, at } },
+      { type: 'ExecutionAttemptRequested', runId, attempt }]
+    if (compose) events.push({ type: 'VerificationContainerPlanned', runId, attemptId, name: containerName })
+    return { runId, events }
   }
 
   async recover(cwd: string): Promise<void> {
-    const stream = await readVerificationStream(cwd)
-    const active = pending(stream.projection)
-    if (!active) return
-    // No dispatch during recovery, including the crash window before the first spawn.
-    const live = await this.#observe(cwd, active.request.id)
-    if (live) this.#drive(cwd, active.request.id, false)
+    if (this.#drivers.has(cwd)) return
+    await this.#cleanup(cwd, false)
+    if (this.#drivers.has(cwd)) return
+    const active = pending((await readVerificationStream(cwd)).projection)
+    if (active) {
+      // An existing attempt is observed, including the crash window before its spawn.
+      const live = await this.#observe(cwd, active.request.id, true)
+      if (this.#drivers.has(cwd)) return
+      if (live) { this.#drive(cwd, active.request.id, false); return }
+    }
+    // A saved rerun is an authorized new request, never a retry of the old attempt.
+    const next = await this.#activateQueued(cwd)
+    if (next) this.#drive(cwd, next, true)
   }
 
   async stop(cwd: string): Promise<void> {
     const attempt = await updateVerification(cwd, stream => {
       const active = pending(stream.projection), attempt = active?.attempts.at(-1)
-      if (!active || !attempt) throw new HttpError(409, 'no_verification', 'No verification process is available to stop')
-      return { events: attempt.stopRequested ? [] : [{ type: 'ExecutionStopRequested' as const, runId: active.request.id, attemptId: attempt.id }], value: attempt }
+      const queued = stream.projection.rerun
+      if (!active && !queued) throw new HttpError(409, 'no_verification', 'No verification process or queued request is available to stop')
+      const events: VerificationEvent[] = []
+      if (queued) events.push({ type: 'VerificationRerunCancelled', requestId: queued.id, reason: 'Cancelled by the owner' })
+      if (active && attempt && !attempt.stopRequested) events.push({ type: 'ExecutionStopRequested', runId: active.request.id, attemptId: attempt.id })
+      return { events, value: attempt }
     })
-    const attemptId = attempt.id
-    await stopLocalAttempt(cwd, attemptId, attempt.processBoundary)
-    const projection = (await readVerificationStream(cwd)).projection
-    const container = projection.containers[attemptId]
-    const run = projection.runs.find(item => item.attempts.some(attempt => attempt.id === attemptId))
-    if (container && run) await stopVerificationContainer(cwd, run.request.id, attemptId, container)
     this.#changed(cwd)
+    if (!attempt) return
+    await stopLocalAttempt(cwd, attempt.id, attempt.processBoundary)
+    const projection = (await readVerificationStream(cwd)).projection
+    const container = projection.containers[attempt.id]
+    const run = projection.runs.find(item => item.attempts.some(item => item.id === attempt.id))
+    if (container && run) await stopVerificationContainer(cwd, run.request.id, attempt.id, container)
+    if (run) this.#drive(cwd, run.request.id, false)
+    this.#changed(cwd)
+  }
+
+  #cleanupJournal(cwd: string): VerificationCleanupJournal {
+    return { update: decide => updateVerification(cwd, async stream => decide(stream.projection.cleanups)) }
+  }
+
+  async #cleanup(cwd: string, execute: boolean): Promise<void> {
+    await updateVerification(cwd, stream => {
+      const events: VerificationEvent[] = []
+      for (const run of stream.projection.runs) {
+        const attempt = run.attempts.at(-1)
+        if (!attempt?.receiptHash || executionBusy(run) || !stream.projection.containers[attempt.id]?.id) continue
+        const report = stream.projection.reports[attempt.id]
+        const classified = Boolean(report || stream.projection.rejections[attempt.id])
+        if (!classified) continue
+        events.push(...decideVerificationCleanupRequest(stream.projection.cleanups, { runId: run.request.id, attemptId: attempt.id,
+          receiptHash: attempt.receiptHash, artifactHash: report?.artifactHash ?? null, settled: true, classified,
+          container: stream.projection.containers[attempt.id]! }))
+      }
+      return { events, value: undefined }
+    })
+    const journal = this.#cleanupJournal(cwd)
+    if (execute) {
+      const state = (await readVerificationStream(cwd)).projection.cleanups
+      for (const intent of Object.values(state)) if (intent.status !== 'completed') await executeVerificationCleanup(cwd, intent.attemptId, journal)
+    } else await reconcileVerificationCleanups(cwd, journal)
+    this.#changed(cwd)
+  }
+
+  async #activateQueued(cwd: string): Promise<string | null> {
+    const result = await withWorktreeAdmission(cwd, () => updateVerification(cwd, async stream => {
+      const queued = stream.projection.rerun
+      if (!queued || pending(stream.projection)) return { events: [], value: null }
+      try {
+        if (path.resolve(queued.profile.worktreePath) !== path.resolve(cwd)) throw new Error('Queued verification belongs to another worktree')
+        await assertWorktreeAdmission(cwd, { operation: 'verification', runId: queued.afterRunId })
+        const prepared = await this.#prepare(restoreVerificationProfile(queued.profile))
+        return { events: [...prepared.events, { type: 'VerificationRerunStarted' as const, requestId: queued.id, runId: prepared.runId }], value: prepared.runId }
+      } catch (error) {
+        const reason = message(error)
+        return { events: queued.reason === reason ? [] : [{ type: 'VerificationRerunDeferred' as const, requestId: queued.id, reason }], value: null }
+      }
+    }))
+    this.#changed(cwd)
+    return result
   }
 
   async idle(cwd: string): Promise<void> {
@@ -103,7 +191,14 @@ export class VerificationExecution {
         const live = await this.#observe(cwd, runId)
         const stream = await readVerificationStream(cwd)
         const run = stream.projection.runs.find(item => item.request.id === runId)
-        if (!run || !live || !executionBusy(run) || stream.projection.abandoned.includes(runId)) break
+        if (!run || !live || !executionBusy(run) || stream.projection.abandoned.includes(runId)) {
+          await this.#cleanup(cwd, true)
+          const next = await this.#activateQueued(cwd)
+          if (!next) break
+          runId = next
+          await this.#dispatch(cwd, runId)
+          continue
+        }
         await pause(100)
       }
     })().catch(async error => {
@@ -130,8 +225,11 @@ export class VerificationExecution {
     this.#changed(cwd)
   }
 
-  async #observe(cwd: string, runId: string): Promise<boolean> {
+  async #observe(cwd: string, runId: string, recovering = false): Promise<boolean> {
     const live = await updateVerification(cwd, async stream => {
+      // Check after acquiring the stream lock: another request may have installed its
+      // driver while recovery was waiting. Its pre-spawn window is owned locally.
+      if (recovering && this.#drivers.has(cwd)) return { events: [], value: false }
       const run = stream.projection.runs.find(item => item.request.id === runId), attempt = run?.attempts.at(-1)
       if (!run || !executionBusy(run) || stream.projection.abandoned.includes(runId)) return { events: [], value: false }
       if (!attempt) return { events: [{ type: 'ExecutionUncertain' as const, runId, attemptId: null, reason: 'Verification request has no dispatched attempt' }], value: false }
@@ -169,8 +267,8 @@ export class VerificationExecution {
     const events: VerificationEvent[] = []
     const container = projection.containers[attempt.id]
     if (container) {
-      const missingAllowed = receipt.kind === 'command' && !receipt.stopped && !receipt.result.timedOut && receipt.result.code !== null && ![0, 130, 137, 143].includes(receipt.result.code)
-      const observedContainer = await this.#containerInactive(cwd, runId, attempt.id, container, missingAllowed)
+      // A nonzero client exit also cannot prove that the daemon rejected dispatch.
+      const observedContainer = await this.#containerInactive(cwd, runId, attempt.id, container, false)
       if (observedContainer.kind !== 'missing' && !container.id) events.push({ type: 'VerificationContainerObserved', runId, attemptId: attempt.id, containerId: observedContainer.id })
       if (receipt.kind === 'command' && observedContainer.kind === 'terminal' && receipt.result.code !== observedContainer.exitCode) throw new Error('Verification receipt and container exit code differ')
     }

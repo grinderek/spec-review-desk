@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import type { DecisionView } from './change-view.ts'
 import { loadChangeView } from './change-view.ts'
 import { corpusReport } from './corpus.ts'
@@ -8,10 +9,10 @@ import { type DecisionLogEntry, parseDecisionLog, renderDecisionLog } from './de
 import { type ChangeRef, listChanges, type WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { BRIEF_FILE } from './initiative-brief.ts'
-import { isDirty } from './git.ts'
+import { showFile } from './git.ts'
 import { INITIATIVE_FILE, type InitiativeDoc, type InputEntry, isInitiativeName, readInitiative, type Slice } from './initiative-store.ts'
 import { readReview } from './review-store.ts'
-import { INITIATIVE_EVENTS_FILE } from './initiative-events.ts'
+import { INITIATIVE_EVENTS_FILE, projectInitiative, readInitiativeStream, type InitiativeEvent } from './initiative-events.ts'
 import { deriveStatus, proposeBlocker, type SliceStatus } from './slice-plan.ts'
 
 // Spec B §3: an initiative is found in any worktree of a configured repo; slice statuses are
@@ -108,6 +109,22 @@ export async function sliceStatuses(wt: WorktreeInfo, doc: InitiativeDoc): Promi
   return Object.fromEntries(entries)
 }
 
+function businessState(events:readonly InitiativeEvent[]):unknown {
+  const {name,title,repo,created_at,inputs,research,plan}=projectInitiative(events)
+  const brief=events.reduce<string|null>((previous,{event})=>event.type==='InitiativeCreated'?event.brief:event.type==='InitiativeBriefSaved'?event.blob:previous,null)
+  return {name,title,repo,created_at,brief,inputs,research,plan}
+}
+async function uncommittedBusiness(wt:WorktreeInfo,ref:InitiativeRef):Promise<boolean> {
+  const committed=await showFile(wt.path,'HEAD',`${ref.relDir}/${INITIATIVE_EVENTS_FILE}`)
+  if(!committed)return true
+  try {
+    const events=committed.split('\n').filter(Boolean).map(line=>JSON.parse(line) as InitiativeEvent)
+    // Git completion receipts and run observations are appended after commits. Their physical
+    // journal/YAML dirtiness is not an uncommitted owner edit; compare business facts instead.
+    return !isDeepStrictEqual(businessState(events),businessState((await readInitiativeStream(ref.dir)).events))
+  }catch{return true}
+}
+
 export async function loadInitiativeView(wt: WorktreeInfo, ref: InitiativeRef): Promise<InitiativeView> {
   const doc = await readInitiative(ref.dir)
   const statuses = await sliceStatuses(wt, doc)
@@ -133,7 +150,7 @@ export async function loadInitiativeView(wt: WorktreeInfo, ref: InitiativeRef): 
     decisionLog: decisionsText ? parseDecisionLog(decisionsText) : [],
     openDecisions: review.decisions.filter(isActive).length,
     blockingDecisions: review.decisions.filter((d) => d.blocking && isActive(d)).length,
-    uncommitted: await isDirty(wt.path, ref.relDir),
+    uncommitted: await uncommittedBusiness(wt,ref),
   }
 }
 

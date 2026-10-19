@@ -24,10 +24,14 @@ import { ReviewWorld } from './review-world.ts'
 import { writeFiles } from './repo.ts'
 import { INITIATIVE_FILE, readInitiative } from '../initiative-store.ts'
 import { readInitiativeStream } from '../initiative-events.ts'
+import { readWorktreeStream } from '../worktree-events.ts'
+import { prepareCreationFixture } from './creation-fixture.ts'
 import { readVerificationStream, updateVerification } from '../verification-events.ts'
 import { attemptDirectory } from '../execution-receipts.ts'
 import type { Finishers } from '../run-service.ts'
 import { prepareVerificationAttempt, prepareVerificationReceipt } from './verification-fixture.ts'
+import { randomUUID } from 'node:crypto'
+import { captureVerificationProfile } from '../verification-rerun.ts'
 
 // One public-API adapter per domain. The CLI transport is scripted, not the application services.
 export class DeskWorld {
@@ -69,9 +73,10 @@ export class DeskWorld {
   resolve(value: unknown): any { return this.review.resolve(value) }
   async ready() { const change = this.vars.change; await this.review.ready(); if (this.changeDir) this.vars.change = change; this.vars.runner = `/api/runner/${worktreeId(this.review.repo)}` }
   private changeDir = ''
-  async events(stream: 'review' | 'initiative' | 'verification' = 'review') {
+  async events(stream: 'review' | 'initiative' | 'verification' | 'worktree' = 'review') {
     if (stream === 'review') return readReviewEvents(this.changeDir || this.review.dir)
     if (stream === 'verification') return (await readVerificationStream(this.repo)).events.map(({ event, ...envelope }) => ({ ...envelope, ...event }))
+    if (stream === 'worktree') return (await readWorktreeStream(this.repo)).events.map(({ event, ...envelope }) => ({ ...envelope, ...event }))
     const root = path.join(this.repo, 'openspec/initiatives')
     const names = await readdir(root).catch(() => [] as string[])
     if (names.length > 1) throw new Error('An initiative event observation must select one stream')
@@ -99,6 +104,13 @@ export class DeskWorld {
     return diff
   }
   async given(name: string, data: Record<string, any>) {
+    if (name === 'InitiativeCreationPrepared') {
+      const { state } = await prepareCreationFixture(this.review.ctx.config, data.phase ?? 'requested', data)
+      this.vars.creation = state.request.id; this.vars.creationName = state.request.name
+      this.vars.creationWorktree = worktreeId(state.request.targetPath)
+      return
+    }
+    if (name === 'CreationSourceChanged') { await writeFiles(this.repo, { 'README.md': 'Changed after the creation request\n' }); return }
     if (['QuestionReceiptAwaitingRecovery', 'QuestionAttemptOutcomeUnknown', 'QuestionOutcomeUncertain', 'QuestionRecovered'].includes(name)) {
       await this.ready()
       const wt = this.review.ctx.registry.all()[0]!
@@ -163,6 +175,17 @@ export class DeskWorld {
       this.vars.initiative = `/api/initiatives/${r.body.worktreeId}/${r.body.name}`
       this.vars.initiativeName = r.body.name
       this.vars.initiativeDir = path.join(this.review.repo, 'openspec/initiatives', r.body.name)
+    } else if (name === 'InitiativeBriefCommitPending') {
+      await this.given('GitCommitUnavailable',{})
+      const result=await this.command('EditBrief',{brief:'Pending owner brief.'})
+      if(result.status!==409)throw new Error('Expected an interrupted initiative commit')
+      this.vars.initiativeEffect=(await readInitiative(String(this.vars.initiativeDir))).git_effects.at(-1)!.plan.effectId
+    } else if (name === 'InitiativeBriefCommitUnacknowledged') {
+      await this.setupCommand('EditBrief',{brief:'Committed owner brief.'})
+      const dir=String(this.vars.initiativeDir),stream=await readInitiativeStream(dir)
+      if(stream.events.at(-1)?.event.type!=='InitiativeOwnerGitCompleted')throw new Error('Fixture requires a committed owner effect')
+      // Disposable fixture: simulate the consumer dying between Git success and receipt append.
+      await writeFile(path.join(dir,'initiative.events.jsonl'),stream.events.slice(0,-1).map(event=>JSON.stringify(event)+'\n').join(''))
     } else if (name === 'ResearchDomainsAllowed') {
       await this.setupCommand('SetResearchDomains', { domains: data.domains })
     } else if (name === 'InitiativeProjectionUnavailable') {
@@ -258,6 +281,15 @@ export class DeskWorld {
       await updateVerification(this.review.repo, () => ({ events: [{ type: 'ExecutionUncertain', runId, attemptId: attempt.id, reason: 'The previous verification outcome cannot be proved' }], value: undefined }))
     }
     else if (name === 'VerificationReceiptAvailable') await prepareVerificationReceipt(this.review.repo)
+    else if (name === 'VerificationRerunPending') {
+      const run = (await readVerificationStream(this.repo)).projection.runs.at(-1)!
+      const profile = this.runner.profileFor(this.repo)!
+      this.vars.previousVerification = run.request.id
+      this.vars.verificationRerun = randomUUID()
+      await updateVerification(this.repo, () => ({ events: [{ type: 'VerificationRerunRequested', request: {
+        id: String(this.vars.verificationRerun), afterRunId: run.request.id, at: new Date().toISOString(), profile: captureVerificationProfile(profile),
+      } }], value: undefined }))
+    }
     else if (name === 'VerificationProjectionLost') await rm(path.join(this.review.repo, '.spec-review/verification.json'), { force: true })
     else if (name === 'VerificationSourceChanged') await writeFiles(this.review.repo, { 'README.md': 'Changed verification input\n' })
     else if (name === 'VerificationPrepared') {
@@ -278,6 +310,12 @@ export class DeskWorld {
     }
     if (name === 'InspectVerification') return this.read(String(this.vars.runner))
     const base = String(this.vars.change), ini = String(this.vars.initiative)
+    if(name==='UploadInitiativeInputs') {
+      const form=new FormData()
+      for(const file of data.files)form.append('files',new File([file.text],file.name))
+      const result=await callForm(this.review.app,`${ini}/inputs`,form)
+      return {status:result.status,body:result.json}
+    }
     if (name === 'OpenInitiative') {
       const form = new FormData()
       for (const [k, v] of Object.entries({ name: data.name ?? 'hs', title: data.title ?? 'Health score', brief: data.brief ?? '# Brief\n', repo: 'api', where: 'existing', worktreeId: worktreeId(this.review.repo) })) form.set(k, String(v))
@@ -294,10 +332,13 @@ export class DeskWorld {
       EditBrief: ['PUT', `${ini}/brief`, { brief: data.brief }], RunPlanner: ['POST', `${ini}/plan/run`], ApprovePlan: ['POST', `${ini}/plan/approve`],
       ProposeSlice: ['POST', `${ini}/slices/${data.slice}/propose`, { change: data.change }],
       RunResearch: ['POST', `${ini}/research`, data], DecideResearchPermission: ['POST', `${ini}/decisions/${data.id}/decide`, { option: data.option }], ResumeResearch: ['POST', `${ini}/runs/${data.run}/resume`, {}], AcceptResearch: ['POST', `${ini}/inputs/${data.file}/accept`],
+      RetryInitiativeCommit: ['POST', `${ini}/effects/${data.effect}/retry`],
       ReconcileInitiativeRuns: ['POST', `${ini}/runs/reconcile`], StopResearch: ['POST', `${ini}/runs/${data.run}/stop`],
-      StartApply: ['POST', `${base}/apply`], ReapplyContract: ['POST', `${base}/reapply`], ResumeApply: ['POST', `${base}/apply/resume`, { runId: data.run }], RunVerification: ['POST', `${this.vars.runner}/run`],
+      StartApply: ['POST', `${base}/apply`], ReapplyContract: ['POST', `${base}/reapply`], ResumeApply: ['POST', `${base}/apply/resume`, { runId: data.run }], RunVerification: ['POST', `${this.vars.runner}/run`], StopVerification: ['POST', `${this.vars.runner}/stop`],
       StopApply: ['POST', `${base}/apply/stop`], RecoverExecutions: ['POST', `${base}/executions/recover`],
       ResumeQuestion: ['POST', `${base}/executions/${data.run}/resume`],
+      RecoverInitiativeCreations: ['POST', '/api/initiative-creations/api/recover'],
+      RetryInitiativeCreation: ['POST', `/api/initiative-creations/api/${data.id}/retry`],
     }
     const route = routes[name]
     if (!route) return this.review.command(name, data)
@@ -312,7 +353,7 @@ export class DeskWorld {
     if (name === 'ResumeApply') await this.apply.settled(data.run)
     if (name === 'StopApply') await this.apply.settled(String(this.vars.applyRun))
     if (name === 'ResumeQuestion') await this.review.questions.settled(data.run)
-    if (name === 'RunVerification') await this.runner.idle(this.review.repo)
+    if (name === 'RunVerification' || name === 'StopVerification') await this.runner.idle(this.review.repo)
     return { status: r.status, body: r.json }
   }
   async close() {

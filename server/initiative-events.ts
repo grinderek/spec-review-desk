@@ -1,5 +1,6 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
-import { lstat, mkdir, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
 import path from 'node:path'
 import { z } from 'zod'
 import { HttpError } from './errors.ts'
@@ -8,12 +9,13 @@ import { INITIATIVE_NAME, INPUT_FILE, CHANGE_NAME, InputSchema, SliceSchema, Ini
 import { ExecutionEventSchema, projectExecution } from './execution-model.ts'
 import { GitEffectPlanSchema } from './git-effect.ts'
 import { InitiativeFileError, writeInitiativeProjection } from './initiative-store.ts'
+import { InitiativeOwnerGitSchemas, projectInitiativeOwnerGit } from './initiative-owner-effect-model.ts'
 
 export const INITIATIVE_EVENTS_FILE = 'initiative.events.jsonl'
 const hash = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex')
 const Blob = z.string().regex(/^[0-9a-f]{64}$/)
 const Payload = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('InitiativeCreated'), name: z.string().regex(INITIATIVE_NAME), title: z.string().min(1), repo: z.string().min(1), created_at: z.string(), brief: Blob }),
+  z.object({ type: z.literal('InitiativeCreated'), creationId:z.uuid(), name: z.string().regex(INITIATIVE_NAME), title: z.string().min(1), repo: z.string().min(1), created_at: z.string(), brief: Blob }),
   z.object({ type: z.literal('InitiativeBriefSaved'), blob: Blob }),
   z.object({ type: z.literal('InitiativeInputAdded'), input: InputSchema }),
   z.object({ type: z.literal('ResearchInputAccepted'), file: z.string().regex(INPUT_FILE) }),
@@ -31,11 +33,24 @@ const Payload = z.discriminatedUnion('type', [
   z.object({ type: z.literal('InitiativeRunAbandoned'), runId: z.string(), at: z.string() }),
   z.object({ type: z.literal('InitiativeRunGitRequested'), runId: z.string(), attemptId: z.uuid(), plan: GitEffectPlanSchema }),
   z.object({ type: z.literal('InitiativeRunGitCompleted'), runId: z.string(), effectId: z.uuid(), commit: z.string() }),
+  ...InitiativeOwnerGitSchemas,
 ])
 const Event = z.object({ version: z.literal(1), stream: z.string().uuid(), sequence: z.number().int().positive(), id: z.string().uuid(), command: z.string().uuid(), at: z.string(), origin: z.enum(['initiative-command', 'fixture']), event: Payload })
 export type InitiativeEventPayload = z.infer<typeof Payload>
 export type InitiativeEvent = z.infer<typeof Event>
 export interface InitiativeStream { events: InitiativeEvent[]; bytes: string; version: string }
+
+// Creation prepares these exact bytes before any worktree or repository effect starts.
+export function buildInitialInitiativeStream(input:{creationId:string;streamId:string;commandId:string;at:string;name:string;title:string;repo:string;brief:string;inputs:InitiativeDoc['inputs']}):{bytes:string;projection:InitiativeDoc} {
+  z.uuid().parse(input.creationId);z.uuid().parse(input.streamId);z.uuid().parse(input.commandId)
+  const payloads:InitiativeEventPayload[]=[{type:'InitiativeCreated',creationId:input.creationId,name:input.name,title:input.title,repo:input.repo,created_at:input.at,brief:input.brief},...input.inputs.map(entry=>({type:'InitiativeInputAdded' as const,input:entry}))]
+  const events=payloads.map((event,index)=>{
+    const digest=hash(`${input.creationId}:${input.streamId}:${input.commandId}:${index+1}`)
+    const id=`${digest.slice(0,8)}-${digest.slice(8,12)}-4${digest.slice(13,16)}-8${digest.slice(17,20)}-${digest.slice(20,32)}`
+    return Event.parse({version:1,stream:input.streamId,sequence:index+1,id,command:input.commandId,at:input.at,origin:'initiative-command',event})
+  })
+  return {bytes:events.map(event=>`${JSON.stringify(event)}\n`).join(''),projection:projectInitiative(events)}
+}
 
 export async function readInitiativeStream(dir: string): Promise<InitiativeStream> {
   const file = path.join(dir, INITIATIVE_EVENTS_FILE)
@@ -127,6 +142,9 @@ export function projectInitiative(events: readonly InitiativeEvent[]): Initiativ
       }
       case 'InitiativeRunGitRequested':
       case 'InitiativeRunGitCompleted': break
+      case 'InitiativeOwnerGitRequested':
+      case 'InitiativeOwnerGitCompleted':
+      case 'InitiativeOwnerGitObserved': projectInitiativeOwnerGit(doc.git_effects,event);break
     }
   }
   if (!doc) throw new Error('initiative not created')
@@ -156,7 +174,10 @@ export async function storeInitiativeBlob(dir: string, bytes: Uint8Array | strin
   await mkdir(root, { recursive: true })
   if (await realpath(root) !== path.join(await realpath(dir), 'blobs')) throw new HttpError(409, 'unsafe_path', 'blobs/ escapes initiative')
   const file = path.join(root, blob)
-  try { await writeFile(file, bytes, { flag: 'wx' }) }
+  try {
+    const handle=await open(file,constants.O_WRONLY|constants.O_CREAT|constants.O_EXCL|constants.O_NOFOLLOW,0o644)
+    try { await handle.writeFile(bytes);await handle.chmod(0o644);await handle.sync() }finally{await handle.close()}
+  }
   catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error }
   await readInitiativeBlob(dir, blob)
   return blob
@@ -172,6 +193,7 @@ async function materialize(dir: string, relative: string, blob: string): Promise
   if (info && hash(await readFile(file)) === blob) return
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString('hex')}.tmp`
   await writeFile(tmp, bytes)
+  await chmod(tmp,0o644)
   await rename(tmp, file)
 }
 
@@ -209,6 +231,7 @@ export async function recordInitiativeEvents(dir: string, previous: InitiativeSt
       try {
         const separator = previous.bytes && !previous.bytes.endsWith('\n') ? '\n' : ''
         await writeFile(tmp, previous.bytes + separator + batch.map(e => `${JSON.stringify(e)}\n`).join(''))
+        await chmod(tmp,0o644)
         if ((await readInitiativeStream(dir)).version !== previous.version) throw new HttpError(409, 'initiative_conflict', 'Initiative changed; retry command')
         await rename(tmp, file)
       } finally { await rm(tmp, { force: true }) }

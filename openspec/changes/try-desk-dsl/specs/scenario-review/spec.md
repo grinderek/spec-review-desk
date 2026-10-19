@@ -242,3 +242,27 @@ A correction remains bound to the exact scenario and choice shown to its agent. 
 #### Scenario: Stop unconfirmed research after proving its execution is inactive
 
 #### Scenario: Preserve owner plan edits when recovering an older planner result
+
+#### Scenario: Keep a failed brief commit pending for the owner
+
+#### Scenario: Finish the saved brief commit when Git becomes available
+
+#### Scenario: Recognize an already committed brief after a restart
+
+#### Scenario: Commit owner inputs with their original contents
+
+#### Scenario: Restart preserves a requested rerun after accepting the previous result
+
+#### Scenario: Stop cancels the saved rerun together with the active verification
+
+#### Scenario: Recovery observes a recorded creation without creating its initiative
+
+#### Scenario: Explicitly continue creation with the original brief and captured inputs
+
+#### Scenario: Repeating the same feature request returns its existing initiative
+
+#### Scenario: Finish a rejected initial commit without creating a second initiative
+
+#### Scenario: Recover an initial initiative commit that completed before acknowledgment
+
+#### Scenario: Keep creation uncertain when another branch has no ownership proof

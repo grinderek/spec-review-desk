@@ -102,9 +102,9 @@ export class RunnerService {
       const rejection = attempt ? stream.projection.rejections[attempt.id] : undefined
       this.#set(cwd, {
         runId: latest.request.id, outcome: latest.outcome, sourceHash: attempt?.sourceHash ?? null, stale,
-        running: latest.outcome === 'running', queued: latest.outcome === 'queued',
+        running: latest.outcome === 'running', queued: latest.outcome === 'queued' || Boolean(stream.projection.rerun),
         lastRunAt: latest.endedAt, result: accepted?.report ?? null,
-        error: latest.reason ?? rejection ?? accepted?.commandError ?? sourceError ?? (stale ? 'Sources changed since this verification run' : null),
+        error: stream.projection.rerun?.reason ?? Object.values(stream.projection.cleanups).find(intent => intent.status === 'blocked')?.reason ?? latest.reason ?? rejection ?? accepted?.commandError ?? sourceError ?? (stale ? 'Sources changed since this verification run' : null),
       })
     }).finally(() => { if (this.#refreshes.get(cwd) === next) this.#refreshes.delete(cwd) })
     this.#refreshes.set(cwd, next); return next

@@ -26,7 +26,9 @@ scenarios:
     then:
       stream: initiative
       events:
+        - InitiativeOwnerGitRequested: { operation: brief }
         - InitiativeBriefSaved: {}
+        - InitiativeOwnerGitCompleted: {}
       response: { status: 200 }
       reads:
         - path: $initiative
@@ -70,7 +72,9 @@ scenarios:
     then:
       stream: initiative
       events:
+        - InitiativeOwnerGitRequested: { operation: plan-approval }
         - SlicePlanApproved: {}
+        - InitiativeOwnerGitCompleted: {}
       response: { status: 200 }
       reads:
         - path: $initiative
@@ -143,7 +147,9 @@ scenarios:
     then:
       stream: initiative
       events:
+        - InitiativeOwnerGitRequested: { operation: research-accept }
         - ResearchInputAccepted: { file: research-contract.md }
+        - InitiativeOwnerGitCompleted: {}
       response: { status: 200 }
       reads:
         - path: $initiative
@@ -255,7 +261,9 @@ scenarios:
     then:
       stream: initiative
       events:
+        - InitiativeOwnerGitRequested: { operation: domains }
         - ResearchDomainsSet: { domains: [docs.example.com] }
+        - InitiativeOwnerGitCompleted: {}
       response: { status: 200, body: { domains: [docs.example.com] } }
       reads:
         - path: $initiative
@@ -353,3 +361,71 @@ scenarios:
       reads:
         - path: $initiative
           response: { status: 200, body: { doc: { plan: { slices: [{ title: Owner plan }] }, runs: [{ outcome: needs_owner }] } } }
+  - id: pending-owner-brief-commit
+    scenario: Keep a failed brief commit pending for the owner
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - GitCommitUnavailable: {}
+    when:
+      EditBrief: { brief: Saved intent needs a confirmed commit. }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: brief }
+        - InitiativeBriefSaved: {}
+        - InitiativeOwnerGitObserved: { status: pending }
+      response: { status: 409, body: { error: { code: initiative_git_pending } } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "Saved intent needs a confirmed commit.\n", doc: { git_effects: [{ operation: brief, status: pending }] } } }
+  - id: retry-owner-brief-commit
+    scenario: Finish the saved brief commit when Git becomes available
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - InitiativeBriefCommitPending: {}
+      - GitCommitAvailable: {}
+    when:
+      RetryInitiativeCommit: { effect: $initiativeEffect }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "Pending owner brief.\n", doc: { git_effects: [{ status: completed }] } } }
+  - id: recover-owner-brief-commit
+    scenario: Recognize an already committed brief after a restart
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - InitiativeBriefCommitUnacknowledged: {}
+    when:
+      ReconcileInitiativeRuns: {}
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "Committed owner brief.\n", doc: { git_effects: [{ status: completed }] } } }
+  - id: upload-initiative-input
+    scenario: Commit owner inputs with their original contents
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+    when:
+      UploadInitiativeInputs: { files: [{ name: notes.md, text: Owner supplied context. }] }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: inputs }
+        - InitiativeInputAdded: { input: { file: notes.md, draft: false } }
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 201, body: { files: [notes.md] } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [{ file: notes.md, draft: false, present: true }] } }

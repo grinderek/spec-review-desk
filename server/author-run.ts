@@ -7,7 +7,7 @@ import path from 'node:path'
 import { decisionsFromReply } from './decision-model.ts'
 import type { WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
-import { commitPaths, initiativeCommitMessage } from './initiative-git.ts'
+import { initiativeCommitMessage } from './initiative-git.ts'
 import { authorPrompt } from './initiative-prompt.ts'
 import { CHANGE_NAME, findSlice, type InitiativeDoc, readInitiative, withInitiativeLock, type RunRecord } from './initiative-store.ts'
 import { sliceStatuses } from './initiatives.ts'
@@ -17,7 +17,6 @@ import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts
 import { proposeBlocker } from './slice-plan.ts'
 import { moveChange, vetAuthorOutput } from './vet-output.ts'
 import { executeInitiativeCommand } from './initiative-commands.ts'
-import { initiativeBusinessPaths } from './inputs.ts'
 
 // Spec B §4.4: a clean-room author writes one slice as a behavior-driven change.
 export { CHANGE_NAME } from './initiative-store.ts'

@@ -4,14 +4,15 @@ import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { resumeAuthor, startAuthor } from '../author-run.ts'
 import { pendingBlocking } from '../decision-model.ts'
-import { listWorktrees } from '../discovery.ts'
+import { discover, listWorktrees, worktreeId } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { briefFits, MAX_BRIEF_CHARS, saveBrief } from '../initiative-brief.ts'
-import { commitPaths, initiativeCommitMessage } from '../initiative-git.ts'
-import { type CreateInput, createInitiative } from '../initiative-create.ts'
+import { initiativeCommitMessage } from '../initiative-git.ts'
+import { type CreateInput, createInitiative, executeInitiativeCreation, recoverInitiativeCreations } from '../initiative-create.ts'
+import { readWorktreeStream } from '../worktree-events.ts'
 import { findRun, readInitiative, withInitiativeLock } from '../initiative-store.ts'
 import { executeInitiativeCommand } from '../initiative-commands.ts'
-import { initiativeBusinessPaths } from '../inputs.ts'
+import { executeInitiativeOwnerOperation, initiativeOwnerGitInput, ownerRequestHash, reconcileInitiativeOwnerEffects, retryInitiativeOwnerEffect } from '../initiative-owner-effects.ts'
 import { listInitiatives, loadInitiativeView, sliceStatuses, summarizeInitiative } from '../initiatives.ts'
 import { acceptDraft, discardDraft, type IncomingFile, MAX_TOTAL_INPUT_BYTES, readInput, readRepoFile, setDomains, uploadInputs } from '../inputs.ts'
 import { startPlanner } from '../planner-run.ts'
@@ -39,6 +40,7 @@ const FromRepo = z.object({ from: z.string().min(1) })
 const briefField = z.string().refine(briefFits, { message: `at most ${MAX_BRIEF_CHARS} characters` })
 const Brief = z.object({ brief: briefField })
 const CreateFields = z.object({
+  requestId: z.uuid().optional(),
   name: z.string().trim(),
   repo: z.string().min(1),
   where: z.enum(['new', 'existing']),
@@ -103,10 +105,29 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
       return v.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
     })
     const created = await createInitiative(ctx.config, ctx.registry, {
-      name: fields.name, repo: fields.repo, where, title: fields.title, brief: fields.brief, files: await uploads(form), fromRepo,
+      name: fields.name, repo: fields.repo, where, title: fields.title, brief: fields.brief, files: await uploads(form), fromRepo, requestId: fields.requestId,
     }, nowIso())
     ctx.bus.publish('initiative', created)
     return c.json(created, 201)
+  })
+
+  app.get('/api/initiative-creations/:repo', async c => {
+    const repo = ctx.config.repos.find(repo => repo.name === c.req.param('repo'))
+    if (!repo) throw new HttpError(404, 'unknown_repo', 'No configured repository')
+    const { creations } = await readWorktreeStream(repo.path)
+    return c.json({ creations: creations.map(state => ({ id: state.request.id, name: state.request.name, status: state.status,
+      reason: state.reason, commit: state.commit, worktreeId: worktreeId(state.request.targetPath) })) })
+  })
+  app.post('/api/initiative-creations/:repo/recover', async c => {
+    await recoverInitiativeCreations(ctx.config, c.req.param('repo'))
+    await discover(ctx.config.repos, ctx.registry)
+    return c.json({ ok: true })
+  })
+  app.post('/api/initiative-creations/:repo/:id/retry', async c => {
+    const result = await executeInitiativeCreation(ctx.config, c.req.param('repo'), z.uuid().parse(c.req.param('id')))
+    await discover(ctx.config.repos, ctx.registry)
+    ctx.bus.publish('initiative', result)
+    return c.json(result)
   })
 
   app.get(base, async (c) => {
@@ -115,8 +136,17 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
   })
 
   app.post(`${base}/runs/reconcile`, async (c) => {
-    await deps.runs.reconcile(await target(c))
+    const t=await target(c)
+    await reconcileInitiativeOwnerEffects(t)
+    await deps.runs.reconcile(t)
     return c.json({ ok: true })
+  })
+
+  app.post(`${base}/effects/:effect/retry`,async c=>{
+    const t=await target(c)
+    const result=await retryInitiativeOwnerEffect(t,z.uuid().parse(c.req.param('effect')))
+    changed(t)
+    return c.json(result)
   })
 
   // Desk fixes item 2: the owner edits the brief after creation; the edit is committed.
@@ -193,12 +223,11 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
 
   app.post(`${base}/plan/approve`, async (c) => {
     const t = await target(c)
-    const commit = await withInitiativeLock(t.ini.dir, async () => {
-      const pending = pendingBlocking((await readReview(t.ini.dir)).decisions).length
-      const doc = await executeInitiativeCommand(t.ini.dir, { type: 'approve-plan', pending }, nowIso())
-      return commitPaths(t.wt.path, initiativeBusinessPaths(t.ini.relDir),
-        initiativeCommitMessage(`${t.ini.name} - slice plan approved (${doc.plan.slices.length} slices)`, trailer))
-    })
+    const {commit}=await executeInitiativeOwnerOperation(t,{operation:'plan-approval',requestHash:ownerRequestHash({approve:true}),prepare:async()=>{
+      const pending=pendingBlocking((await readReview(t.ini.dir)).decisions).length
+      return {command:{type:'approve-plan',pending},result:{},git:async next=>initiativeOwnerGitInput(t,next,'plan-approval',
+        initiativeCommitMessage(`${t.ini.name} - slice plan approved (${next.plan.slices.length} slices)`,trailer))}
+    }})
     changed(t)
     return c.json({ commit })
   })

@@ -33,8 +33,8 @@
 - [x] Перенести discussion identity, messages, status, patch metadata и reviewer session в review stream.
 - [x] Перенести owner decisions и явный patch lifecycle в review stream; подтверждать Git effects по receipt.
 - [x] Перенести initiative plan, metadata, brief/input refs и research permissions в initiative journal; owner decisions в review journal того же scope, grants коррелируются с их commit.
-- [ ] Разделить durable intents, внешнее выполнение и подтвержденные результаты.
-- [ ] Обработать resume/stop/restart и неопределенный результат без слепого повторного запуска.
+- [x] Разделить durable intents, внешнее выполнение и подтвержденные результаты.
+- [x] Обработать resume/stop/restart и неопределенный результат без слепого повторного запуска.
 - [ ] Сделать остальные перенесенные views восстановимыми и убрать их авторитетные snapshots; approval bridge уже удален в S1.
 - [x] Убрать требования legacy imports/adapters из плана; новые области используют один целевой формат.
 - [ ] Учесть упорядоченный контекст исторических преобразований и несовместимые переименования JSON-полей.
@@ -60,11 +60,13 @@
 - [x] Общий worktree admission и независимый lock context фоновых observers.
 - [x] Общие npm test 88/88, typecheck и self-review 73 contracts / 88 executions / 72 matching review contracts после ALS fix.
 - [x] После исправления Stop, ALS lease и детерминированного fake start выполнен финальный полный browser прогон: 13/13. Повторные npm test 88/88, typecheck и self-review прошли также после scanner cache-loss fix.
-- [ ] Перенести оставшиеся owner Git операции инициатив и создание branch/worktree/первого commit на durable coordination.
-- [ ] Сохранять coalesced повторную проверку при изменении источников во время активного прогона.
-- [ ] Добавить durable cleanup verification containers и cleanup browser/proxy/network при retained sandbox receipt.
+- [x] Перенести оставшиеся owner Git операции инициатив и создание branch/worktree/первого commit на durable coordination.
+- [x] Сохранять coalesced повторную проверку при изменении источников во время активного прогона.
+- [x] Добавить durable cleanup verification containers и cleanup browser/proxy/network при retained sandbox receipt.
 
-Этот checkpoint не закрывает S4 целиком. Новые helpers для больших immutable Git inputs и native packages пока не подключены к production consumers.
+S4 закрыт общим checkpoint: npm test 101/101, typecheck, self-review 85 corpus contracts / 101 executions / 84 matching review contracts и browser checks 13/13. Owner Git operations и creation coordinator используют immutable inputs и проверяемые receipts. Сохраненная очередь проверок восстанавливается, Stop отменяет ее, terminal контейнеры очищаются по durable intent. Реальные Git hooks после смерти Desk обнаруживаются по собственному и внешнему execution UUID; receipt/retry ждут завершения потомков. Ручные проверки включили concurrent coalescing, source drift, Docker cleanup успешного и rejected отчета, explicit abandonment неизвестной попытки, missing-container uncertainty, 100 MiB captured inputs и 200 MiB materialized copies.
+
+S5 и S6-S7 остаются открытыми. Подготовленные native package helpers пока не подключены к production consumers. Следующий S5 аудит подтвердил authority поврежденного review.yaml, недостаточно строгие persisted decoders и чтение decisions.md при сборке room; эти gaps еще не исправлены.
 
 ## На каждом реализованном срезе
 

@@ -113,6 +113,9 @@ export const api = {
   initiative: (id: InitiativeId) => request<InitiativeView>('GET', ibase(id)),
   sandboxStatus: () => request<SandboxStatus>('GET', '/api/sandbox/status'),
   createInitiative: (form: FormData) => request<{ worktreeId: string; name: string }>('POST', '/api/initiatives', form),
+  initiativeCreations: (repo: string) => request<{ creations: { id: string; name: string; status: string; reason: string | null; commit: string | null; worktreeId: string }[] }>('GET', `/api/initiative-creations/${encodeURIComponent(repo)}`),
+  recoverInitiativeCreations: (repo: string) => request('POST', `/api/initiative-creations/${encodeURIComponent(repo)}/recover`),
+  retryInitiativeCreation: (repo: string, id: string) => request<{ worktreeId: string; name: string }>('POST', `/api/initiative-creations/${encodeURIComponent(repo)}/${id}/retry`),
   saveBrief: (id: InitiativeId, brief: string) => request<{ brief: string; commit: string | null }>('PUT', `${ibase(id)}/brief`, { brief }),
   uploadInputs: (id: InitiativeId, form: FormData) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, form),
   addFromRepo: (id: InitiativeId, from: string) => request<{ files: string[] }>('POST', `${ibase(id)}/inputs`, { from }),
@@ -129,6 +132,7 @@ export const api = {
     request<{ run: RunRecord }>('POST', `${ibase(id)}/slices/${sliceId}/propose`, body),
   stopRun: (id: InitiativeId, runId: string) => request<Ok>('POST', `${ibase(id)}/runs/${runId}/stop`),
   resumeRun: (id: InitiativeId, runId: string) => request<Ok>('POST', `${ibase(id)}/runs/${runId}/resume`),
+  retryInitiativeCommit: (id:InitiativeId,effectId:string)=>request<{commit:string}>('POST',`${ibase(id)}/effects/${effectId}/retry`),
   initiativeRunLog: (id: InitiativeId, runId: string) => request<{ run: RunRecord; text: string }>('GET', `${ibase(id)}/runs/${runId}/log`),
 
 }
