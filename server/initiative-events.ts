@@ -1,3 +1,4 @@
+import { decodeJournalRecord, prepareJournalRecord } from './journal-schema.ts'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { chmod, lstat, mkdir, open, readFile, realpath, rename, rm, writeFile } from 'node:fs/promises'
 import { constants } from 'node:fs'
@@ -47,7 +48,7 @@ export function buildInitialInitiativeStream(input:{creationId:string;streamId:s
   const events=payloads.map((event,index)=>{
     const digest=hash(`${input.creationId}:${input.streamId}:${input.commandId}:${index+1}`)
     const id=`${digest.slice(0,8)}-${digest.slice(8,12)}-4${digest.slice(13,16)}-8${digest.slice(17,20)}-${digest.slice(20,32)}`
-    return Event.parse({version:1,stream:input.streamId,sequence:index+1,id,command:input.commandId,at:input.at,origin:'initiative-command',event})
+    return prepareJournalRecord(Event, {version:1,stream:input.streamId,sequence:index+1,id,command:input.commandId,at:input.at,origin:'initiative-command',event})
   })
   return {bytes:events.map(event=>`${JSON.stringify(event)}\n`).join(''),projection:projectInitiative(events)}
 }
@@ -59,7 +60,7 @@ export async function readInitiativeStream(dir: string): Promise<InitiativeStrea
   try {
     const ids = new Set<string>()
     for (const line of bytes.split('\n').filter(Boolean)) {
-      const event = Event.parse(JSON.parse(line))
+      const event = decodeJournalRecord(Event, JSON.parse(line))
       if (event.sequence !== events.length + 1 || (events.length && event.stream !== events[0]!.stream)) throw new Error('invalid stream identity or sequence')
       if (ids.has(event.id)) throw new Error('duplicate event id')
       ids.add(event.id)
@@ -213,7 +214,7 @@ export async function recordInitiativeEvents(dir: string, previous: InitiativeSt
     if ((await readInitiativeStream(dir)).version !== previous.version) throw new HttpError(409, 'initiative_conflict', 'Initiative changed; retry command')
     const stream = previous.events[0]?.stream ?? randomUUID()
     const command = randomUUID()
-    const batch = payloads.map((event, i) => Event.parse({ version: 1, stream, sequence: previous.events.length + i + 1, id: randomUUID(), command, at, origin, event }))
+    const batch = payloads.map((event, i) => prepareJournalRecord(Event, { version: 1, stream, sequence: previous.events.length + i + 1, id: randomUUID(), command, at, origin, event }))
     const events = [...previous.events, ...batch]
     const doc = projectInitiative(events)
     // Verify new source references before committing any event or touching derived views.

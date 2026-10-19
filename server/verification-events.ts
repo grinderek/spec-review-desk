@@ -1,3 +1,4 @@
+import { decodeJournalRecord, prepareJournalRecord } from './journal-schema.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { lstat, mkdir, open, readFile, realpath, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
@@ -128,7 +129,7 @@ export async function readVerificationStream(cwd: string): Promise<VerificationS
   const events: VerificationEnvelope[] = []
   const ids = new Set<string>()
   for (const line of bytes.split('\n').filter(Boolean)) {
-    const envelope = Envelope.parse(JSON.parse(line))
+    const envelope = decodeJournalRecord(Envelope, JSON.parse(line))
     if (envelope.sequence !== events.length + 1 || events.length && envelope.stream !== events[0]!.stream || ids.has(envelope.id)) throw new Error('Invalid verification stream sequence or identity')
     ids.add(envelope.id); events.push(envelope)
   }
@@ -157,7 +158,7 @@ export async function updateVerification<T>(cwd: string, decide: (stream: Verifi
     const previous = await readVerificationStream(cwd)
     const decision = await decide(previous)
     const command = randomUUID(), stream = previous.events[0]?.stream ?? randomUUID(), at = new Date().toISOString()
-    const batch = decision.events.map((event, index) => Envelope.parse({ version: 1, stream, sequence: previous.events.length + index + 1, id: randomUUID(), command, at, event }))
+    const batch = decision.events.map((event, index) => prepareJournalRecord(Envelope, { version: 1, stream, sequence: previous.events.length + index + 1, id: randomUUID(), command, at, event }))
     const events = [...previous.events, ...batch]
     const projection = projectVerification(events)
     if ((await readVerificationStream(cwd)).version !== previous.version) throw new HttpError(409, 'verification_conflict', 'Verification history changed; retry the command')

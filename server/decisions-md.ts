@@ -29,6 +29,18 @@ export function renderDecisionLog(doc: ReviewDoc, name: string, pendingId?: stri
     ((d.status === 'recorded' && d.recorded?.how === 'decisions_md') || (d.id === pendingId && d.status === 'decided')))
   return `# Owner decisions - ${name}\n\n` + entries.map(d => renderDecisionEntry(d, d.choice!.at.slice(0, 10))).join('\n')
 }
+// Agent context comes from current journal state, including scenario choices recorded by patches.
+// This is distinct from the human log of confirmed change-scoped decisions.md choices.
+export function renderDecisionContext(doc:ReviewDoc,name:string):string {
+  return `# Owner decision context - ${name}\n\n`+doc.decisions.map(decision=>[
+    renderDecisionEntry(decision,(decision.choice?.at??decision.created_at).slice(0,10)).trimEnd(),
+    `Status: ${decision.status}`,
+    `Scope: ${decision.scope.kind==='scenario'?`scenario ${decision.scope.key}`:'whole change'}`,
+    ...(decision.options.length?[`Options: ${decision.options.map(option=>`${option.id}: ${option.label} - ${option.consequence}`).join('; ')}`]:[]),
+    ...(decision.recorded?[`Recorded: ${decision.recorded.how}; commit ${decision.recorded.commit??'-'}`]:[]),
+    ...(decision.dismissed?[`Dismissed: ${decision.dismissed.reason}`]:[]),
+  ].join('\n')).join('\n\n')+'\n'
+}
 export function parseDecisionLog(text: string): DecisionLogEntry[] {
   const lines = text.split('\n')
   const starts = lines.flatMap((line, i) => HEADING.test(line) ? [i] : [])

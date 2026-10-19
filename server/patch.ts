@@ -150,7 +150,7 @@ export async function revertPatch(cwd: string, diff: string): Promise<void> {
 
 export function commitMessage(changeName: string, summary: string, trailer: string): string {
   const clean = summary.replace(/\s+/g, ' ').trim()
-  return `docs(openspec): ${changeName} - ${clean} (owner decision)\n${trailer ? `\n${trailer}\n` : ''}`
+  return `docs(desk): ${changeName} - ${clean} (owner decision)\n${trailer ? `\n${trailer}\n` : ''}`
 }
 
 export function defaultSummary(agentText: string): string {

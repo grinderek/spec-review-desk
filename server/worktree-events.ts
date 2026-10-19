@@ -1,3 +1,4 @@
+import { decodeJournalRecord, prepareJournalRecord } from './journal-schema.ts'
 import { createHash, randomUUID } from 'node:crypto'
 import { constants } from 'node:fs'
 import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
@@ -81,7 +82,7 @@ export async function readWorktreeStream(anchor: string): Promise<{ events: Enve
       bytes = new TextDecoder('utf-8', { fatal: true }).decode(content)
     } finally { await handle.close() }
   } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; bytes = '' }
-  const events = bytes.split('\n').filter(Boolean).map(line => Envelope.parse(JSON.parse(line)))
+  const events = bytes.split('\n').filter(Boolean).map(line => decodeJournalRecord(Envelope, JSON.parse(line)))
   const ids = new Set<string>()
   events.forEach((event, index) => { if (event.sequence !== index + 1 || event.stream !== events[0]!.stream || ids.has(event.id)) throw new Error('Invalid worktree history'); ids.add(event.id) })
   return { events, bytes, creations: projectWorktree(events) }
@@ -94,7 +95,7 @@ export async function recordWorktreeEvents(anchor: string, decide: (states: Crea
     const previous = await readWorktreeStream(root), payloads = await decide(previous.creations)
     if (!payloads.length) return
     const command = randomUUID(), stream = previous.events[0]?.stream ?? randomUUID(), at = new Date().toISOString()
-    const batch = payloads.map((event, index) => Envelope.parse({ version: 1, stream, sequence: previous.events.length + index + 1, id: randomUUID(), command, at, event }))
+    const batch = payloads.map((event, index) => prepareJournalRecord(Envelope, { version: 1, stream, sequence: previous.events.length + index + 1, id: randomUUID(), command, at, event }))
     projectWorktree([...previous.events, ...batch])
     if ((await readWorktreeStream(root)).bytes !== previous.bytes) throw new Error('Worktree creation history changed')
     const file = path.join(root, WORKTREE_EVENTS_FILE), tmp = `${file}.${randomUUID()}.tmp`

@@ -46,16 +46,16 @@ export function anchorText(view: ChangeView, anchor: Thread['anchor'], ref: stri
     const phrase = findPhrase(view, ref)
     return phrase ? `${phrase.keyword ?? ''} \`${phrase.phrase}\` ${phrase.note}\nMeaning: ${phrase.meaning}`.trim() : `(the phrase "${ref}" no longer exists)`
   }
-  return view.docs.proposal ?? '(no proposal.md)'
+  return view.docs.proposal ?? view.docs.contracts
 }
 
 export function reviewFiles(view: ChangeView): string[] {
   return [
+    `${view.relDir}/change.yaml`,
     ...view.features.map((f) => `${view.relDir}/${f.file}`),
     `${view.relDir}/features/NEW_STEPS.md`,
     'features/STEPS.md',
     `${view.relDir}/proposal.md`,
-    `${view.relDir}/specs/`,
     `${view.relDir}/${DECISIONS_FILE}`,
   ]
 }

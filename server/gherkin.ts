@@ -4,6 +4,7 @@ import { IdGenerator } from '@cucumber/messages'
 import type { Background, DataTable, DocString, Examples, FeatureChild, GherkinDocument, Scenario, Step, Tag } from '@cucumber/messages'
 import { type CommentLine, type Decision, splitComments, stripCommentMarker } from './decisions.ts'
 import { type ScenarioShape, scenarioShape } from './shape.ts'
+import { contractKey, gherkinScenarioId } from './contract-identity.ts'
 
 export type StepKind = 'catalog' | 'new' | 'uncatalogued'
 export type StepKeyword = 'Given' | 'When' | 'Then'
@@ -32,6 +33,7 @@ export interface StepView {
 }
 export interface ExamplesView { name: string; header: string[]; rows: string[][] }
 export interface ScenarioView {
+  id: string
   key: string
   file: string
   title: string
@@ -61,8 +63,6 @@ export class FeatureParseError extends Error {
     super(`${file}: ${message}`)
   }
 }
-
-export const scenarioKey = (file: string, title: string): string => `${file}::${title}`
 
 type Node = Background | Scenario
 const isScenario = (node: Node): node is Scenario => 'examples' in node
@@ -146,11 +146,12 @@ export function parseFeature(source: string, file: string, classify: Classify): 
   const backgroundNode = nodes.find((n) => !isScenario(n))
   const background = (backgroundNode?.steps ?? []).map((s) => stepView(s, classify, (t) => t))
 
+  const ids = new Set<string>()
   const scenarios = nodes.flatMap((node, index): ScenarioView[] => {
     if (!isScenario(node)) return []
     const lower = index === 0 ? feature.location.line : nodeEnd(nodes[index - 1]!)
     const start = nodeStart(node)
-    const attached = comments.filter((c) => c.line > lower && c.line < start)
+    const attached = comments.filter((c) => c.line > lower && c.line < node.location.line)
     const { decisions, notes } = splitComments(attached)
     const examples: ExamplesView[] = node.examples.map((e) => ({
       name: e.name,
@@ -163,9 +164,16 @@ export function parseFeature(source: string, file: string, classify: Classify): 
     const keyword = node.keyword.trim()
     const kind = keyword === 'Scenario Outline' || keyword === 'Scenario Template' ? 'Scenario Outline' : 'Scenario'
     const tags = node.tags.map((t) => t.name)
-    const blockStart = attached.length ? attached[0]!.line : start
+    let id: string, key: string
+    try {
+      id = gherkinScenarioId(tags)
+      key = contractKey(file, id)
+      if (ids.has(id)) throw new Error(`Duplicate scenario id: ${id}`)
+      ids.add(id)
+    } catch (error) { throw new FeatureParseError(file, (error as Error).message) }
+    const blockStart = attached.length ? Math.min(attached[0]!.line, start) : start
     return [{
-      key: scenarioKey(file, title),
+      id, key,
       file,
       title,
       kind,

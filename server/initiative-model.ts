@@ -3,7 +3,7 @@ import { RoutingDecisionSchema } from './agent-routing.ts'
 import { ExecutionRunSchema } from './execution-model.ts'
 import { InitiativeOwnerGitStateSchema } from './initiative-owner-effect-model.ts'
 
-// openspec/initiatives/<name>/initiative.yaml (spec B §3). Slice statuses are derived, never stored.
+// desk/initiatives/<name>/initiative.yaml (spec B §3). Slice statuses are derived, never stored.
 export const INITIATIVE_FILE = 'initiative.yaml'
 export const INITIATIVE_NAME = /^[a-z0-9][a-z0-9-]{1,40}$/
 // Every persisted field that becomes a filesystem path (or a path-shaped argv) is constrained here,
@@ -17,9 +17,9 @@ const SESSION_ID = /^[A-Za-z0-9-]{1,64}$/
 export const runLogPath = (id: string): string => `.spec-review/runs/${id}.ndjson`
 
 const InputSourceSchema = z.union([
-  z.object({ kind: z.literal('upload') }),
-  z.object({ kind: z.literal('repo'), path: z.string(), commit: z.string() }),
-  z.object({ kind: z.literal('research'), run: z.string().regex(RUN_ID), domains: z.array(z.string()).default([]) }),
+  z.object({ kind: z.literal('upload') }).strict(),
+  z.object({ kind: z.literal('repo'), path: z.string(), commit: z.string() }).strict(),
+  z.object({ kind: z.literal('research'), run: z.string().regex(RUN_ID), domains: z.array(z.string()).default([]) }).strict(),
 ])
 export const InputSchema = z.object({
   file: z.string().regex(INPUT_FILE),
@@ -29,7 +29,7 @@ export const InputSchema = z.object({
   added_at: z.string(),
   // A research document stays a draft - excluded from every room - until the owner accepts it.
   draft: z.boolean().default(false),
-})
+}).strict()
 export const SliceSchema = z.object({
   id: z.string(),
   title: z.string(),

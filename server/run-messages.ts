@@ -1,4 +1,4 @@
-import path from 'node:path'
+import { contractKey, gherkinScenarioId, splitContractKey } from './contract-identity.ts'
 
 export type RunStatus = 'passed' | 'failed' | 'undefined' | 'pending' | 'skipped' | 'ambiguous' | 'unknown'
 export interface ScenarioRun { status: RunStatus; failure: { step: string; message: string } | null; rows: RunStatus[] | null }
@@ -15,10 +15,8 @@ const toStatus = (raw: unknown): RunStatus => {
   return (SEVERITY as string[]).includes(s) ? (s as RunStatus) : 'unknown'
 }
 
-export const corpusKey = (file: string, title: string): string => `${path.posix.basename(file)}::${title}`
-
 interface Pickle { id: string; uri: string; astNodeIds: string[]; steps: { id: string; text: string }[] }
-interface ScenarioNode { name: string; uri: string; rows: string[] }
+interface ScenarioNode { key: string; rows: string[] }
 
 export function parseRunMessages(ndjson: string): CorpusRun {
   const scenarioNodes = new Map<string, ScenarioNode>()
@@ -40,6 +38,7 @@ export function parseRunMessages(ndjson: string): CorpusRun {
     }
     if (envelope.deskScenarioResult) {
       const r = envelope.deskScenarioResult
+      splitContractKey(String(r.key))
       const status = toStatus(r.status)
       if (status === 'passed') deskTotals.passed++
       else if (status === 'failed') deskTotals.failed++
@@ -54,7 +53,7 @@ export function parseRunMessages(ndjson: string): CorpusRun {
       const children: any[] = doc.feature?.children ?? []
       const scenarios = children.flatMap((c) => (c.rule ? c.rule.children : [c])).flatMap((c: any) => (c.scenario ? [c.scenario] : []))
       for (const s of scenarios) {
-        scenarioNodes.set(s.id, { name: s.name, uri: doc.uri, rows: (s.examples ?? []).flatMap((e: any) => (e.tableBody ?? []).map((r: any) => r.id)) })
+        scenarioNodes.set(s.id, { key: contractKey(doc.uri, gherkinScenarioId((s.tags ?? []).map((t: { name: string }) => t.name))), rows: (s.examples ?? []).flatMap((e: any) => (e.tableBody ?? []).map((r: any) => r.id)) })
       }
     } else if (envelope.pickle) {
       pickles.set(envelope.pickle.id, envelope.pickle)
@@ -89,7 +88,7 @@ export function parseRunMessages(ndjson: string): CorpusRun {
     else if (result.status === 'failed') totals.failed++
     else totals.other++
     if (!node) continue
-    const key = corpusKey(node.uri, node.name)
+    const key = node.key
     const previous = scenarios[key]
     const rowIndex = pickle.astNodeIds[1] ? node.rows.indexOf(pickle.astNodeIds[1]) : -1
     const rows = node.rows.length ? [...(previous?.rows ?? node.rows.map((): RunStatus => 'unknown'))] : null

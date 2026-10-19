@@ -15,11 +15,14 @@ export const DEFAULT_APPLY_DENY = [
 
 export function applyPrompt(
   changeName: string,
+  relDir: string,
   onlyKeys: readonly string[],
   decisions: readonly DecisionRecord[] = [],
   scenarioKeys: readonly string[] = [],
 ): string {
-  const lines = [`Implement the owner-approved OpenSpec change "${changeName}".`, `Read openspec/changes/${changeName}/proposal.md, specs/ and features/ before making changes.`, "Follow the repository AGENTS.md and the OpenSpec apply skill under .agents/skills/ when present.", "Implement the approved scenarios, run the configured checks and commit the implementation."]
+  const lines = [`Implement the owner-approved Desk change "${changeName}".`, `Read ${relDir}/change.yaml and its executable contracts under ${relDir}/features/ before making changes.`,
+    'Follow the repository AGENTS.md and its verification policy. Optional proposal, design and tasks documents explain context; the executable contracts define behavior.',
+    'Implement the approved scenarios, run the configured checks and commit the implementation.']
   if (onlyKeys.length) {
     lines.push(
       '',

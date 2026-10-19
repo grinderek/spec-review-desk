@@ -10,7 +10,7 @@ import { storeInitiativeBlob } from './initiative-events.ts'
 import { executeInitiativeCommand } from './initiative-commands.ts'
 import { executeInitiativeOwnerOperation, initiativeBlobOutputs, initiativeOwnerGitInput, ownerRequestHash } from './initiative-owner-effects.ts'
 
-// Spec B §7: uploads and repo copies land in openspec/initiatives/<name>/inputs/, in git.
+// Spec B §7: uploads and repo copies land in desk/initiatives/<name>/inputs/, in git.
 export const INPUT_EXTENSIONS = ['.pdf', '.md', '.txt', '.yaml', '.yml', '.json', '.png', '.jpg', '.jpeg']
 export const MAX_INPUT_BYTES = 20 * 1024 * 1024
 export const MAX_TOTAL_INPUT_BYTES = 100 * 1024 * 1024

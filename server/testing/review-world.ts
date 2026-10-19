@@ -5,6 +5,7 @@ import path from 'node:path'
 import { stringify } from 'yaml'
 import type { Hono } from 'hono'
 import { createBaseApp, type AppContext } from '../app.ts'
+import { contractKey } from '../contract-identity.ts'
 import { contractHash, type DeskScenario } from '../desk-dsl.ts'
 import { parseCatalog } from '../catalog.ts'
 import { git, headSha } from '../git.ts'
@@ -12,7 +13,7 @@ import { QuestionService } from '../questions.ts'
 import { FAKE_CODEX } from './fake-codex-path.ts'
 import {
   readReviewEvents, recordApprovalEvents, recordReviewEvents,
-  type ApprovalEvent, type DecisionRecord, type Entry, type Section,
+  type ApprovalEvent, type DecisionRecord, type Entry, type Section, emptyReview,
 } from '../review-store.ts'
 import { registerReadRoutes } from '../routes/read.ts'
 import { registerReviewRoutes } from '../routes/review.ts'
@@ -42,7 +43,7 @@ export class ReviewWorld {
     })
     registerReadRoutes(this.app, this.ctx, { codex: false, docker: false })
     registerReviewRoutes(this.app, this.ctx, { questions: this.questions })
-    this.vars = { key: `${this.subjectRel}::subject`, hash: contractHash(this.subject), head, at: '2026-10-01T00:00:00.000Z' }
+    this.vars = { key: contractKey(this.subjectRel, 'subject'), hash: contractHash(this.subject), head, at: '2026-10-01T00:00:00.000Z' }
   }
   static async create(): Promise<ReviewWorld> {
     const repo = await mkdtemp(path.join(os.tmpdir(), 'desk-dsl-'))
@@ -50,12 +51,12 @@ export class ReviewWorld {
       sh(repo, 'git', ['init', '-q', '-b', 'main'])
       sh(repo, 'git', ['config', 'user.email', 'spec@example.com'])
       sh(repo, 'git', ['config', 'user.name', 'Desk specs'])
-      await writeFiles(repo, { 'README.md': 'DSL fixture\n', 'openspec/changes/subject/.openspec.yaml': 'schema: behavior-driven\n', 'openspec/changes/subject/specs/subject/spec.md': '#### Scenario: Subject contract\n' })
+      await writeFiles(repo, { 'README.md': 'DSL fixture\n', 'desk/changes/subject/change.yaml': 'version: 1\nkind: behavior-driven\n' })
       sh(repo, 'git', ['add', '-A']); sh(repo, 'git', ['commit', '-q', '-m', 'fixture'])
       return new ReviewWorld(repo, await headSha(repo))
     } catch (error) { await rm(repo, { recursive: true, force: true }); throw error }
   }
-  get dir(): string { return path.join(this.repo, 'openspec/changes/subject') }
+  get dir(): string { return path.join(this.repo, 'desk/changes/subject') }
   private get sourceFile(): string { return path.join(this.dir, this.subjectRel) }
   resolve(value: unknown): any {
     if (typeof value === 'string') {
@@ -86,8 +87,16 @@ export class ReviewWorld {
       if (data.status) this.subject.then.response.status = Number(data.status)
       await mkdir(path.dirname(this.sourceFile), { recursive: true })
       await writeFile(this.sourceFile, stringify({ version: 1, feature: 'Subject', scenarios: [this.subject] }))
-      this.vars.key = `${this.subjectRel}::subject`; this.vars.hash = contractHash(this.subject)
+      this.vars.key = contractKey(this.subjectRel, 'subject'); this.vars.hash = contractHash(this.subject)
       if (name === 'ScenarioDiscovered') { sh(this.repo, 'git', ['add', '-A']); sh(this.repo, 'git', ['commit', '-q', '-m', 'source contract discovered']); this.vars.head = await headSha(this.repo) }
+    } else if (name === 'ScenarioRetitled') {
+      this.subject.scenario = String(data.title)
+      await writeFile(this.sourceFile, stringify({ version: 1, feature: 'Subject', scenarios: [this.subject] }))
+      this.vars.hash = contractHash(this.subject)
+    } else if (name === 'ChangeMetadataChanged') {
+      const file = path.join(this.dir, 'change.yaml')
+      if (data.mode === 'missing') await rm(file)
+      else await writeFile(file, 'version: 1\nkind: unsupported\n')
     } else if (name === 'ScenarioApproved' || name === 'ScenarioChangesRequested' || name === 'PhraseApproved') {
       await this.priorEntry(name === 'PhraseApproved' ? 'phrases' : 'scenarios', data.key, this.entry(data, name === 'ScenarioChangesRequested' ? 'changes_requested' : 'approved'))
     } else if (name === 'ReviewEntryRecorded') {
@@ -97,7 +106,7 @@ export class ReviewWorld {
       const phrase = data.phrase ?? 'the owner reviews {string}'
       const meaning = data.meaning ?? 'The proposed phrase.'
       const source = `## When\n\n| Phrase | ${data.extension ? 'Extended meaning' : 'Meaning'} | Command |\n|---|---|---|\n| \`${phrase}\` | ${meaning} | \`ReviewContract\` |\n`
-      await writeFiles(this.repo, { 'openspec/changes/subject/features/NEW_STEPS.md': source })
+      await writeFiles(this.repo, { 'desk/changes/subject/features/NEW_STEPS.md': source })
       const entry = parseCatalog(source).phrases[0]!
       this.vars.phrase = entry.key; this.vars.phraseHash = entry.hash
     } else if (name === 'ReviewThreadOpened') {
@@ -118,6 +127,12 @@ export class ReviewWorld {
         recorded: decision.recorded ?? { how: 'decisions_md', commit: (await git(this.repo, ['rev-parse', 'HEAD'])).trim() } }, 'fixture')
       if (status === 'dismissed') await executeOwnerDecision(this.dir, { type: 'DismissOwnerDecision', id: decision.id,
         reason: decision.dismissed?.reason ?? 'Outside the fixture scope', at: String(this.vars.at) }, 'fixture')
+    } else if (name === 'ReviewProjectionDamaged') {
+      const file = path.join(this.dir, 'review.yaml')
+      if (data.mode === 'lost') await rm(file, { force: true })
+      else if (data.mode === 'stale') await writeFile(file, stringify(emptyReview()))
+      else if (data.mode === 'corrupt') await writeFile(file, 'version: [corrupted projection\n')
+      else throw new Error(`Unknown projection condition ${data.mode}`)
     } else if (name === 'ApprovalCommitRejected' || name === 'ApprovalCommitFailed') {
       const hook = path.join(this.repo, '.git/hooks/pre-commit')
       await writeFile(hook, '#!/bin/sh\nexit 1\n'); await chmod(hook, 0o755)

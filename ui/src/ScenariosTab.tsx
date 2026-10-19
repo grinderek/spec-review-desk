@@ -7,7 +7,7 @@ import type { PanelTarget } from './App.tsx'
 import { useAction } from './feedback.tsx'
 import { api } from './api.ts'
 import { scenarioOpen } from './decision-view.ts'
-import { corpusKey, cssId, useKeys } from './keys.ts'
+import { cssId, useKeys } from './keys.ts'
 import { ScenarioCard } from './ScenarioCard.tsx'
 import { StepLines } from './StepLines.tsx'
 
@@ -29,7 +29,7 @@ export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey, onD
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Set<string>>(new Set())
   const [cursor, setCursor] = useState<string | null>(null)
-  const runOf = (s: ScenarioWithStatus) => !runner?.stale && (runner?.outcome === 'done' || (runner?.result?.totals.failed ?? 0) > 0) ? runner?.result?.scenarios[corpusKey(s.file, s.title)] : undefined
+  const runOf = (s: ScenarioWithStatus) => !runner?.stale && (runner?.outcome === 'done' || (runner?.result?.totals.failed ?? 0) > 0) ? runner?.result?.scenarios[s.key] : undefined
   const shown = (s: ScenarioWithStatus) =>
     filter === 'all' || (filter === 'red' ? runOf(s)?.status === 'failed' : s.effective.status === filter)
   const visible = view.features.flatMap((f) => f.scenarios.filter(shown))

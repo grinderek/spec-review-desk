@@ -2,13 +2,14 @@ import { createHash } from 'node:crypto'
 import { parseDocument, stringify } from 'yaml'
 import { z } from 'zod'
 import { FeatureParseError, type FeatureView, type StepView } from './gherkin.ts'
+import { contractKey, STABLE_SCENARIO_ID } from './contract-identity.ts'
 
 const Name = /^(?:[A-Z][A-Za-z0-9]+|\$[a-z][a-zA-Z0-9]*)$/
 const Fact = z.record(z.string().regex(Name), z.record(z.string(), z.unknown())).refine((v) => Object.keys(v).length === 1, 'exactly one named event or command is required')
 const Bind = z.record(z.string().regex(/^[a-z][a-zA-Z0-9]*$/), z.string().regex(/^response\.body\.[a-zA-Z0-9_.]+$/))
 const Response = z.object({ status: z.number().int().min(100).max(599), body: z.unknown().optional() }).strict()
 const Scenario = z.object({
-  id: z.string().regex(/^[a-z][a-z0-9-]*$/),
+  id: z.string().regex(STABLE_SCENARIO_ID),
   scenario: z.string().min(1),
   cases: z.array(z.record(z.string().regex(/^[a-z][a-zA-Z0-9]*$/), z.unknown())).min(1).optional(),
   given: z.array(Fact),
@@ -40,7 +41,7 @@ export function deskFeature(source: string, file: string): FeatureView {
   const doc = parseDeskDsl(source, file)
   const step = (keyword: string, event: Fact): StepView => ({ keyword, text: Object.keys(event)[0]!, line: 1, kind: 'catalog', phrase: null, extended: false, catalogKeyword: null, event: Object.keys(event)[0]!, table: null, docString: stringify(Object.values(event)[0]) })
   return { file, name: doc.feature, tags: ['desk-dsl'], description: 'Desk DSL v1', preamble: [], background: [], scenarios: doc.scenarios.map((s) => ({
-    key: `${file}::${s.id}`, file, title: s.scenario, kind: s.cases ? 'Scenario Outline' : 'Scenario', line: 1, tags: ['desk-dsl'], decisions: [], notes: [], examples: s.cases ? [{ name: 'cases', header: [...new Set(s.cases.flatMap((row) => Object.keys(row)))], rows: s.cases.map((row) => [...new Set(s.cases!.flatMap((r) => Object.keys(r)))].map((key) => JSON.stringify(row[key]) ?? '')) }] : [],
+    id: s.id, key: contractKey(file, s.id), file, title: s.scenario, kind: s.cases ? 'Scenario Outline' : 'Scenario', line: 1, tags: ['desk-dsl'], decisions: [], notes: [], examples: s.cases ? [{ name: 'cases', header: [...new Set(s.cases.flatMap((row) => Object.keys(row)))], rows: s.cases.map((row) => [...new Set(s.cases!.flatMap((r) => Object.keys(r)))].map((key) => JSON.stringify(row[key]) ?? '')) }] : [],
     source: stringify(s), hash: contractHash(s),
     steps: [...s.given.map((e) => step('Given', e)), step('When', s.when), ...s.then.events.map((e) => step('Then', e)), { ...step('Then', { Response: s.then.response }), event: null }].map((step, i) => ({ ...step, line: i + 1 })),
     shape: { given: s.given.map((e) => Object.keys(e)[0]!), when: Object.keys(s.when), then: s.then.events.map((e) => Object.keys(e)[0]!), warnings: [] },

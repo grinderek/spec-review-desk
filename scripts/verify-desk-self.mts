@@ -9,7 +9,6 @@ import { registerRunnerRoutes } from '../server/routes/runner.ts'
 import { call } from '../server/testing/http.ts'
 import { compareToCorpus, loadCorpus } from '../server/corpus.ts'
 import { loadChangeView } from '../server/change-view.ts'
-import { corpusKey } from '../server/run-messages.ts'
 
 // Exercise the self-review integration through authenticated public runner routes.
 // No owner approvals are written in the actual repository.
@@ -25,7 +24,7 @@ assert.ok(wt, 'Desk must discover its configured worktree')
 const ref = wt.changes.find(c => c.name === 'try-desk-dsl')!
 assert.ok(ref, 'The proposed self-review change must exist')
 const view = await loadChangeView(wt, ref, { withCommits: false })
-assert.equal(view.joinKey.ok, true)
+assert.equal(view.validation.valid, true)
 assert.deepEqual(view.errors, [])
 const reviewedScenarios = view.features.flatMap(f => f.scenarios)
 assert.ok(reviewedScenarios.length > 0)
@@ -35,7 +34,7 @@ assert.ok(Object.values(compareToCorpus(view.features, corpus.features, view.rev
 // The runner executes the whole DSL corpus, beyond the contracts in the self-review change.
 const scenarios = corpus.features.filter(f => f.tags.includes('desk-dsl')).flatMap(f => f.scenarios)
 assert.ok(scenarios.length > 0)
-const expectedKeys = scenarios.map(s => corpusKey(s.file, s.title)).sort()
+const expectedKeys = scenarios.map(s => s.key).sort()
 assert.equal(new Set(expectedKeys).size, expectedKeys.length, 'Corpus runner keys must be unique')
 const expected = scenarios.reduce((n, s) => n + (s.examples.reduce((rows, e) => rows + e.rows.length, 0) || 1), 0)
 assert.equal((await call(app, 'POST', `/api/runner/${wt.id}/run`)).status, 202)
@@ -46,7 +45,7 @@ assert.equal(state.error, null)
 assert.deepEqual(Object.keys(state.result.scenarios).sort(), expectedKeys)
 assert.deepEqual(state.result.totals, { passed: expected, failed: 0, other: 0 })
 for (const scenario of scenarios) {
-  const result = state.result.scenarios[corpusKey(scenario.file, scenario.title)]
+  const result = state.result.scenarios[scenario.key]
   assert.equal(result.status, 'passed', scenario.title)
   const rows = scenario.examples.flatMap(e => e.rows)
   assert.deepEqual(result.rows, rows.length ? rows.map(() => 'passed') : null, scenario.title)

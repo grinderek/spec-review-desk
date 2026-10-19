@@ -1,6 +1,5 @@
 import { useEffect, useRef } from 'react'
 
-export const corpusKey = (file: string, title: string): string => `${file.split('/').pop() ?? file}::${title}`
 export const cssId = (key: string): string => key.replace(/[^a-zA-Z0-9_-]/g, '_')
 
 export const stripDiff = (text: string): string => text.replace(/```diff[\s\S]*?```/g, '').trim()

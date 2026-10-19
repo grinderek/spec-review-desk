@@ -20,7 +20,8 @@ function LiveLog({ runId }: { runId: string }) {
 export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; view: ChangeView; runner: RunnerState | null; setPanel: (t: PanelTarget) => void }) {
   const act = useAction()
   const [logs, setLogs] = useState<Record<string, string>>({})
-  const failing = Object.entries(runner?.result?.scenarios ?? {}).filter(([, r]) => r.status !== 'passed')
+  const current = new Map(view.contracts.map(contract => [contract.key, contract]))
+  const failing = Object.entries(runner?.result?.scenarios ?? {}).filter(([key, result]) => current.has(key) && result.status !== 'passed')
   return (
     <>
       <h4>Apply runs</h4>
@@ -69,7 +70,7 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
       {failing.length ? (
         <ul>
           {failing.map(([key, r]) => (
-            <li key={key}><span className="mono">{key}</span> - {r.status}{r.failure ? `: ${r.failure.message.split('\n')[0]}` : ''}</li>
+            <li key={key}>{current.get(key)!.title} <span className="mono">{key}</span> - {r.status}{r.failure ? `: ${r.failure.message.split('\n')[0]}` : ''}</li>
           ))}
         </ul>
       ) : null}

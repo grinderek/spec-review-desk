@@ -5,7 +5,6 @@ import path from 'node:path'
 import { z } from 'zod'
 import { loadCorpus } from './corpus.ts'
 import { git } from './git.ts'
-import { corpusKey } from './run-messages.ts'
 
 const Hash = z.string().regex(/^[0-9a-f]{64}$/)
 const File = z.object({ path: z.string(), hash: Hash.nullable(), mode: z.number().int().nullable() })
@@ -56,7 +55,7 @@ export async function captureVerificationSource(cwd: string): Promise<Verificati
   const corpus = await loadCorpus(cwd)
   if (corpus.errors.length) throw new Error(`Cannot verify an invalid corpus: ${corpus.errors.map(e => e.message).join('; ')}`)
   const contracts = corpus.features.flatMap(feature => feature.scenarios.map(scenario => ({
-    key: corpusKey(feature.file, scenario.title), hash: scenario.hash,
+    key: scenario.key, hash: scenario.hash,
     rows: scenario.examples.reduce((count, example) => count + example.rows.length, 0) || 1,
   }))).sort((a, b) => a.key.localeCompare(b.key, 'en'))
   if (await git(cwd, ['rev-parse', 'HEAD']).then(value => value.trim()) !== head) throw new Error('HEAD changed while capturing verification inputs')

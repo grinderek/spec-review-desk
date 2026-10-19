@@ -14,9 +14,11 @@ manual verification. Do not reproduce deleted assertions in DSL, browser tests, 
 adapters without an explicit owner request. Add a contract only for a meaningful product rule;
 keep adapters focused on setup and public operations. See `docs/method/testing.md`.
 
-Start an OpenSpec change with `schema: behavior-driven`, put proposed contracts under `features/`
-and keep `specs/**/spec.md` titles equal to those contracts. Use stable scenario ids. Do not rewrite
-approved contracts to make an implementation pass.
+Start a native change under `desk/changes/<name>/` with `change.yaml` declaring `version: 1` and
+`kind: behavior-driven`. Put executable rules under its `features/` directory. Contract identity is
+`relative-feature-path::stable-id`; Gherkin scenarios require one explicit `@id:<stable-id>` tag.
+Readable contract documentation is generated from executable rules. Do not maintain a separate
+Markdown scenario index or rewrite approved contracts to make an implementation pass.
 
 Given facts prepare prior history and environment; When executes one public command; Then checks
 new events in the selected review, initiative, verification or worktree journal and public responses. Use response bindings for generated values and subsequent

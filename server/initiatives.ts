@@ -1,4 +1,5 @@
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { INITIATIVE_ROOT } from './change-package.ts'
+import { lstat, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import type { DecisionView } from './change-view.ts'
@@ -14,6 +15,7 @@ import { INITIATIVE_FILE, type InitiativeDoc, type InputEntry, isInitiativeName,
 import { readReview } from './review-store.ts'
 import { INITIATIVE_EVENTS_FILE, projectInitiative, readInitiativeStream, type InitiativeEvent } from './initiative-events.ts'
 import { deriveStatus, proposeBlocker, type SliceStatus } from './slice-plan.ts'
+import { nativeScopeDirectories } from './native-path.ts'
 
 // Spec B §3: an initiative is found in any worktree of a configured repo; slice statuses are
 // derived from the changes, their review.yaml, their Apply runs and the author runs.
@@ -51,7 +53,7 @@ export interface InitiativeSummary {
   running: number
 }
 
-const INITIATIVES = path.join('openspec', 'initiatives')
+const INITIATIVES = INITIATIVE_ROOT
 
 async function readOptional(file: string): Promise<string | null> {
   try {
@@ -62,16 +64,14 @@ async function readOptional(file: string): Promise<string | null> {
 }
 
 export async function listInitiatives(wt: WorktreeInfo): Promise<InitiativeRef[]> {
-  let names: string[]
-  try {
-    names = (await readdir(path.join(wt.path, INITIATIVES), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort()
-  } catch {
-    return []
-  }
-  const found = await Promise.all(names.filter(isInitiativeName).map(async (name): Promise<InitiativeRef[]> => {
+  const names=await nativeScopeDirectories(path.join(wt.path,INITIATIVES),isInitiativeName)
+  const found = await Promise.all(names.map(async (name): Promise<InitiativeRef[]> => {
     const dir = path.join(wt.path, INITIATIVES, name)
-    const present = await stat(path.join(dir, INITIATIVE_EVENTS_FILE)).then(() => true, () => false)
-    return present ? [{ worktreeId: wt.id, name, dir, relDir: `openspec/initiatives/${name}` }] : []
+    let journal
+    try { journal=await lstat(path.join(dir,INITIATIVE_EVENTS_FILE)) }
+    catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error}
+    if(!journal.isFile()||journal.isSymbolicLink())throw new Error(`Native initiative journal is not a regular file: ${path.join(dir,INITIATIVE_EVENTS_FILE)}`)
+    return [{ worktreeId: wt.id, name, dir, relDir: `${INITIATIVE_ROOT}/${name}` }]
   }))
   return found.flat()
 }
@@ -97,7 +97,7 @@ async function sliceFacts(wt: WorktreeInfo, doc: InitiativeDoc, changes: readonl
   const authorRunning = doc.runs.some((r) => r.kind === 'author' && r.slice === slice.id && ['running','queued','uncertain','needs_owner'].includes(r.outcome))
   const active = slice.change ? changes.find((c) => !c.archived && c.name === slice.change) : undefined
   // An archived change was applied before it was archived.
-  const archived = slice.change ? changes.some((c) => c.archived && c.name.endsWith(`-${slice.change}`)) : false
+  const archived = slice.change ? changes.some((c) => c.archived && c.name === slice.change) : false
   if (!active) return { authorRunning, changeExists: archived, approved: archived, applied: archived }
   const approved = (await readReview(active.dir)).approved_at !== null
   return { authorRunning, changeExists: true, approved, applied: approved && (await appliedChange(wt, active)) }

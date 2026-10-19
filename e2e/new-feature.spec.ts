@@ -10,7 +10,7 @@ const BRIEF = [
   'Business health score = the Daily Operating Score spec v1.0 (`scoring_version: daily_operating_score_v1`),',
   'built slice by slice under the behavior-driven method.',
 ].join('\n')
-const FROM_REPO = ['api/features/STEPS.md', 'api/openspec/changes/add-thread-state/proposal.md', 'config.yaml'].join('\n')
+const FROM_REPO = ['api/features/STEPS.md', 'api/desk/changes/add-thread-state/proposal.md', 'config.yaml'].join('\n')
 
 async function openForm(page: Page, name: string): Promise<void> {
   await page.goto('/?t=e2e')
@@ -30,7 +30,7 @@ const expectArrived = (view: Awaited<ReturnType<typeof createAndRead>>) => {
   expect(view.brief).toBe(`${BRIEF}\n`)
   expect(view.inputs.map((i) => [i.file, i.source.kind, i.source.path])).toEqual([
     ['STEPS.md', 'repo', 'api/features/STEPS.md'],
-    ['proposal.md', 'repo', 'api/openspec/changes/add-thread-state/proposal.md'],
+    ['proposal.md', 'repo', 'api/desk/changes/add-thread-state/proposal.md'],
     ['config.yaml', 'repo', 'config.yaml'],
   ])
 }

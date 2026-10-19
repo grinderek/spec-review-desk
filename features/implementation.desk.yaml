@@ -97,7 +97,7 @@ scenarios:
                 result:
                   totals: $totals
                   scenarios:
-                    'subject.desk.yaml::Subject contract': { status: $status }
+                    'subject.desk.yaml::subject': { status: $status }
   - id: require-current-approval
     scenario: Require renewed approval when a contract changes before implementation
     given:

@@ -27,7 +27,6 @@ export function testConfig(repoPath: string, overrides: Partial<Config> = {}): C
       timeoutMs: 20_000,
       dockerBin: 'docker',
     },
-    openspecBin: 'openspec',
     initiativeBase: 'main',
     ...overrides,
   }

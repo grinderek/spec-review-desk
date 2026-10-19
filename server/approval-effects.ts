@@ -25,7 +25,7 @@ export async function requestChangeApproval(wt: WorktreeInfo, ref: ChangeRef, tr
     const relative = path.relative(wt.path, ref.dir).split(path.sep).join('/')
     plan = await prepareGitEffect(wt.path, { purpose: { kind: 'change-approval', ref: approvalSourceIdentity(facts.sourceVersion) }, outputs: [],
       extraFiles: [`${relative}/${REVIEW_FILE}`, `${relative}/${REVIEW_EVENTS_FILE}`],
-      message: `docs(openspec): ${ref.name} - owner approval${trailer ? `\n\n${trailer}` : ''}` })
+      message: `docs(desk): ${ref.name} - owner approval${trailer ? `\n\n${trailer}` : ''}` })
     return { events: [...events, ...requestReviewEffect(state, plan)], verify: async () => {
       if (JSON.stringify(await readApprovalFacts(wt, ref, command)) !== JSON.stringify(facts)) throw sourceChanged()
     } }

@@ -10,7 +10,7 @@ import { PhrasesTab } from './PhrasesTab.tsx'
 import { ScenariosTab } from './ScenariosTab.tsx'
 import { KitchenTab, VerificationTab } from './VerificationTab.tsx'
 
-export type TabId = 'scenarios' | 'phrases' | 'decisions' | 'proposal' | 'verification' | 'kitchen'
+export type TabId = 'scenarios' | 'contracts' | 'phrases' | 'decisions' | 'proposal' | 'verification' | 'kitchen'
 
 export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; capabilities: Capabilities | undefined; setPanel: (t: PanelTarget) => void }) {
   const change = useQuery({ queryKey: ['change', id.wt, id.name], queryFn: () => api.change(id) })
@@ -29,6 +29,7 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
   const runnerState = runner.data?.state ?? null
   const tabs: [TabId, string, number | null][] = [
     ['scenarios', 'Scenarios', view.features.reduce((n, f) => n + f.scenarios.length, 0)],
+    ['contracts', 'Contract docs', view.contracts.length],
     ['phrases', 'New phrases', view.phrases.length],
     ['decisions', 'Decisions', view.decisions.filter(isActive).length],
     ['proposal', 'Proposal', null],
@@ -52,6 +53,7 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
           <DecisionsTab id={id} view={view} focusDecision={focusDecision} setPanel={setPanel} onGoto={(key) => { setTab('scenarios'); setFocusKey(key) }} />
         ) : null}
         {tab === 'proposal' ? <DocTab title="proposal.md" text={view.docs.proposal} /> : null}
+        {tab === 'contracts' ? <DocTab title="Executable contracts" text={view.docs.contracts} /> : null}
         {tab === 'verification' ? <VerificationTab id={id} view={view} runner={runnerState} setPanel={setPanel} /> : null}
         {tab === 'kitchen' ? <KitchenTab view={view} /> : null}
       </div>

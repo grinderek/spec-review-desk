@@ -22,7 +22,8 @@ import { findThread, newId, readReview, recordReviewEvents, type ApplyRun, type 
 
 export interface ApplyDeps { config: Config; bus: EventBus; pollMs?: number; now?: () => Date }
 type Receipt = Extract<AttemptObservation, { kind: 'receipt' }>
-const sources = (view: ChangeView): string => sourceHash({ scenarios: allScenarios(view).map(({ key, hash }) => ({ key, hash })), phrases: view.phrases.map(({ key, hash }) => ({ key, hash })), docs: view.docs.proposal, joinKey: view.joinKey })
+const sources = (view: ChangeView): string => sourceHash({ contracts: view.contracts.map(({ key, hash, sourceHash }) => ({ key, hash, sourceHash })),
+  phrases: view.phrases.map(({ key, hash }) => ({ key, hash })), metadata: view.metadata, validation: view.validation, docs: view.docs.proposal })
 export class ApplyService {
   #active = new Set<string>()
   #transport: ReviewExecutionTransport
@@ -61,7 +62,7 @@ export class ApplyService {
       const queued = queueExecution('apply')
       if (queued.type !== 'ExecutionQueued') throw new Error('Expected an execution request')
       const run: ExecutionRun = { request: queued.request, outcome: 'queued', endedAt: null, reason: null, attempts: [] }
-      const attempt = await this.#build(wt, ref, run, applyPrompt(ref.name, opts.onlyKeys ?? [], view.review.decisions, allScenarios(view).map(scenario => scenario.key)), 'initial')
+      const attempt = await this.#build(wt, ref, run, applyPrompt(ref.name, view.relDir, opts.onlyKeys ?? [], view.review.decisions, allScenarios(view).map(scenario => scenario.key)), 'initial')
       await recordReviewEvents(ref.dir, async () => ({ events: [queued, { type: 'ExecutionAttemptRequested', runId: run.request.id, attempt }] }), 'execution-command')
       await this.#dispatch(wt, ref, run.request.id, attempt)
       return (await readReview(ref.dir)).apply_runs.find(item => item.id === run.request.id)!

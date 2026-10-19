@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import path from 'node:path'
 import { readFile } from 'node:fs/promises'
 import { selectAgent } from './agent-routing.ts'
 import { type Config } from './config.ts'
@@ -64,12 +65,13 @@ export class QuestionService {
     const previous = run.attempts.at(-1)
     const prompt = promptOverride ?? buildQuestionPrompt({ changeName: view.name, relDir: view.relDir,
       anchor: { kind: thread.anchor, ref: thread.ref, text: anchorText(view, thread.anchor, thread.ref) },
-      messages: thread.messages.slice(0, run.request.messageCount), files: reviewFiles(view), today: new Date().toISOString().slice(0, 10),
+      messages: thread.messages.slice(0, run.request.messageCount), files: reviewFiles(view), contractDocumentation: view.docs.contracts, today: new Date().toISOString().slice(0, 10),
       decisions: view.review.decisions, scenarioKeys: allScenarios(view).map(scenario => scenario.key) })
     const routing = previous?.routing ?? await selectAgent(this.deps.config, 'reviewer', prompt)
     if (!routing) throw new Error('A reviewer execution requires agent routing')
     const stored = sessionOverride ?? (cause === 'initial' ? view.review.agent_session : previous?.session ?? view.review.agent_session)
-    return newAttempt({ cause, processBoundary: await captureExecutionBoundary(), head: await executionHead(wt.path), sourceHash: sourceHash({ prompt, scenarios: allScenarios(view).map(({ key, hash }) => ({ key, hash })) }),
+    return newAttempt({ cause, processBoundary: await captureExecutionBoundary(), head: await executionHead(wt.path), sourceHash: sourceHash({ prompt,
+      contracts: view.contracts.map(({ key, hash, sourceHash }) => ({ key, hash, sourceHash })), metadata: view.metadata, validation: view.validation }),
       decisions: view.review.decisions, routing, spec: { kind: 'agent', bin: this.deps.config.codexBin, cwd: wt.path, sessionId: stored || randomUUID(),
         resume: Boolean(stored) && cause !== 'missing-session', model: routing.model, reasoningEffort: routing.reasoningEffort,
         allowedTools: QUESTION_TOOLS.allowed, disallowedTools: QUESTION_TOOLS.disallowed, permissionMode: 'default',
@@ -137,7 +139,7 @@ export class QuestionService {
     const reply = checked.reply
     const decisions = decisionsFromReply(reply.decisions, { kind: 'thread', id: run.request.threadId! }, at)
     const originals = run.attempts.at(-1)!.decisions as DecisionRecord[]
-    return { decisions, message: { role: 'agent', at, text: reply.answer, note, patch: reply.patch ? await vetPatch(wt.path, `openspec/changes/${ref.name}`, reply.patch) : null,
+    return { decisions, message: { role: 'agent', at, text: reply.answer, note, patch: reply.patch ? await vetPatch(wt.path, path.relative(wt.path, ref.dir).split(path.sep).join('/'), reply.patch) : null,
       ...(decisions.length ? { decision_ids: decisions.map(decision => decision.id) } : {}),
       ...(reply.resolves.length ? { resolves: reply.resolves, decision_bindings: reply.resolves.flatMap(id => {
         const decision = originals.find(decision => decision.id === id)

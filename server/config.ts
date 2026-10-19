@@ -65,7 +65,6 @@ const ConfigSchema = z.object({
       dockerBin: z.string().min(1).default('docker'),
     })
     .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, browserImage: BROWSER_IMAGE, envFile: '.env', auth: 'chatgpt', authVolume: 'spec-review-codex-auth', timeoutMinutes: 30, dockerBin: 'docker' }),
-  openspecBin: z.string().min(1).default('openspec'),
   initiativeBase: z.string().min(1).default('HEAD'),
 })
 
@@ -96,7 +95,6 @@ export interface Config {
   devUiOrigin: string
   runners: RunnerProfile[]
   sandbox: SandboxConfig
-  openspecBin: string
   initiativeBase: string
 }
 
@@ -162,7 +160,6 @@ export async function loadConfig(file: string): Promise<Config> {
       timeoutMs: c.sandbox.timeoutMinutes * 60_000,
       dockerBin: c.sandbox.dockerBin,
     },
-    openspecBin: c.openspecBin,
     initiativeBase: c.initiativeBase,
   }
 }

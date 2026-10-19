@@ -50,7 +50,7 @@ export function createPreview(f: PreviewFields): string[] {
     : `use the existing worktree ${f.worktreePath ?? '(pick one)'}`
   return [
     first,
-    `write openspec/initiatives/${f.name}/{initiative.events.jsonl,initiative.yaml,brief.md,inputs/}`,
+    `write desk/initiatives/${f.name}/{initiative.events.jsonl,initiative.yaml,brief.md,inputs/}`,
     `git commit -m "docs(initiative): ${f.name} - initiative"`,
   ]
 }

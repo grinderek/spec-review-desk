@@ -1,3 +1,4 @@
+import { initiativeDir as nativeInitiativeDir } from './change-package.ts'
 import { randomBytes } from 'node:crypto'
 import { chmod, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -17,7 +18,7 @@ export const isInitiativeName = (name: string): boolean => INITIATIVE_NAME.test(
 
 export function initiativeDir(worktreePath: string, name: string): string {
   if (!isInitiativeName(name)) throw new HttpError(422, 'invalid_name', `invalid initiative name "${name}"`)
-  return path.join(worktreePath, 'openspec', 'initiatives', name)
+  return nativeInitiativeDir(worktreePath,name)
 }
 
 export const emptyInitiative = (meta: { name: string; title: string; repo: string; created_at: string }): InitiativeDoc =>

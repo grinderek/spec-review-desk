@@ -76,7 +76,6 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
   const running = view.review.apply_runs.some((r) => r.outcome === 'running' || r.outcome === 'uncertain')
   const drift = corpus?.drift ?? []
   const recorded = view.review.approved_at !== null
-  const jk = view.joinKey
   return (
     <div className="head">
       <div className="crumbs">{view.repo} · {view.branch ?? 'detached'} · {view.relDir}</div>
@@ -89,32 +88,25 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
         <RunnerStat id={id} runner={runner} docker={capabilities?.docker ?? false} />
       </div>
       <div className="gatebar">
-        <span className={`ready${view.readiness.ready ? ' on' : ''}`}>{recorded ? `approved ${view.review.approved_at!.slice(0, 10)}` : 'ready for Codex Apply'}</span>
+        <span className={`ready${view.readiness.ready ? ' on' : ''}`}>{recorded ? view.approvalCommitted ? `approved ${view.review.approved_at!.slice(0, 10)}` : 'approval requires a commit for current contracts' : 'ready for Codex Apply'}</span>
         {view.readiness.ready ? null : <small>Blocked: {view.readiness.reasons.join(' · ')}</small>}
-        {view.readiness.ready && !view.archived && (!recorded || view.uncommittedReview) ? (
+        {view.readiness.ready && !view.archived && (!view.approvalCommitted || view.uncommittedReview) ? (
           <button className="btn ok" onClick={() => void act(() => api.recordApproval(id), 'Approval recorded and committed')}>Record approval</button>
         ) : null}
         {recorded && !view.archived ? (
-          <button className="btn pri" disabled={!view.readiness.ready || running || !capabilities?.codex} onClick={() => void act(() => api.startApply(id), 'Apply started')}>Apply</button>
+          <button className="btn pri" disabled={!view.readiness.ready || !view.approvalCommitted || running || !capabilities?.codex} onClick={() => void act(() => api.startApply(id), 'Apply started')}>Apply</button>
         ) : null}
         {running && !view.archived ? <button className="btn bad" onClick={() => void act(() => api.stopApply(id), 'Stopping the Apply run…')}>Stop</button> : null}
         {drift.length && !view.archived ? (
-          <button className="btn" disabled={running || !capabilities?.codex} onClick={() => void act(() => api.reapply(id), 'Re-apply started')}>Re-apply {drift.length} changed scenario{drift.length > 1 ? 's' : ''}</button>
+          <button className="btn" disabled={!view.readiness.ready || !view.approvalCommitted || running || !capabilities?.codex} onClick={() => void act(() => api.reapply(id), 'Re-apply started')}>Re-apply {drift.length} changed scenario{drift.length > 1 ? 's' : ''}</button>
         ) : null}
       </div>
       <div className="warnings">
-        {view.errors.map((e) => <div key={e.file} className="err">{e.message}</div>)}
-        {view.reviewErrors ? <div className="err">review.yaml is invalid and will not be written: {view.reviewErrors.join('; ')}</div> : null}
-        {jk.ok ? null : (
-          <div>
-            Join key: {jk.missingInFeatures.length ? `spec.md titles without a scenario: ${jk.missingInFeatures.join(', ')}. ` : ''}
-            {jk.missingInSpecs.length ? `scenarios without a spec.md line: ${jk.missingInSpecs.join(', ')}. ` : ''}
-            {jk.duplicateTitles.length ? `duplicate titles: ${jk.duplicateTitles.join(', ')}.` : ''}
-          </div>
-        )}
+        {view.validation.problems.map((problem, index) => <div key={`${problem.file}:${problem.code}:${index}`} className="err">{problem.file}{problem.line ? `:${problem.line}` : ''}{problem.scenarioId ? ` (${problem.scenarioId})` : ''}: {problem.message}</div>)}
+        {view.reviewErrors ? <div className="err">Review history is invalid and cannot accept commands: {view.reviewErrors.join('; ')}</div> : null}
         {view.orphans.scenarios.map((k) => <OrphanRow key={k} id={id} view={view} section="scenarios" entryKey={k} />)}
         {view.orphans.phrases.map((k) => <OrphanRow key={k} id={id} view={view} section="phrases" entryKey={k} />)}
-        {view.uncommittedReview ? <div>Review state uncommitted — it is committed with the next decision or with "Record approval".</div> : null}
+        {view.uncommittedReview ? <div>Review history is uncommitted - it is committed with the next decision or with "Record approval".</div> : null}
       </div>
     </div>
   )

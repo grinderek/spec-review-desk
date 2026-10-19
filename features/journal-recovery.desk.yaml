@@ -1,0 +1,36 @@
+version: 1
+feature: Owner review survives loss or corruption of generated views
+scenarios:
+  - id: recover-owner-review-from-journal
+    scenario: Preserve approval and an outstanding owner choice when the review view is unavailable
+    cases:
+      - { name: lost view, mode: lost }
+      - { name: stale view, mode: stale }
+      - { name: corrupted view, mode: corrupt }
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - DecisionRaised:
+          question: Keep the delivery obligation open?
+          status: decided
+          choice: { option: null, note: Keep this obligation open., at: $at }
+      - ReviewProjectionDamaged: { mode: $mode }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          reviewErrors: null
+          features: [{ scenarios: [{ effective: { status: approved } }] }]
+          decisions: [{ status: decided, choice: { note: Keep this obligation open. }, recorded: null }]
+          readiness: { ready: false }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              features: [{ scenarios: [{ effective: { status: approved } }] }]
+              decisions: [{ status: decided, choice: { note: Keep this obligation open. } }]
+              readiness: { ready: false }

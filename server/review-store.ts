@@ -1,4 +1,5 @@
 import { projectPatch, type PatchEvent } from './patch-commands.ts'
+import { decodeJournalRecord, prepareJournalRecord } from './journal-schema.ts'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { readFile, rename, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
@@ -149,11 +150,8 @@ async function readReviewSnapshot(changeDir: string): Promise<ReviewDoc> {
   } catch (error) {
     throw new ReviewFileError(file, [(error as Error).message])
   }
-  const result = ReviewSchema.safeParse(raw)
-  if (!result.success) {
-    throw new ReviewFileError(file, result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`))
-  }
-  return result.data
+  try { return prepareJournalRecord(ReviewSchema, raw) }
+  catch (error) { throw new ReviewFileError(file, [error instanceof Error ? error.message : String(error)]) }
 }
 
 export const REVIEW_EVENTS_FILE = 'review.events.jsonl'
@@ -225,11 +223,13 @@ export async function readReviewStream(changeDir: string): Promise<ReviewStream>
     else throw error
   }
   try {
-    const events = text.split('\n').filter((line) => line.trim()).map((line) => ReviewEventSchema.parse(JSON.parse(line)))
+    const events = text.split('\n').filter((line) => line.trim()).map((line) => decodeJournalRecord(ReviewEventSchema, JSON.parse(line)))
     let stream: string | undefined
+    const ids = new Set<string>()
     for (const [index, event] of events.entries()) {
       stream ??= event.stream
-      if (event.stream !== stream || event.sequence !== index + 1) throw new Error(`Invalid review stream identity or sequence at event ${index + 1}`)
+      if (event.stream !== stream || event.sequence !== index + 1 || ids.has(event.id)) throw new Error(`Invalid review stream identity, sequence or duplicate event id at event ${index + 1}`)
+      ids.add(event.id)
     }
     return { events, text, version: createHash('sha256').update(text).digest('hex') }
   }
@@ -238,29 +238,30 @@ export async function readReviewStream(changeDir: string): Promise<ReviewStream>
 export async function readReviewEvents(changeDir: string): Promise<ReviewEvent[]> {
   return (await readReviewStream(changeDir)).events
 }
-export function replayScenarioReviews(events: readonly ReviewEvent[]): ReviewDoc['scenarios'] {
-  const scenarios: ReviewDoc['scenarios'] = {}
-  for (const event of events) {
-    if (event.type === 'ScenarioReviewRemoved') delete scenarios[event.key]
-    else if (event.type === 'ScenarioApproved' || event.type === 'ScenarioChangesRequested') putEntry(scenarios, event.key, event.entry)
+async function reviewFromStream(changeDir: string, stream: ReviewStream): Promise<ReviewDoc> {
+  // A supported journal wins over every YAML value, including malformed or stale files.
+  // With no journal, detect unsupported snapshot-only state instead of importing it.
+  if (!stream.events.length) {
+    const snapshot = await readReviewSnapshot(changeDir)
+    if (!isDeepStrictEqual(snapshot, emptyReview())) throw new ReviewFileError(REVIEW_FILE, ['Review snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
-  return scenarios
+  return projectReview(stream.events)
 }
 export async function readReview(changeDir: string): Promise<ReviewDoc> {
-  const doc = await readReviewSnapshot(changeDir)
-  return projectReview(doc, (await readReviewStream(changeDir)).events)
+  return reviewFromStream(changeDir, await readReviewStream(changeDir))
 }
-export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): ReviewDoc {
-  if (!events.length && (Object.keys(doc.scenarios).length || Object.keys(doc.phrases).length || doc.approved_at || doc.approved_commit || doc.threads.length || doc.agent_session || doc.decisions.length || doc.git_effects.length || doc.executions.length || doc.apply_runs.length)) {
-    throw new ReviewFileError(REVIEW_FILE, ['Review snapshot has no supported event history. Legacy snapshot imports are not supported.'])
-  }
-  const next: ReviewDoc = { ...doc, scenarios: replayScenarioReviews(events), phrases: {}, approved_at: null, approved_commit: null, threads: [], agent_session: null, decisions: [], git_effects: [], executions: [], apply_runs: [] }
+export function projectReview(events: readonly ReviewEvent[]): ReviewDoc {
+  const next = emptyReview()
+  // Every handler sees only its historical prefix. No precomputed final approval state,
+  // current contracts or future events may supply context to an earlier transition.
   for (const event of events) {
     if (event.type.startsWith('Execution')) {
       try { projectExecution(next.executions, event as ExecutionEvent) }
       catch (error) { throw new ReviewFileError(REVIEW_EVENTS_FILE, [(error as Error).message]) }
     }
-    if (event.type === 'PhraseReviewRemoved') delete next.phrases[event.key]
+    if (event.type === 'ScenarioReviewRemoved') delete next.scenarios[event.key]
+    else if (event.type === 'ScenarioApproved' || event.type === 'ScenarioChangesRequested') putEntry(next.scenarios, event.key, event.entry)
+    else if (event.type === 'PhraseReviewRemoved') delete next.phrases[event.key]
     else if (event.type === 'PhraseApproved' || event.type === 'PhraseChangesRequested') putEntry(next.phrases, event.key, event.entry)
     else if (event.type === 'ChangeApprovalRecorded') { next.approved_at = event.at; next.approved_commit = event.commit }
     else if (event.type === 'ChangeApprovalRemoved') { next.approved_at = null; next.approved_commit = null }
@@ -299,22 +300,10 @@ export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): R
       outcome: run.outcome === 'queued' ? 'running' : run.outcome, resume_offset: 0, attempt_started_at: attempt.at,
       validation_retry: attempt.cause === 'validation-retry', routing: attempt.routing ?? undefined }
   })
-  if (doc.threads.some(t => !next.threads.some(recorded => recorded.id === t.id)) || (doc.agent_session && !events.some(e => e.type === 'ReviewAgentSessionSet'))) {
-    throw new ReviewFileError(REVIEW_FILE, ['Discussion snapshot has no supported event history. Legacy snapshot imports are not supported.'])
-  }
-  if (doc.decisions.some(d => !next.decisions.some(recorded => recorded.id === d.id)) || doc.git_effects.some(e => !next.git_effects.some(recorded => recorded.plan.effectId === e.plan.effectId))) {
-    throw new ReviewFileError(REVIEW_FILE, ['Decision or effect snapshot has no supported event history. Legacy snapshot imports are not supported.'])
-  }
-  if (doc.executions.some(run => !next.executions.some(recorded => recorded.request.id === run.request.id)) || doc.apply_runs.some(run => !next.apply_runs.some(recorded => recorded.id === run.id))) {
-    throw new ReviewFileError(REVIEW_FILE, ['Execution snapshot has no supported event history. Legacy snapshot imports are not supported.'])
-  }
   return next
 }
 function putEntry(entries: Record<string, Entry>, key: string, entry: Entry): void {
   Object.defineProperty(entries, key, { value: entry, writable: true, configurable: true, enumerable: true })
-}
-function approvalState(doc: ReviewDoc) {
-  return { scenarios: doc.scenarios, phrases: doc.phrases, approved_at: doc.approved_at, approved_commit: doc.approved_commit, threads: doc.threads, agent_session: doc.agent_session, decisions: doc.decisions, git_effects: doc.git_effects, executions: doc.executions, apply_runs: doc.apply_runs }
 }
 async function replaceFile(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
@@ -327,12 +316,12 @@ export async function writeReview(changeDir: string, doc: ReviewDoc): Promise<vo
 async function writeReviewSnapshotMutation(changeDir: string, doc: ReviewDoc): Promise<void> {
   const next = ReviewSchema.parse(doc)
   const stream = await readReviewStream(changeDir)
-  const previous = projectReview(await readReviewSnapshot(changeDir), stream.events)
-  if (!isDeepStrictEqual(approvalState(next), approvalState(previous))) {
+  const previous = await reviewFromStream(changeDir, stream)
+  if (!isDeepStrictEqual(next, previous)) {
     throw new ReviewFileError(path.join(changeDir, REVIEW_FILE), ['Journaled review state can only be changed by an explicit domain command.'])
   }
   await commitReviewEvents(changeDir, stream, [])
-  // Snapshot mutations persist only fields not yet migrated to the journal.
+  // A snapshot refresh can only persist the exact journal projection.
   await replaceFile(path.join(changeDir, REVIEW_FILE), stringify(next, { lineWidth: 0 }))
 }
 
@@ -348,20 +337,18 @@ async function commitReviewEvents(changeDir: string, expected: ReviewStream, eve
   return [...expected.events, ...events]
 }
 
-export async function recordReviewEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; review?: ReviewDoc; verify?: () => Promise<void> }>, origin: 'approval-command' | 'discussion-command' | 'patch-command' | 'decision-command' | 'execution-command' | 'fixture' = 'discussion-command'): Promise<void> {
+export async function recordReviewEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; verify?: () => Promise<void> }>, origin: 'approval-command' | 'discussion-command' | 'patch-command' | 'decision-command' | 'execution-command' | 'fixture' = 'discussion-command'): Promise<void> {
   await withReviewLock(changeDir, async () => {
     const stream = await readReviewStream(changeDir)
-    const previous = projectReview(await readReviewSnapshot(changeDir), stream.events)
+    const previous = await reviewFromStream(changeDir, stream)
     const decision = await decide(structuredClone(previous))
     const streamId = stream.events[0]?.stream ?? randomUUID()
     const command = randomUUID()
-    const events: ReviewEvent[] = decision.events.map((event, index) => ReviewEventSchema.parse({ ...event,
+    const events: ReviewEvent[] = decision.events.map((event, index) => prepareJournalRecord(ReviewEventSchema, { ...event,
       version: 2, stream: streamId, sequence: stream.events.length + index + 1,
       id: randomUUID(), command, at: 'at' in event ? event.at : nowIso(), origin }))
     await decision.verify?.()
-    const mixed = ReviewSchema.parse(decision.review ?? previous)
-    if (!isDeepStrictEqual(approvalState(mixed), approvalState(previous))) throw new ReviewFileError(REVIEW_FILE, ['Command mixed state cannot alter journaled fields'])
-    const next = projectReview(mixed, [...stream.events, ...events])
+    const next = projectReview([...stream.events, ...events])
     await commitReviewEvents(changeDir, stream, events)
     await replaceFile(path.join(changeDir, REVIEW_FILE), stringify(next, { lineWidth: 0 }))
   })

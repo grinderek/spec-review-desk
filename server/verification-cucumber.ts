@@ -1,5 +1,6 @@
 import { z } from 'zod'
-import { corpusKey, parseRunMessages } from './run-messages.ts'
+import { parseRunMessages } from './run-messages.ts'
+import { contractKey, gherkinScenarioId } from './contract-identity.ts'
 import type { VerificationSource } from './verification-source.ts'
 import { CorpusRunSchema } from './verification-events.ts'
 
@@ -23,6 +24,7 @@ export function acceptCucumberVerification(envelopes: Record[], source: Verifica
   const steps = new Map<string, Set<string>>()
   const pickleKeys = new Map<string, string>()
   const scenarioKeys = new Map<string, string>()
+  const declaredKeys = new Set<string>()
   const scenarioRows = new Map<string, string[]>()
   const pickles: { id: string; uri: string; astNodeIds: string[] }[] = []
   let terminal: { success: boolean; timestamp: { seconds: string | number; nanos?: number } } | null = null
@@ -52,8 +54,11 @@ export function acceptCucumberVerification(envelopes: Record[], source: Verifica
       const document = z.object({ uri: id, feature: z.object({ children: z.array(z.unknown()) }) }).parse(envelope.gherkinDocument)
       const nodes = (document.feature.children as any[]).flatMap(node => node.rule ? node.rule.children : [node])
       for (const node of nodes) if (node.scenario) {
-        const scenario = z.object({ id, name: z.string() }).parse(node.scenario)
-        unique(scenarioKeys, scenario.id, corpusKey(document.uri, scenario.name), 'scenario AST id')
+        const scenario = z.object({ id, name: z.string(), tags: z.array(z.object({ name: z.string() })) }).parse(node.scenario)
+        const key = contractKey(document.uri, gherkinScenarioId(scenario.tags.map(tag => tag.name)))
+        if (declaredKeys.has(key)) throw new Error(`Duplicate Cucumber stable scenario identity: ${key}`)
+        declaredKeys.add(key)
+        unique(scenarioKeys, scenario.id, key, 'scenario AST id')
         const rows = (node.scenario.examples ?? []).flatMap((example: any) => (example.tableBody ?? []).map((row: any) => id.parse(row.id)))
         if (new Set(rows).size !== rows.length) throw new Error('Duplicate Cucumber example row identity')
         scenarioRows.set(scenario.id, rows)

@@ -1,15 +1,17 @@
-import { readdir, realpath } from 'node:fs/promises'
+import { lstat, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { listChanges, parseWorktreeList, type WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { executionBusy, type ExecutionRun } from './execution-model.ts'
 import { withGitEffectLock } from './git-effect.ts'
-import { INITIATIVE_NAME } from './initiative-model.ts'
+import { INITIATIVE_FILE, INITIATIVE_NAME } from './initiative-model.ts'
 import { projectInitiative, readInitiativeStream } from './initiative-events.ts'
 import { readReview } from './review-store.ts'
 import { readVerificationStream } from './verification-events.ts'
 import { readWorktreeStream } from './worktree-events.ts'
 import { git } from './git.ts'
+import { INITIATIVE_ROOT } from './change-package.ts'
+import { nativeScopeDirectories } from './native-path.ts'
 
 export interface WorktreeAdmission {
   operation: 'reviewer' | 'apply' | 'verification' | 'initiative' | 'git'
@@ -35,16 +37,19 @@ export async function assertWorktreeAdmission(cwd: string, request: WorktreeAdmi
   const runs: ExecutionRun[] = []
   const effects: string[] = []
   const scopes = (await listChanges(wt)).map(ref => ref.dir)
-  const root = path.join(cwd, 'openspec', 'initiatives')
-  const initiatives = await readdir(root, { withFileTypes: true }).catch(error => {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return []
-    throw error
-  })
-  for (const entry of initiatives) {
-    if (!entry.isDirectory() || !INITIATIVE_NAME.test(entry.name)) continue
-    const dir = path.join(root, entry.name)
+  const root = path.join(cwd, INITIATIVE_ROOT)
+  const initiatives = await nativeScopeDirectories(root, name => INITIATIVE_NAME.test(name))
+  for (const name of initiatives) {
+    const dir = path.join(root, name)
     const stream = await readInitiativeStream(dir)
-    if (!stream.events.length) continue
+    if (!stream.events.length) {
+      const snapshot = await lstat(path.join(dir, INITIATIVE_FILE)).catch(error => {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+        throw error
+      })
+      if (snapshot) throw new HttpError(409, 'initiative_history_missing', 'Initiative journal is required; snapshot import is unsupported')
+      continue
+    }
     scopes.push(dir)
     runs.push(...projectInitiative(stream.events).executions)
     for (const { event } of stream.events) {

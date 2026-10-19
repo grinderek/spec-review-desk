@@ -4,15 +4,15 @@ import path from 'node:path'
 import { git } from '../server/git.ts'
 import { requireAttemptInactive, stopLocalAttempt } from '../server/execution-receipts.ts'
 import { startServer } from '../server/main.ts'
-import { FAKE_CODEX, FAKE_OPENSPEC } from '../server/testing/fake-codex-path.ts'
+import { FAKE_CODEX } from '../server/testing/fake-codex-path.ts'
 import { FakeSandbox } from '../server/testing/fake-sandbox.ts'
-import { FEATURE as FEATURE_TEXT, NEW_STEPS_MD, SPEC_MD } from '../server/testing/fixtures.ts'
+import { FEATURE as FEATURE_TEXT, NEW_STEPS_MD } from '../server/testing/fixtures.ts'
 import { changeFiles, makeRepo, sh, writeFiles } from '../server/testing/repo.ts'
 
-const FEATURE = 'openspec/changes/add-thread-state/features/thread_state.feature'
-const DECISION_FEATURE = 'openspec/changes/add-decision-flow/features/thread_state.feature'
-const FIRST = "features/thread_state.feature::The founder's reply resolves a waiting thread"
-const ENGINE = 'openspec/changes/add-health-score-engine'
+const FEATURE = 'desk/changes/add-thread-state/features/thread_state.feature'
+const DECISION_FEATURE = 'desk/changes/add-decision-flow/features/thread_state.feature'
+const FIRST = "thread_state.feature::founder-reply-resolves"
+const ENGINE = 'desk/changes/add-health-score-engine'
 
 async function diffOf(repo: string, rel: string, before: string, insert: string): Promise<string> {
   const file = path.join(repo, rel)
@@ -79,9 +79,8 @@ async function main(): Promise<void> {
   cleanupDirs.push(hub)
   await writeFiles(repo, changeFiles('add-decision-flow'))
   await writeFiles(repo, {
-    'openspec/changes/add-dsl-review/.openspec.yaml': 'schema: behavior-driven\n',
-    'openspec/changes/add-dsl-review/specs/review/spec.md': '#### Scenario: Review a YAML contract\n',
-    'openspec/changes/add-dsl-review/features/review.desk.yaml': `version: 1
+    'desk/changes/add-dsl-review/change.yaml': 'version: 1\nkind: behavior-driven\n',
+    'desk/changes/add-dsl-review/features/review.desk.yaml': `version: 1
 feature: DSL browser review
 scenarios:
   - id: review-yaml
@@ -101,7 +100,7 @@ scenarios:
   // The initiative flow branches its worktree from a base without the review fixtures' changes, so
   // the sidebar never lists add-thread-state twice.
   sh(repo, 'git', ['checkout', '-q', '-b', 'initiative-base'])
-  sh(repo, 'git', ['rm', '-q', '-r', 'openspec/changes'])
+  sh(repo, 'git', ['rm', '-q', '-r', 'desk/changes'])
   sh(repo, 'git', ['commit', '-q', '-m', 'a base for the initiative flow'])
   sh(repo, 'git', ['checkout', '-q', 'main'])
   const ageDiff = await diffOf(repo, FEATURE, '  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by business-hour age.\n')
@@ -152,9 +151,8 @@ scenarios:
   const writes = [{
     match: 'Slice s1',
     files: {
-      [`${ENGINE}/.openspec.yaml`]: 'schema: behavior-driven\n',
+      [`${ENGINE}/change.yaml`]: 'version: 1\nkind: behavior-driven\n',
       [`${ENGINE}/proposal.md`]: '## Why\n\nThe engine.\n',
-      [`${ENGINE}/specs/thread-state/spec.md`]: SPEC_MD,
       [`${ENGINE}/features/thread_state.feature`]: FEATURE_TEXT,
       [`${ENGINE}/features/NEW_STEPS.md`]: NEW_STEPS_MD,
     },
@@ -181,7 +179,6 @@ scenarios:
     'repos: [{ name: api, path: api }]',
     'port: 4620',
     `codexBin: ${FAKE_CODEX}`,
-    `openspecBin: ${FAKE_OPENSPEC}`,
     'initiativeBase: initiative-base',
     'commitTrailer: "Co-Authored-By: E2E <e2e@example.com>"',
     '',

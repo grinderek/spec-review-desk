@@ -8,13 +8,13 @@ smoke scripts or adapters on your own initiative.
 The previous 488 checks in 58 files remain deleted. Vitest, its configuration, isolated temporary
 root, coverage support and dependencies remain available for future owner-requested tests.
 The suite is currently empty; Vitest succeeds with `passWithNoTests`, without claiming test coverage.
-The existing product corpus remains 40 contracts / 53 executions; no extra cases were added to
-compensate for the deletion.
+Product contracts cover owner-visible rules. New contracts describe product behavior, rather than
+reconstructing the deleted technical suite. The runner reports current contract and execution counts.
 
 ## Verification
 
 - `npm test` runs product contracts and any owner-requested Vitest tests.
-- `npm run test:technical` runs Vitest; `test:legacy` is its compatibility alias.
+- `npm run test:technical` runs Vitest.
 - `npm run coverage` collects coverage for owner-requested tests; the empty suite has no coverage.
 - `npm run test:self` verifies matching proposed and implemented contracts, then executes the corpus
   through Desk's own authenticated local runner and checks every result row.
@@ -45,5 +45,8 @@ initiative runs from initiative history, and verification attempts/reports from 
 verification journal. Contracts select review, initiative or verification history explicitly and
 compare the complete event delta; public GETs observe other views. Product fixtures use disposable
 repositories. Self-review executes the actual repository's corpus through its local runner and
-records verification evidence, without writing owner approvals. See
-`openspec/changes/event-sourced-desk/tasks.md` for remaining S4 effects and recovery work.
+records verification evidence, without writing owner approvals. Worktree-journal contracts also
+cover initiative creation. Replay rebuilds projections without starting external work; recovery
+observes typed receipts and verified process/container identities. An uncertain outcome requires
+explicit owner action and inactivity proof before a fresh attempt. Unsupported history fails
+explicitly instead of importing snapshots.

@@ -1,3 +1,4 @@
+import { CHANGE_ROOT, changeDir } from './change-package.ts'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { readInitiativeStream } from './initiative-events.ts'
 import { raiseRunDecisions, runGitEffect } from './initiative-finalization.ts'
@@ -15,7 +16,7 @@ import { buildResumePrompt } from './prompt.ts'
 import { readReview } from './review-store.ts'
 import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts'
 import { proposeBlocker } from './slice-plan.ts'
-import { moveChange, vetAuthorOutput } from './vet-output.ts'
+import { vetAuthorOutput } from './vet-output.ts'
 import { executeInitiativeCommand } from './initiative-commands.ts'
 
 // Spec B §4.4: a clean-room author writes one slice as a behavior-driven change.
@@ -35,10 +36,10 @@ export const slugify = (text: string): string =>
   cutAtWord(text.normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, ''), 40)
 
 async function changeNames(wt: WorktreeInfo): Promise<string[]> {
-  const root = path.join(wt.path, 'openspec', 'changes')
+  const root = path.join(wt.path,CHANGE_ROOT)
   const active = await readdir(root).catch(() => [] as string[])
   const archived = await readdir(path.join(root, 'archive')).catch(() => [] as string[])
-  return [...active, ...archived.map((n) => n.replace(/^\d{4}-\d{2}-\d{2}-/, ''))]
+  return [...active, ...archived]
 }
 
 // add-<initiative>-<slice title slug>, unique in the worktree (-2, -3, … on a clash).
@@ -114,14 +115,14 @@ export const finishAuthor: Finisher<'author'> = async (ctx, reply) => withInitia
       if (before!==null && before!==file.content) return ctx.record('uncertain','The immutable received output changed')
       if (before===null) await writeFile(target,file.content,{flag:'wx',mode:file.mode})
     }
-    const vet=await vetAuthorOutput({out,change:reply.change,worktree:wt.path,openspecBin:ctx.config.openspecBin,token:ctx.token})
+    const vet=await vetAuthorOutput({out,change:reply.change,worktree:wt.path,token:ctx.token})
     const keys=new Set(vet.scenarioKeys)
     const problems=[...vet.problems,...reply.decisions.flatMap((decision,i)=>decision.scope.kind==='scenario'&&!keys.has(decision.scope.key)?[`decisions[${i}]: unknown scenario ${decision.scope.key}`]:[])]
     if(problems.length)return ctx.record('failed','The output did not pass vetting; nothing was moved.',problems)
   }
   const commit=await runGitEffect(ctx,{purpose:{kind:'author-result',ref:ctx.run.id},outputs:ctx.result.outputs.map(file=>({path:file.path,content:Buffer.from(file.content),mode:file.mode})),extraFiles:[`${ini.relDir}/initiative.events.jsonl`],message:initiativeCommitMessage(`${reply.change} - slice ${ctx.run.slice} executable contract`,ctx.config.commitTrailer)})
   if(!commit)return
-  const dir=path.join(wt.path,'openspec/changes',reply.change)
+  const dir=changeDir(wt.path,reply.change)
   await raiseRunDecisions(ctx,dir,reply.decisions)
   await executeInitiativeCommand(ini.dir,{type:'associate-change',slice:ctx.run.slice??'',change:reply.change},ctx.at)
   await ctx.record('done',reply.answer)

@@ -11,7 +11,6 @@
     "start": "vite build --config ui/vite.config.ts && tsx server/main.ts",
     "test": "npm run test:spec && npm run test:technical",
     "test:spec": "tsx scripts/run-desk-specs.mts",
-    "test:legacy": "npm run test:technical",
     "coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "e2e": "vite build --config ui/vite.config.ts && playwright test",

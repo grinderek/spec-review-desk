@@ -1,8 +1,10 @@
 import { createHash } from 'node:crypto'
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { readdir, lstat } from 'node:fs/promises'
 import path from 'node:path'
-import { parse } from 'yaml'
 import { git } from './git.ts'
+import { CHANGE_ROOT, CHANGE_ARCHIVE_ROOT } from './change-package.ts'
+import { CHANGE_NAME } from './initiative-model.ts'
+import { nativeScopeDirectories } from './native-path.ts'
 
 export interface WorktreeInfo { id: string; repo: string; path: string; branch: string | null; head: string }
 export interface ChangeRef { worktreeId: string; name: string; dir: string; archived: boolean; mtimeMs: number }
@@ -37,19 +39,10 @@ export async function listWorktrees(repo: { name: string; path: string }): Promi
   }
 }
 
-async function isBehaviorDriven(dir: string): Promise<boolean> {
-  try {
-    const meta = parse(await readFile(path.join(dir, '.openspec.yaml'), 'utf8')) as { schema?: unknown } | null
-    return meta?.schema === 'behavior-driven'
-  } catch {
-    return false
-  }
-}
-
 async function newestMtime(dir: string): Promise<number> {
   const entries = await readdir(dir, { recursive: true })
   const times = await Promise.all(entries.map(async (e) => {
-    try { return (await stat(path.join(dir, e))).mtimeMs }
+    try { return (await lstat(path.join(dir, e))).mtimeMs }
     catch (error) {
       // Atomic review writes can remove a temporary file after readdir saw it.
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 0
@@ -60,16 +53,12 @@ async function newestMtime(dir: string): Promise<number> {
 }
 
 async function scan(root: string, wt: WorktreeInfo, archived: boolean): Promise<ChangeRef[]> {
-  let names: string[]
-  try {
-    names = (await readdir(root, { withFileTypes: true })).filter((d) => d.isDirectory() && d.name !== 'archive').map((d) => d.name)
-  } catch {
-    return []
-  }
+  const names = await nativeScopeDirectories(root, name => name !== 'archive' && CHANGE_NAME.test(name))
   const refs = await Promise.all(
     names.sort().map(async (name): Promise<ChangeRef[]> => {
       const dir = path.join(root, name)
-      if (!(await isBehaviorDriven(dir))) return []
+      // A missing or malformed declaration must remain visible and cannot hide a live journal.
+      // Detailed metadata and executable-contract validation belongs to loadChangePackage.
       return [{ worktreeId: wt.id, name, dir, archived, mtimeMs: await newestMtime(dir) }]
     }),
   )
@@ -77,8 +66,7 @@ async function scan(root: string, wt: WorktreeInfo, archived: boolean): Promise<
 }
 
 export async function listChanges(wt: WorktreeInfo): Promise<ChangeRef[]> {
-  const root = path.join(wt.path, 'openspec', 'changes')
-  return [...(await scan(root, wt, false)), ...(await scan(path.join(root, 'archive'), wt, true))]
+  return [...(await scan(path.join(wt.path, CHANGE_ROOT), wt, false)), ...(await scan(path.join(wt.path, CHANGE_ARCHIVE_ROOT), wt, true))]
 }
 
 export class Registry {

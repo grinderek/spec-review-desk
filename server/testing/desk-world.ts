@@ -17,7 +17,7 @@ import { registerInitiativeDecisionRoutes } from '../routes/initiative-decisions
 import { registerInitiativeRoutes, type InitiativeRouteDeps } from '../routes/initiatives.ts'
 import { registerRunnerRoutes } from '../routes/runner.ts'
 import { registerThreadRoutes } from '../routes/threads.ts'
-import { FAKE_CODEX, FAKE_OPENSPEC, resetFakeCodex } from './fake-codex-path.ts'
+import { FAKE_CODEX, resetFakeCodex } from './fake-codex-path.ts'
 import { FakeSandbox } from './fake-sandbox.ts'
 import { call, callForm } from './http.ts'
 import { ReviewWorld } from './review-world.ts'
@@ -49,7 +49,6 @@ export class DeskWorld {
     process.env.FAKE_CODEX_LOG = path.join(review.repo, '.spec-review/codex-calls.jsonl')
     process.env.FAKE_CODEX_SESSIONS = path.join(review.repo, '.spec-review/sessions')
     review.ctx.config.codexBin = FAKE_CODEX
-    review.ctx.config.openspecBin = FAKE_OPENSPEC
     const sandbox = this.sandbox
     this.runs = new InitiativeRunService({ config: review.ctx.config, bus: review.ctx.bus, sandbox, finishers: FINISHERS })
     this.apply = new ApplyService({ config: review.ctx.config, bus: review.ctx.bus, pollMs: 10 })
@@ -68,7 +67,11 @@ export class DeskWorld {
       runNow: (cwd, explicit) => this.runner.runNow(cwd, explicit), stop: cwd => this.runner.stop(cwd),
     })
   }
-  static async create() { return new DeskWorld(await ReviewWorld.create()) }
+  static async create() {
+    const review = await ReviewWorld.create()
+    try { return new DeskWorld(review) }
+    catch (error) { await review.close(); throw error }
+  }
   get repo() { return this.review.repo }
   resolve(value: unknown): any { return this.review.resolve(value) }
   async ready() { const change = this.vars.change; await this.review.ready(); if (this.changeDir) this.vars.change = change; this.vars.runner = `/api/runner/${worktreeId(this.review.repo)}` }
@@ -77,7 +80,7 @@ export class DeskWorld {
     if (stream === 'review') return readReviewEvents(this.changeDir || this.review.dir)
     if (stream === 'verification') return (await readVerificationStream(this.repo)).events.map(({ event, ...envelope }) => ({ ...envelope, ...event }))
     if (stream === 'worktree') return (await readWorktreeStream(this.repo)).events.map(({ event, ...envelope }) => ({ ...envelope, ...event }))
-    const root = path.join(this.repo, 'openspec/initiatives')
+    const root = path.join(this.repo, 'desk/initiatives')
     const names = await readdir(root).catch(() => [] as string[])
     if (names.length > 1) throw new Error('An initiative event observation must select one stream')
     if (!names[0]) return []
@@ -174,7 +177,7 @@ export class DeskWorld {
       const r = await this.setupCommand('OpenInitiative', data)
       this.vars.initiative = `/api/initiatives/${r.body.worktreeId}/${r.body.name}`
       this.vars.initiativeName = r.body.name
-      this.vars.initiativeDir = path.join(this.review.repo, 'openspec/initiatives', r.body.name)
+      this.vars.initiativeDir = path.join(this.review.repo, 'desk/initiatives', r.body.name)
     } else if (name === 'InitiativeBriefCommitPending') {
       await this.given('GitCommitUnavailable',{})
       const result=await this.command('EditBrief',{brief:'Pending owner brief.'})
@@ -208,7 +211,7 @@ export class DeskWorld {
       await this.given('AuthorOutputPrepared', data)
       await this.setupCommand('ProposeSlice', { slice: 's1', change: data.change ?? 'slice-contract' })
       this.vars.change = `/api/changes/${worktreeId(this.review.repo)}/${data.change ?? 'slice-contract'}`
-      this.changeDir = path.join(this.review.repo, 'openspec/changes', data.change ?? 'slice-contract')
+      this.changeDir = path.join(this.review.repo, 'desk/changes', data.change ?? 'slice-contract')
       await this.setupCommand('ApproveScenario', { key: this.vars.key })
       await this.setupCommand('RecordChangeApproval', {})
     } else if (name === 'ApplyWaitingOnOwner') {
@@ -255,10 +258,10 @@ export class DeskWorld {
     else if (name === 'AuthorOutputPrepared') {
       const source = await readFile(path.join(this.review.dir, 'features/subject.desk.yaml'), 'utf8')
       this.cliReply({ answer: 'Change ready.', patch: null, decisions: [], resolves: [], status: 'done', change: data.change ?? 'slice-contract' })
-      const rel = `openspec/changes/${data.change ?? 'slice-contract'}`
+      const rel = `desk/changes/${data.change ?? 'slice-contract'}`
       await writeFile(path.join(this.review.repo, '.spec-review/author-writes.json'), JSON.stringify([{ match: 'Slice', files: {
-        [`${rel}/.openspec.yaml`]: 'schema: behavior-driven\n', [`${rel}/proposal.md`]: '## Why\n\nReview the contract.\n',
-        [`${rel}/features/subject.desk.yaml`]: source, [`${rel}/specs/subject/spec.md`]: '#### Scenario: Subject contract\n',
+        [`${rel}/change.yaml`]: 'version: 1\nkind: behavior-driven\n', [`${rel}/proposal.md`]: '## Why\n\nReview the contract.\n',
+        [`${rel}/features/subject.desk.yaml`]: source,
       } }]))
       process.env.FAKE_CODEX_WRITES_FILE = path.join(this.review.repo, '.spec-review/author-writes.json')
     } else if (name === 'ApplyReplyPrepared') {
@@ -297,7 +300,7 @@ export class DeskWorld {
       const mode = data.mode ?? 'complete'
       const source = await readFile(path.join(this.changeDir || this.review.dir, 'features/subject.desk.yaml'), 'utf8')
       await writeFiles(this.review.repo, { 'features/subject.desk.yaml': source,
-        'verify.mjs': `import {writeFile} from 'node:fs/promises'; const env=process.env; const messages=[{deskScenarioResult:{key:'subject.desk.yaml::Subject contract',status:${JSON.stringify(status)},message:null,row:null,rows:null}},{deskRunFinished:{at:new Date().toISOString(),runId:env.DESK_RUN_ID,attemptId:env.DESK_ATTEMPT_ID,sourceHash:env.DESK_SOURCE_HASH}}]; const mode=${JSON.stringify(mode)}; if(mode==='incomplete')messages.pop(); if(mode==='foreign')messages[1].deskRunFinished.sourceHash='0'.repeat(64); if(mode==='duplicate')messages.splice(1,0,messages[0]); await writeFile(env.DESK_RESULT_FILE,messages.map(m=>JSON.stringify(m)).join('\\n')+'\\n',{flag:'wx'}); process.exit(${status === 'failed' ? 1 : 0});\n` })
+        'verify.mjs': `import {writeFile} from 'node:fs/promises'; const env=process.env; const messages=[{deskScenarioResult:{key:'subject.desk.yaml::subject',status:${JSON.stringify(status)},message:null,row:null,rows:null}},{deskRunFinished:{at:new Date().toISOString(),runId:env.DESK_RUN_ID,attemptId:env.DESK_ATTEMPT_ID,sourceHash:env.DESK_SOURCE_HASH}}]; const mode=${JSON.stringify(mode)}; if(mode==='incomplete')messages.pop(); if(mode==='foreign')messages[1].deskRunFinished.sourceHash='0'.repeat(64); if(mode==='duplicate')messages.splice(1,0,messages[0]); await writeFile(env.DESK_RESULT_FILE,messages.map(m=>JSON.stringify(m)).join('\\n')+'\\n',{flag:'wx'}); process.exit(${status === 'failed' ? 1 : 0});\n` })
     } else await this.review.given(name, data)
   }
   async command(name: string, data: Record<string, any>) {
