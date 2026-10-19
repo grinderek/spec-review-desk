@@ -272,7 +272,7 @@ Rules the implementation keeps:
 - Integrations are events: Gmail is `MailboxSynced`, a clock is `it is …`. The real adapter is
   tested by a contract test outside the corpus.
 - The database is a transaction per scenario (DatabaseCleaner or an in-memory store); the corpus
-  runs in the warm `nucleus-bdd` container on every file change and finishes in seconds.
+  runs through the workspace's configured local or container runner on file changes.
 - Every event and command class has a readable `to_s` in the domain's language — it is what the
   printed specification and the failure report show (§5).
 - On a failure, print the specification, not the stack (§5).

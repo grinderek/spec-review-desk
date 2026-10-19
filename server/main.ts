@@ -6,7 +6,7 @@ import { serveStatic } from '@hono/node-server/serve-static'
 import { startRouter } from './router-runtime.ts'
 import { ApplyService } from './apply.ts'
 import { createBaseApp } from './app.ts'
-import { loadConfig } from './config.ts'
+import { configPathFromArgs, loadConfig } from './config.ts'
 import { type ChangeRef, discover, listChanges, listWorktrees, Registry, type WorktreeInfo } from './discovery.ts'
 import { EventBus } from './events.ts'
 import { run } from './git.ts'
@@ -95,8 +95,8 @@ export async function startServer(opts: StartOptions) {
   const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: config.port })
   const base = opts.dev ? config.devUiOrigin : `http://127.0.0.1:${config.port}`
   console.log(`Spec Review Desk: ${base}/?t=${token}`)
-  if (!capabilities.codex) console.warn(`${config.codexBin} not found on PATH — threads and Apply are disabled`)
-  if (!capabilities.docker) console.warn('docker not found — the corpus runner is disabled')
+  if (!capabilities.codex) console.warn(`${config.codexBin} not found on PATH - threads and Apply are disabled`)
+  if (!capabilities.docker) console.warn('docker not found - Compose runners and initiative agents are unavailable; local runners remain available')
   return {
     app,
     config,
@@ -111,9 +111,7 @@ export async function startServer(opts: StartOptions) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2)
-  const index = args.indexOf('--config')
-  const configPath = index >= 0 && args[index + 1] ? args[index + 1]! : 'config.yaml'
-  startServer({ configPath, dev: args.includes('--dev'), token: process.env.SPEC_REVIEW_TOKEN }).catch((error: unknown) => {
+  Promise.resolve().then(() => startServer({ configPath: configPathFromArgs(args), dev: args.includes('--dev'), token: process.env.SPEC_REVIEW_TOKEN })).catch((error: unknown) => {
     console.error(error)
     process.exit(1)
   })

@@ -68,7 +68,7 @@ export function NewFeature({ choices, onCreated }: { choices: InitiativesRespons
       <label htmlFor={`${uid}-files`}>Inputs to upload</label>
       <input id={`${uid}-files`} type="file" multiple accept=".pdf,.md,.txt,.yaml,.yml,.json,.png,.jpg,.jpeg" onChange={(e) => setFiles([...(e.target.files ?? [])])} />
       <label htmlFor={`${uid}-from`}>Add from repo (one path per line, relative to the hub)</label>
-      <textarea id={`${uid}-from`} name="fromRepo" placeholder="api/doc/health_score_client_contract.md" />
+      <textarea id={`${uid}-from`} name="fromRepo" placeholder="docs/feature-brief.md" />
       <div className="preview" aria-label="Create will run">
         <div className="k">Create will run</div>
         {preview.length ? preview.map((line) => <code key={line}>{line}</code>) : <span className="hash">Name the feature to see the commands.</span>}

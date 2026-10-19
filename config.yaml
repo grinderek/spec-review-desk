@@ -1,47 +1,5 @@
+# Default workspace: the Desk checkout. Keep other projects' profiles in those projects.
 port: 4600
-hubRoot: ../..
+hubRoot: .
 repos:
-  - { name: api, path: api }
-  - { name: mobile, path: mobile }
-  - { name: web, path: web }
-model: gpt-6.1-sol
-reasoningEffort: high
-agents:
-  planner: { model: gpt-6.1-sol, reasoningEffort: high }
-  reviewer: { reasoningEffort: medium }
-routing:
-  enabled: true
-  endpoint: http://127.0.0.1:8009
-  startCommand: [/home/danila/.local/share/spec-review-runtime/start-kev.sh]
-  roles: [research, apply]
-  timeoutMs: 5000
-  minLunaProbability: 0.55
-codexBin: codex
-commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"
-questionTimeoutMinutes: 10
-devUiOrigin: http://127.0.0.1:5173
-runners:
-  bdd-pilot:
-    worktree: api/.claude/worktrees/bdd-pilot-health-score
-    compose:
-      project: nucleus-bdd
-      files:
-        - ../../api/.claude/worktrees/bdd-pilot-health-score/compose.yaml
-        - compose/bdd.yaml
-      service: api
-    # cucumber.yml's default profile already prints `pretty` to stdout; only one formatter may use it.
-    command: [bin/cucumber, --format, message, --out, .spec-review/last-run.ndjson]
-    watch: [features, app, lib, config]
-    applyAllowedTools:
-      - Read
-      - Grep
-      - Glob
-      - Edit
-      - Write
-      - "Bash(git add:*)"
-      - "Bash(git commit:*)"
-      - "Bash(git status:*)"
-      - "Bash(git diff:*)"
-      - "Bash(git log:*)"
-      - "Bash(docker compose -p nucleus-bdd:*)"
-      - "Bash(openspec:*)"
+  - { name: project, path: . }

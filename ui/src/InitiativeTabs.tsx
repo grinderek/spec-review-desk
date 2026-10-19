@@ -63,7 +63,7 @@ export function InputsTab({ id, view }: TabProps) {
       </form>
       <form className="panelform" onSubmit={(e) => { e.preventDefault(); void act(async () => { await api.addFromRepo(id, from.trim()); setFrom('') }, 'Input added from the repo') }}>
         <label htmlFor="add-from-repo">Add from repo (path relative to the hub)</label>
-        <input id="add-from-repo" value={from} placeholder="api/doc/health_score_client_contract.md" onChange={(e) => setFrom(e.target.value)} />
+        <input id="add-from-repo" value={from} placeholder="docs/feature-brief.md" onChange={(e) => setFrom(e.target.value)} />
         <div className="row"><button type="submit" className="btn" disabled={!from.trim()}>Add</button></div>
       </form>
     </>

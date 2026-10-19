@@ -6,9 +6,9 @@
     "node": ">=24"
   },
   "scripts": {
-    "dev": "concurrently -k -n server,ui \"tsx watch server/main.ts --config config.yaml --dev\" \"vite --config ui/vite.config.ts\"",
+    "dev": "concurrently -k -n server,ui \"tsx watch server/main.ts --dev\" \"vite --config ui/vite.config.ts\"",
     "desk": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.desk.yaml",
-    "start": "vite build --config ui/vite.config.ts && tsx server/main.ts --config config.yaml",
+    "start": "vite build --config ui/vite.config.ts && tsx server/main.ts",
     "test": "npm run test:spec && npm run test:technical",
     "test:spec": "tsx scripts/run-desk-specs.mts",
     "test:legacy": "npm run test:technical",

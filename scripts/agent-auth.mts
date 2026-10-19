@@ -1,11 +1,10 @@
 import { spawn } from 'node:child_process'
-import { loadConfig } from '../server/config.ts'
+import { configPathFromArgs, loadConfig } from '../server/config.ts'
 import { AUTH_STORE, AUTH_VOLUME } from '../server/sandbox-args.ts'
 
 const action = process.argv[2]
 if (!['login', 'logout', 'status'].includes(action ?? '')) throw new Error('Use login, logout or status')
-const configIndex = process.argv.indexOf('--config')
-const { sandbox } = await loadConfig(configIndex === -1 ? 'config.yaml' : process.argv[configIndex + 1]!)
+const { sandbox } = await loadConfig(configPathFromArgs(process.argv.slice(3)))
 const tty = process.stdin.isTTY && process.stdout.isTTY
 const proxyCa = process.env.CODEX_PROXY_CERT
 const args = [

@@ -1,7 +1,9 @@
 port: 4600
-hubRoot: ..
+# Relative to this file. Use the repository root for one repo, or a parent for several.
+hubRoot: .
 repos:
-  - { name: project, path: my-project }
+  - { name: project, path: . }
+  # Multi-repo example: [{ name: backend, path: backend }, { name: frontend, path: frontend }]
 model: gpt-6.1-sol
 reasoningEffort: high
 agents:
@@ -14,7 +16,8 @@ routing:
   timeoutMs: 5000
   minLunaProbability: 0.55
 codexBin: codex
-initiativeBase: main
+# Any Git ref; HEAD works without requiring a branch named main, master or staging.
+initiativeBase: HEAD
 commitTrailer: "Co-Authored-By: Codex <noreply@openai.com>"
 questionTimeoutMinutes: 10
 sandbox:
@@ -22,5 +25,17 @@ sandbox:
   authVolume: spec-review-codex-auth
   envFile: .env
   timeoutMinutes: 30
-# Configure runners for your repository's Cucumber container and allowed Apply commands.
-# See config.yaml for the original workspace's Docker Compose profile.
+# Verification is optional. Local runners need no Docker; use a command that writes
+# Desk or Cucumber message envelopes to .spec-review/last-run.ndjson in its worktree.
+# runners:
+#   project:
+#     execution: local
+#     worktree: .
+#     command: [bin/cucumber, --format, message, --out, .spec-review/last-run.ndjson]
+#     watch: [features, src]
+#     applyAllowedTools: [Read, Grep, Glob, Edit, Write, "Bash(git status:*)", "Bash(git diff:*)"]
+# For a container runner, set execution: compose and add:
+#     compose:
+#       project: project-specs
+#       files: [compose.yaml, compose.specs.yaml] # relative to this config file
+#       service: app

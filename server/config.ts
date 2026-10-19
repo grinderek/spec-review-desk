@@ -28,7 +28,7 @@ const RunnerSchema = z.object({
 
 const ConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(4600),
-  hubRoot: z.string().default('../..'),
+  hubRoot: z.string().default('.'),
   repos: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) })).min(1),
   model: z.string().min(1).default('gpt-6.1-sol'),
   reasoningEffort: ReasoningEffortSchema.default('high'),
@@ -66,7 +66,7 @@ const ConfigSchema = z.object({
     })
     .default({ image: AGENT_IMAGE, egressImage: EGRESS_IMAGE, browserImage: BROWSER_IMAGE, envFile: '.env', auth: 'chatgpt', authVolume: 'spec-review-codex-auth', timeoutMinutes: 30, dockerBin: 'docker' }),
   openspecBin: z.string().min(1).default('openspec'),
-  initiativeBase: z.string().min(1).default('staging'),
+  initiativeBase: z.string().min(1).default('HEAD'),
 })
 
 export interface SandboxConfig { auth?: 'chatgpt' | 'api'; authVolume?: string; image: string; egressImage: string; browserImage: string; envFile: string; timeoutMs: number; dockerBin: string }
@@ -101,6 +101,16 @@ export interface Config {
 }
 
 export class ConfigError extends Error {}
+
+export function configPathFromArgs(args: readonly string[]): string {
+  const index = args.indexOf('--config')
+  if (index >= 0) {
+    const file = args[index + 1]
+    if (!file || file.startsWith('--')) throw new ConfigError('--config requires a file path')
+    return path.resolve(file)
+  }
+  return path.resolve(process.env.SPEC_REVIEW_CONFIG || 'config.yaml')
+}
 
 export function agentProfile(config: Config, role: AgentRole): { model: string; reasoningEffort: ReasoningEffort } {
   const override = config.agents?.[role]
@@ -147,7 +157,7 @@ export async function loadConfig(file: string): Promise<Config> {
       image: c.sandbox.image,
       egressImage: c.sandbox.egressImage,
       browserImage: c.sandbox.browserImage,
-      // The token file lives next to config.yaml (tools/spec-review/.env, gitignored).
+      // Credentials belong to the selected workspace, next to its configuration.
       envFile: path.resolve(configDir, c.sandbox.envFile),
       timeoutMs: c.sandbox.timeoutMinutes * 60_000,
       dockerBin: c.sandbox.dockerBin,

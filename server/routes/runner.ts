@@ -8,7 +8,7 @@ export function registerRunnerRoutes(app: Hono, ctx: AppContext, runner: RunnerS
   const worktreePath = async (id: string): Promise<string> => (await resolveWorktree(ctx, id)).path
   const withProfile = async (id: string): Promise<string> => {
     const p = await worktreePath(id)
-    if (!runner.profileFor(p)) throw new HttpError(404, 'no_runner', 'No runner profile for this worktree — add one to config.yaml')
+    if (!runner.profileFor(p)) throw new HttpError(404, 'no_runner', 'No runner profile for this worktree - add one to the workspace configuration')
     return p
   }
 

@@ -7,15 +7,13 @@ decisions before implementation starts.
 
 ## Run
 
-Requires Node.js 24+, Git and Codex CLI 0.159.3+. Docker 25+ is needed for initiative agents and the
-configured Cucumber runner.
+Requires Node.js 24+, Git and Codex CLI 0.159.3+. Docker 25+ is needed for initiative agents and
+Compose runners. Review and local verification runners work without Docker.
 
 ```sh
 npm ci
 npm install -g @openai/codex@0.159.3
 codex login
-cp config.example.yaml config.yaml
-# Set hubRoot, repos and initiativeBase for your repositories.
 npm start                       # builds the UI and serves http://127.0.0.1:4600
 # npm run dev                   # server :4600 + Vite :5173
 ```
@@ -24,9 +22,46 @@ Open the one-time URL printed by the server. Its token becomes an HttpOnly sessi
 restarting the server issues a new token. The app listens on loopback only and checks Host, Origin
 and the session cookie on API requests.
 
-The checked-in `config.yaml` describes the original api/mobile/web workspace, including its existing
-BDD worktree. Use `config.example.yaml` for another workspace. `model` defaults to `gpt-6.1-sol`,
-`reasoningEffort` to `high`, and `codexBin` to `codex`. Select models available to your account.
+The checked-in `config.yaml` opens this checkout without a verification runner. `npm run desk`
+opens it with the local Desk DSL runner. `model` defaults to `gpt-6.1-sol`, `reasoningEffort` to
+`high`, and `codexBin` to `codex`. Select models available to your account.
+
+## Connect a project
+
+Keep each workspace's configuration, Compose overlays and runtime settings in that workspace.
+One Desk installation can open different repositories without editing its own files:
+
+```sh
+cp /path/to/spec-review-desk/config.example.yaml /path/to/project/spec-review.yaml
+npm --prefix /path/to/spec-review-desk start -- --config /path/to/project/spec-review.yaml
+
+# Select the same configuration for development or container authentication:
+export SPEC_REVIEW_CONFIG=/path/to/project/spec-review.yaml
+npm --prefix /path/to/spec-review-desk run dev
+npm --prefix /path/to/spec-review-desk run agent:auth-status
+```
+
+`--config` takes precedence over `SPEC_REVIEW_CONFIG`; otherwise Desk reads `config.yaml` in its
+working directory. Use an absolute path with `npm --prefix`, which runs scripts in the Desk checkout.
+Restart the server to switch workspaces. `npm run desk` always selects `config.desk.yaml` explicitly.
+
+For a single repository the example works in its root with `hubRoot: .` and
+`repos: [{ name: project, path: . }]`. For several repositories set `hubRoot` to their common parent
+and list each name and path. `hubRoot` defaults to the configuration's directory; repository paths
+and runner `worktree` paths resolve from it. Compose `files` and `sandbox.envFile` resolve from the
+configuration's directory. Paths may also be absolute. No particular repository name, language,
+directory layout or branch name is required. `initiativeBase` defaults to `HEAD`; set an explicit
+Git ref when initiatives should branch from a fixed integration branch.
+
+Desk discovers `schema: behavior-driven` changes under each Git worktree's `openspec/changes`.
+Supported contracts are Gherkin with phrase catalogs and Desk DSL. `runners` is optional; configure
+local or Compose verification for the project's toolchain. Results must use Desk or Cucumber message
+envelopes in `.spec-review/last-run.ndjson`. The example config documents both runner modes.
+
+Workspace usage logs live in `.spec-review/usage` next to the selected config. Credentials default
+to `.env` next to it, while container subscription credentials use `sandbox.authVolume`. Configure
+different volumes when workspaces need different accounts. Review and initiative state stays with
+the specifications in the target worktrees.
 
 `agents` overrides the model and/or reasoning effort for `research`, `planner`, `author`,
 `reviewer`, and `apply`; omitted fields inherit the top-level settings. The supplied configs use
@@ -51,7 +86,7 @@ an already running agent keeps its existing model and effort.
 - **Record approval**, then **Apply**, starts Codex detached. It reads the approved OpenSpec change,
   implements its scenarios, runs the permitted checks and commits. It can stop for owner decisions
   and resume after they are recorded or dismissed. Stop and re-apply remain available.
-- The configured Cucumber corpus runs in its warm Docker container on file changes.
+- The configured corpus runs locally or in its warm Docker container on file changes.
 
 Every agent runs through `codex exec --json --output-schema <file>`. Replies are validated again on
 the server, including rules that JSON Schema cannot express. An invalid reply is retried once in
@@ -166,7 +201,7 @@ implementation and verification. See [the testing boundary](docs/method/testing.
 ```sh
 npm run typecheck
 npm test
-npm run test:self
+npm run test:self     # complete DSL corpus, plus matching contracts in the self-review change
 npm run test:technical # currently empty; tests only at the owner’s explicit request
 npm run coverage
 npx playwright install chromium
@@ -194,8 +229,8 @@ Legacy resumed runs adopt their configured role profile instead of being reroute
 
 The endpoint defaults to http://127.0.0.1:8009. Optional `routing.startCommand` is an argv
 array for a local launcher. Desk starts it if unavailable and logs runtime output next to
-its configuration in `.spec-review/usage/kev-runtime.log`. This workstation launches the
-isolated Kev-0.8B v1.0 runtime; example configs leave routing disabled.
+its configuration in `.spec-review/usage/kev-runtime.log`. Each workspace selects its own
+runtime launcher; example configs leave routing disabled.
 
 Open **Agent usage & routing** above the workspace for cumulative totals and the latest
 200 attempts, with a JSON export. The authenticated GET /api/usage serves the same data.
