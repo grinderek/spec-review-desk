@@ -10,6 +10,9 @@ export class ReviewLockError extends Error {}
 const queues = new Map<string, Promise<unknown>>()
 const held = new AsyncLocalStorage<ReadonlyMap<string, { active: boolean }>>()
 
+// Reentrancy belongs to awaited nested work. Detached observers must queue behind their parent.
+export const withDetachedReviewLocks = <T>(fn: () => T): T => held.run(new Map(), fn)
+
 // Linux flock belongs to the shared open file description. The child acquires it on
 // inherited fd 3; the parent keeps that description open until the operation finishes.
 // Closing it (including on server exit) releases the lock without a stale lease file.

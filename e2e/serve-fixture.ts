@@ -1,8 +1,8 @@
-import { rmSync } from 'node:fs'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { git } from '../server/git.ts'
+import { requireAttemptInactive, stopLocalAttempt } from '../server/execution-receipts.ts'
 import { startServer } from '../server/main.ts'
 import { FAKE_CODEX, FAKE_OPENSPEC } from '../server/testing/fake-codex-path.ts'
 import { FakeSandbox } from '../server/testing/fake-sandbox.ts'
@@ -25,26 +25,54 @@ async function diffOf(repo: string, rel: string, before: string, insert: string)
 
 const reply = (over: Record<string, unknown>) => ({ answer: '', patch: null, decisions: [], resolves: [], status: 'answered', ...over })
 
-// Every fixture temp dir this process creates (makeRepo's `hub`, and the `tmp` below) is removed on
-// exit — the suite previously leaked ~17k /tmp/sr-* dirs across runs. By default Playwright SIGKILLs
-// the whole webServer process group on teardown, which no listener can catch, so this only fires
-// because playwright.config.ts's `webServer.gracefulShutdown` makes it send SIGTERM first — that
-// reaches this process (same process group), our SIGTERM handler below calls process.exit(), and the
-// 'exit' listener runs its (synchronous) rmSync cleanup before the process actually terminates.
+// Detached workers deliberately survive a production server exit. The fixture owns its temporary
+// repositories, so it must prove those workers stopped before deleting their durable artifacts.
 const cleanupDirs: string[] = []
-process.on('exit', () => {
-  for (const dir of cleanupDirs) {
-    try {
-      rmSync(dir, { recursive: true, force: true })
-    } catch {
-      // best-effort: never let cleanup crash the shutdown path
+let closeFixture: (() => Promise<void>) | undefined
+async function fixtureAttempts(dir: string): Promise<{ cwd: string; id: string }[]> {
+  const attempts: { cwd: string; id: string }[] = []
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || ['.git', 'node_modules'].includes(entry.name)) continue
+    const child = path.join(dir, entry.name)
+    if (entry.name === 'executions' && path.basename(dir) === '.spec-review') {
+      for (const attempt of await readdir(child, { withFileTypes: true })) {
+        if (attempt.isDirectory() && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(attempt.name)) {
+          attempts.push({ cwd: path.dirname(dir), id: attempt.name })
+        }
+      }
+    } else {
+      attempts.push(...await fixtureAttempts(child))
     }
   }
-})
-// Explicit handlers so the signal reaches process.exit() (and so the 'exit' cleanup above runs) even
-// if some dependency (e.g. the HTTP server) has already registered its own SIGINT/SIGTERM listener,
-// which would otherwise override Node's default terminate-on-signal disposition.
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => process.exit(0))
+  return attempts
+}
+let shutdown: Promise<void> | undefined
+function teardown(code: number): Promise<void> {
+  return shutdown ??= (async () => {
+    const deadline = Date.now() + 4_000
+    const timeout = setTimeout(() => {
+      console.error('Fixture cleanup timed out; retaining temporary artifacts')
+      process.exit(code)
+    }, 4_000)
+    try {
+      await closeFixture?.()
+      const attempts = (await Promise.all(cleanupDirs.map(fixtureAttempts))).flat()
+      await Promise.all(attempts.map(({ cwd, id }) => stopLocalAttempt(cwd, id)))
+      for (;;) {
+        const observations = await Promise.allSettled(attempts.map(({ cwd, id }) => requireAttemptInactive(cwd, id)))
+        if (observations.every(result => result.status === 'fulfilled')) break
+        if (Date.now() >= deadline) throw new Error('Fixture workers did not prove inactivity; retaining their temporary artifacts')
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      await Promise.all(cleanupDirs.map(dir => rm(dir, { recursive: true, force: true })))
+    } catch (error) {
+      console.error('Fixture cleanup retained temporary artifacts:', error)
+    }
+    clearTimeout(timeout)
+    process.exit(code)
+  })()
+}
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { void teardown(0) })
 
 async function main(): Promise<void> {
   const { hub, repo } = await makeRepo()
@@ -158,11 +186,12 @@ scenarios:
     'commitTrailer: "Co-Authored-By: E2E <e2e@example.com>"',
     '',
   ].join('\n'))
-  await startServer({ configPath: config, token: 'e2e', sandbox: new FakeSandbox() })
+  const server = await startServer({ configPath: config, token: 'e2e', sandbox: new FakeSandbox() })
+  closeFixture = server.close
   console.log(`e2e fixture repo: ${repo}`)
 }
 
 main().catch((error: unknown) => {
   console.error(error)
-  process.exit(1)
+  void teardown(1)
 })

@@ -12,6 +12,7 @@ export interface ReadinessInput {
   parseErrors: number
   reviewValid: boolean
   pendingEffects?: number
+  pendingExecutions?: number
 }
 export interface Readiness { ready: boolean; reasons: string[] }
 
@@ -21,6 +22,7 @@ export function computeReadiness(input: ReadinessInput): Readiness {
   const reasons: string[] = []
   if (!input.reviewValid) reasons.push('review.yaml is invalid')
   if (input.pendingEffects) reasons.push(`${count(input.pendingEffects, 'Git operation')} requires recovery`)
+  if (input.pendingExecutions) reasons.push(`${count(input.pendingExecutions, 'reviewer execution')} requires completion or recovery`)
   if (input.parseErrors) reasons.push(`${count(input.parseErrors, 'file')} failed to parse`)
   if (input.scenarios.length === 0) reasons.push('no scenarios')
   const scenarios = input.scenarios.filter((e) => e.status !== 'approved').length

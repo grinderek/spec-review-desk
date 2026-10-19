@@ -27,6 +27,7 @@ test('New feature → plan → approve → propose s1 → the change appears', a
   await s1.getByRole('button', { name: 'Propose s1' }).click()
   await expect(s1.locator('.pill')).toHaveText('proposing', { timeout: 20_000 })
   await expect(s1.getByRole('button', { name: 'Stop' })).toBeVisible()
+  await expect(s1.locator('[aria-live="polite"]')).toContainText('Waiting for owner stop.', { timeout: 20_000 })
   await s1.getByRole('button', { name: 'Stop' }).click()
   await expect(s1.locator('.pill')).toHaveText('planned', { timeout: 20_000 })
   await expect(s1.getByRole('button', { name: 'Propose s1' })).toBeVisible()

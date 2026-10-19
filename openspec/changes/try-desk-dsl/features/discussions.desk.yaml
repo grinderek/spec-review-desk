@@ -55,7 +55,12 @@ scenarios:
     then:
       events:
         - DiscussionOwnerReplied: { threadId: $thread, message: { role: owner, text: What does the revision mean? } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
         - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: The revised response expresses acceptance. }, status: answered }
+        - ExecutionSettled: { outcome: done }
       response: { status: 202, body: { ok: true } }
       reads:
         - path: $change
@@ -83,8 +88,13 @@ scenarios:
       bind: { thread: response.body.id }
       events:
         - DiscussionOpened: { thread: { id: $thread, anchor: scenario, ref: $key, status: open, messages: [{ role: owner, text: Explain the contract. }] } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
         - ReviewAgentSessionSet: {}
         - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: The response confirms success. }, status: answered }
+        - ExecutionSettled: { outcome: done }
       response: { status: 201 }
       reads:
         - path: $change

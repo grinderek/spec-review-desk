@@ -4,7 +4,9 @@ import path from 'node:path'
 import { z } from 'zod'
 import { HttpError } from './errors.ts'
 import { withReviewLock } from './review-lock.ts'
-import { INITIATIVE_NAME, INPUT_FILE, CHANGE_NAME, InputSchema, SliceSchema, InitiativeSchema, type InitiativeDoc } from './initiative-model.ts'
+import { INITIATIVE_NAME, INPUT_FILE, CHANGE_NAME, InputSchema, SliceSchema, InitiativeSchema, RunSchema, type InitiativeDoc } from './initiative-model.ts'
+import { ExecutionEventSchema, projectExecution } from './execution-model.ts'
+import { GitEffectPlanSchema } from './git-effect.ts'
 import { InitiativeFileError, writeInitiativeProjection } from './initiative-store.ts'
 
 export const INITIATIVE_EVENTS_FILE = 'initiative.events.jsonl'
@@ -18,10 +20,17 @@ const Payload = z.discriminatedUnion('type', [
   z.object({ type: z.literal('ResearchInputDiscarded'), file: z.string().regex(INPUT_FILE) }),
   z.object({ type: z.literal('ResearchDomainsSet'), domains: z.array(z.string()) }),
   z.object({ type: z.literal('ResearchDomainsGranted'), domains: z.array(z.string()), decision: z.string(), commit: z.string() }),
-  z.object({ type: z.literal('SlicePlanDrafted'), slices: z.array(SliceSchema), run: z.string() }),
+  z.object({ type: z.literal('SlicePlanDrafted'), slices: z.array(SliceSchema), run: z.string(), attempt: z.uuid().optional() }),
   z.object({ type: z.literal('SlicePlanEdited'), slices: z.array(SliceSchema) }),
   z.object({ type: z.literal('SlicePlanApproved'), slices: z.array(SliceSchema), approved_at: z.string() }),
   z.object({ type: z.literal('SliceChangeAssociated'), slice: z.string(), change: z.string().regex(CHANGE_NAME).nullable() }),
+  z.object({ type: z.literal('InitiativeRunRequested'), run: RunSchema }),
+  z.object({ type: z.literal('InitiativeExecutionRecorded'), execution: ExecutionEventSchema }),
+  z.object({ type: z.literal('InitiativeRunParametersSelected'), runId: z.string(), session: z.string(), container: z.string(), phase: z.enum(['search', 'read']).optional(), web_fetch: z.boolean().optional(), read_domains: z.array(z.string()), validation_retry: z.boolean() }),
+  z.object({ type: z.literal('InitiativeRunOutcomeRecorded'), runId: z.string(), attemptId: z.uuid(), outcome: z.enum(['done', 'needs_owner', 'failed', 'stopped', 'uncertain']), notes: z.string().nullable(), problems: z.array(z.string()), at: z.string() }),
+  z.object({ type: z.literal('InitiativeRunAbandoned'), runId: z.string(), at: z.string() }),
+  z.object({ type: z.literal('InitiativeRunGitRequested'), runId: z.string(), attemptId: z.uuid(), plan: GitEffectPlanSchema }),
+  z.object({ type: z.literal('InitiativeRunGitCompleted'), runId: z.string(), effectId: z.uuid(), commit: z.string() }),
 ])
 const Event = z.object({ version: z.literal(1), stream: z.string().uuid(), sequence: z.number().int().positive(), id: z.string().uuid(), command: z.string().uuid(), at: z.string(), origin: z.enum(['initiative-command', 'fixture']), event: Payload })
 export type InitiativeEventPayload = z.infer<typeof Payload>
@@ -74,6 +83,50 @@ export function projectInitiative(events: readonly InitiativeEvent[]): Initiativ
       case 'SliceChangeAssociated':
         if (!doc.plan.slices.some(s => s.id === event.slice)) throw new Error('unknown slice')
         doc.plan = { ...doc.plan, slices: doc.plan.slices.map(s => s.id === event.slice ? { ...s, change: event.change } : s) }; break
+      case 'InitiativeRunRequested':
+        if (doc.runs.some(run => run.id === event.run.id || run.execution_id === event.run.execution_id)) throw new Error('Duplicate initiative run')
+        doc.runs.push(structuredClone(event.run)); break
+      case 'InitiativeExecutionRecorded': {
+        projectExecution(doc.executions, event.execution)
+        const executionId = event.execution.type === 'ExecutionQueued' ? event.execution.request.id : event.execution.runId
+        const execution = doc.executions.find(run => run.request.id === executionId)!
+        const run = doc.runs.find(run => run.execution_id === executionId)
+        if (!run) throw new Error('Execution has no initiative run')
+        run.outcome = execution.outcome
+        run.ended_at = execution.endedAt
+        const attempt = execution.attempts.at(-1)
+        if (attempt?.routing) run.routing = attempt.routing
+        if (attempt?.session) run.session = attempt.session
+        if (execution.reason) run.notes = execution.reason
+        break
+      }
+      case 'InitiativeRunParametersSelected': {
+        const run = doc.runs.find(run => run.id === event.runId)
+        if (!run) throw new Error('Unknown initiative run')
+        run.session = event.session
+        run.container = event.container
+        if (event.phase) run.phase = event.phase
+        if (event.web_fetch !== undefined) run.web_fetch = event.web_fetch
+        run.read_domains = event.read_domains
+        run.validation_retry = event.validation_retry
+        break
+      }
+      case 'InitiativeRunOutcomeRecorded': {
+        const run = doc.runs.find(run => run.id === event.runId)
+        if (!run || doc.executions.find(execution => execution.request.id === run.execution_id)?.attempts.at(-1)?.id !== event.attemptId) throw new Error('Outcome refers to an outdated initiative attempt')
+        run.outcome = event.outcome; run.notes = event.notes; run.problems = event.problems; run.ended_at = event.at
+        break
+      }
+      case 'InitiativeRunAbandoned': {
+        const run = doc.runs.find(run => run.id === event.runId)
+        if (!run) throw new Error('Unknown initiative run')
+        run.outcome = 'stopped'; run.ended_at = event.at; run.notes = 'Stopped by the owner.'
+        const execution=doc.executions.find(item=>item.request.id===run.execution_id)
+        if(execution){execution.outcome='stopped';execution.endedAt=event.at;execution.reason='Abandoned by the owner'}
+        break
+      }
+      case 'InitiativeRunGitRequested':
+      case 'InitiativeRunGitCompleted': break
     }
   }
   if (!doc) throw new Error('initiative not created')
@@ -140,7 +193,7 @@ export async function recordInitiativeEvents(dir: string, previous: InitiativeSt
     const command = randomUUID()
     const batch = payloads.map((event, i) => Event.parse({ version: 1, stream, sequence: previous.events.length + i + 1, id: randomUUID(), command, at, origin, event }))
     const events = [...previous.events, ...batch]
-    const doc = { ...projectInitiative(events), runs }
+    const doc = projectInitiative(events)
     // Verify new source references before committing any event or touching derived views.
     for (const { event } of batch) {
       if (event.type === 'InitiativeCreated') await readInitiativeBlob(dir, event.brief)

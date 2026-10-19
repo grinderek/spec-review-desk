@@ -10,16 +10,19 @@ function RunnerStat({ id, runner, docker }: { id: ChangeId; runner: RunnerState 
   const act = useAction()
   let value: ReactNode
   if (!runner) value = <span className="pill">no runner profile</span>
-  else if (runner.running) value = <span className="pill p-thread">running…</span>
+  else if (runner.running) value = <><span className="pill p-thread">running…</span><button className="btn" onClick={() => void act(() => api.stopCorpus(id.wt))}>Stop</button></>
   else if (runner.up === false) value = (
     <>
       <span className="pill r-failed">runner off</span>
       <button className="btn" disabled={!docker && runner?.execution !== 'local'} onClick={() => void act(() => api.startRunner(id.wt), 'Starting the container…')}>Start</button>
     </>
   )
+  else if (runner.outcome === 'uncertain' || runner.stale) value = (
+    <><span className="pill r-failed">{runner.stale ? 'sources changed' : 'outcome unknown'}</span><button className="btn" onClick={() => void act(() => api.runCorpus(id.wt))}>Run again</button></>
+  )
   else if (runner.result) value = (
     <>
-      <span className={`dot ${runner.result.totals.failed ? 'bad' : 'ok'}`} />
+      <span className={`dot ${runner.outcome === 'done' ? 'ok' : 'bad'}`} />
       {runner.result.totals.passed} green · {runner.result.totals.failed} red{runner.result.totals.other ? ` · ${runner.result.totals.other} other` : ''}
       <button className="btn" disabled={!docker && runner?.execution !== 'local'} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
     </>
@@ -70,7 +73,7 @@ export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeH
   const phrasesApproved = view.phrases.filter((p) => p.effective.status === 'approved').length
   const openThreads = view.review.threads.filter((t) => t.status !== 'resolved' && t.anchor !== 'apply').length
   const decisionCounts = gateCounts(view.decisions)
-  const running = view.review.apply_runs.some((r) => r.outcome === 'running')
+  const running = view.review.apply_runs.some((r) => r.outcome === 'running' || r.outcome === 'uncertain')
   const drift = corpus?.drift ?? []
   const recorded = view.review.approved_at !== null
   const jk = view.joinKey

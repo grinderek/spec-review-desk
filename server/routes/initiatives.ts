@@ -114,6 +114,11 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
     return c.json(await loadInitiativeView(t.wt, t.ini))
   })
 
+  app.post(`${base}/runs/reconcile`, async (c) => {
+    await deps.runs.reconcile(await target(c))
+    return c.json({ ok: true })
+  })
+
   // Desk fixes item 2: the owner edits the brief after creation; the edit is committed.
   app.put(`${base}/brief`, async (c) => {
     const t = await target(c)
@@ -213,7 +218,7 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
     const run = findRun(await readInitiative(t.ini.dir), c.req.param('run'))
     if (run.kind === 'author') await resumeAuthor(deps.runs, t, run.id)
     else if (run.kind === 'research') await resumeResearch(deps.runs, t, run.id)
-    else throw new HttpError(409, 'run_not_waiting', 'A planner run never waits for the owner — run the planner again')
+    else await deps.runs.resumeRun(t, run.id, {}, () => 'Re-plan the initiative from the current brief, inputs and owner decisions.')
     return c.json({ ok: true }, 202)
   })
 

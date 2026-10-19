@@ -29,11 +29,12 @@ export const GitEffectPlanSchema = z.object({
   effectId: z.uuid(),
   purpose: z.object({ kind: z.string().min(1).max(100), ref: z.string().min(1).max(500) }),
   expectedHead: FullShaSchema,
-  files: z.array(GitEffectFileSchema).min(1).max(100),
+  files: z.array(GitEffectFileSchema).max(100),
   // Names are recorded before execution. The scope journal cannot hash itself in its intent.
   extraFiles: z.array(RelativePathSchema).max(100),
   message: z.string().trim().min(1).max(20_000).refine(value => !/^Desk-Effect:/im.test(value), 'Desk-Effect is reserved'),
 }).superRefine((plan, ctx) => {
+  if (!plan.files.length && !plan.extraFiles.length) ctx.addIssue({ code: 'custom', message: 'A Git effect needs an output or an explicit journal file' })
   const paths = new Set<string>()
   if (new Set(plan.extraFiles).size !== plan.extraFiles.length) {
     ctx.addIssue({ code: 'custom', path: ['extraFiles'], message: 'duplicate extra file path' })

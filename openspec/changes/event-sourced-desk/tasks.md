@@ -50,6 +50,22 @@
 - [ ] Проверить полный native workflow с отсутствующим OpenSpec CLI.
 - [ ] Переключить разработку Desk на native packages; удалить внутренние compatibility adapters.
 
+## Промежуточный checkpoint S4
+
+- [x] Reviewer и Apply: журнал очередей/попыток, detached worker, receipt recovery, stop/resume и uncertain.
+- [x] Research/planner/author: журнал запусков, immutable input/room и safe result, recovery и Git receipts finishers.
+- [x] Проверки: отдельные source manifest и receipt, полная приемка отчета, восстановление projection и stale indication.
+- [x] Compose verification: отдельный managed container, identity/terminal proof, проверка orphan container на реальном Docker.
+- [x] Whole-change approval: durable Git intent/receipt, повтор без второго approval, запрет Apply без подтвержденного commit.
+- [x] Общий worktree admission и независимый lock context фоновых observers.
+- [x] Общие npm test 88/88, typecheck и self-review 73 contracts / 88 executions / 72 matching review contracts после ALS fix.
+- [x] После исправления Stop, ALS lease и детерминированного fake start выполнен финальный полный browser прогон: 13/13. Повторные npm test 88/88, typecheck и self-review прошли также после scanner cache-loss fix.
+- [ ] Перенести оставшиеся owner Git операции инициатив и создание branch/worktree/первого commit на durable coordination.
+- [ ] Сохранять coalesced повторную проверку при изменении источников во время активного прогона.
+- [ ] Добавить durable cleanup verification containers и cleanup browser/proxy/network при retained sandbox receipt.
+
+Этот checkpoint не закрывает S4 целиком. Новые helpers для больших immutable Git inputs и native packages пока не подключены к production consumers.
+
 ## На каждом реализованном срезе
 
 - [ ] Review конкретного поведения и новых контрактов через Desk без самостоятельной записи approvals агентом.

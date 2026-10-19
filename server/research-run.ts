@@ -11,6 +11,8 @@ import { buildResumePrompt } from './prompt.ts'
 import { readReview } from './review-store.ts'
 import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts'
 import { storeInitiativeBlob } from './initiative-events.ts'
+import { readInitiativeStream } from './initiative-events.ts'
+import { raiseRunDecisions } from './initiative-finalization.ts'
 
 // Spec B §4.5: research in two phases — WebSearch only, then (after the owner's fetch-domains
 // decision) WebFetch limited to the approved domains. The result is a draft input.
@@ -69,15 +71,14 @@ export const finishResearch: Finisher<'research'> = async (ctx, reply) => withIn
       // Ruling 2: every requested domain is already approved — continue without asking.
       return ctx.relaunch({ phase: 'read', web_fetch: true, validation_retry: false }, `${ALREADY_ALLOWED} ${researchResumeClosing(doc.research.domains)}`)
     }
-    const [record] = decisionsFromReply([decision], { kind: 'run', run: ctx.run.id, agent: 'research' }, ctx.at)
-    await executeOwnerDecision(ini.dir, { type: 'RaiseOwnerDecisions', decisions: [{ ...record!, requested_domains: requested }] })
+    await raiseRunDecisions(ctx, ini.dir, [decision], requested)
     return ctx.record('needs_owner', reply.answer)
   }
+  if ((await readInitiativeStream(ini.dir)).events.some(({event}) => event.type === 'InitiativeInputAdded' && event.input.source.kind === 'research' && event.input.source.run === ctx.run.id)) return ctx.record('done', reply.answer)
   const inputsDir = path.join(ini.dir, 'inputs')
   await mkdir(inputsDir, { recursive: true })
   const file = researchFileName(ctx.run.topic ?? '', [...doc.inputs.map((i) => i.file), ...(await readdir(inputsDir))])
   const body = reply.document.endsWith('\n') ? reply.document : `${reply.document}\n`
-  await writeFile(path.join(inputsDir, file), body)
   const entry: InputEntry = {
     file,
     bytes: Buffer.byteLength(body),

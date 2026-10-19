@@ -5,6 +5,7 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { startRouter } from './router-runtime.ts'
 import { ApplyService } from './apply.ts'
+import { recoverChangeApproval } from './approval-effects.ts'
 import { createBaseApp } from './app.ts'
 import { configPathFromArgs, loadConfig } from './config.ts'
 import { type ChangeRef, discover, listChanges, listWorktrees, Registry, type WorktreeInfo } from './discovery.ts'
@@ -55,11 +56,7 @@ export async function startServer(opts: StartOptions) {
   registerReadRoutes(app, ctx, capabilities)
   const questions = new QuestionService({ config, bus })
   const apply = new ApplyService({ config, bus })
-  const resumeApply = (wt: WorktreeInfo, ref: ChangeRef, id: string) =>
-    apply.resume(wt, ref, id).catch((error: unknown) => {
-      console.error(error)
-      bus.publish(`thread:${id}`, { type: 'done', ok: false })
-    })
+  const resumeApply = (wt: WorktreeInfo, ref: ChangeRef, id: string, text?: string) => apply.resume(wt, ref, id, text)
   const threadDeps = { questions, applyActive: (p: string) => apply.active(p), resumeApply }
   registerThreadRoutes(app, ctx, threadDeps)
   registerReviewRoutes(app, ctx, { questions })
@@ -72,7 +69,11 @@ export async function startServer(opts: StartOptions) {
   registerCorpusRoutes(app, ctx)
   registerApplyRoutes(app, ctx, { apply })
   for (const wt of registry.all()) {
-    for (const ref of await listChanges(wt)) await apply.reattach(wt, ref).catch((error: unknown) => console.error(error))
+    for (const ref of await listChanges(wt)) {
+      await recoverChangeApproval(wt, ref).catch((error: unknown) => console.error(error))
+      await apply.reattach(wt, ref).catch((error: unknown) => console.error(error))
+      await questions.recover(wt, ref).catch((error: unknown) => console.error(error))
+    }
   }
   // Spec B: initiatives and their sandboxed research/planner/author runs.
   const sandbox = opts.sandbox ?? new DockerSandbox(config.sandbox)

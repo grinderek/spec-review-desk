@@ -44,7 +44,8 @@ export function ThreadPanel({ id, target, onTarget }: { id: ChangeId; target: Pa
   const view = change.data
   const archived = view?.archived ?? false
   const thread = target.kind === 'thread' ? view?.review.threads.find((t) => t.id === target.id) ?? null : null
-  const applyRunning = view?.review.apply_runs.some((r) => r.outcome === 'running') ?? false
+  const applyRunning = view?.review.apply_runs.some((r) => r.outcome === 'running' || r.outcome === 'uncertain') ?? false
+  const question = view?.review.executions.findLast(run => run.request.role === 'reviewer' && run.request.threadId === thread?.id)
   const scenarioKeys = view?.features.flatMap((f) => f.scenarios.map((s) => s.key)) ?? []
 
   useEventStream(thread ? `thread:${thread.id}` : null, (message) => {
@@ -126,6 +127,11 @@ export function ThreadPanel({ id, target, onTarget }: { id: ChangeId; target: Pa
         {live ? <div className="msg"><div className="who"><b>agent</b>streaming</div><div className="body"><Markdown text={stripDiff(live)} /></div></div> : null}
         {!live && phase ? <div className="typing">{phase === 'queued' ? 'Queued — waiting for the agent…' : 'The agent is reading the change…'}</div> : null}
         {thread?.anchor === 'apply' && view ? <ApplyResume id={id} view={view} runId={thread.ref} /> : null}
+        {question?.outcome === 'uncertain' ? <div className="fail">
+          <p>The question result is uncertain. {question.reason}</p>
+          <button className="btn" onClick={() => void act(() => api.resumeQuestion(id, question.request.id), 'Question resumed explicitly')}>Resume question</button>
+        </div> : null}
+        {question?.outcome === 'running' ? <button className="btn bad" onClick={() => void act(() => api.stopQuestion(id, question.request.id), 'Stopping question')}>Stop question</button> : null}
       </div>
       {archived ? null : (
         <form className="compose" onSubmit={(e) => void send(e)}>

@@ -6,6 +6,8 @@ import { findPhrase, findScenario, loadChangeView } from '../change-view.ts'
 import type { ChangeRef, WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { executeGitEffect, withGitEffectLock } from '../git-effect.ts'
+import { assertQuestionAvailable, withExecutionLock } from '../review-execution.ts'
+import { assertWorktreeAdmission } from '../execution-admission.ts'
 import { executePatchCommand, patchAt } from '../patch-commands.ts'
 import { preparePatchApplication } from '../patch-application.ts'
 import { commitMessage } from '../patch.ts'
@@ -19,7 +21,7 @@ import { sseFromBus } from './sse.ts'
 export interface ThreadDeps {
   questions: QuestionService
   applyActive: (worktreePath: string) => boolean
-  resumeApply: ((wt: WorktreeInfo, ref: ChangeRef, threadId: string) => Promise<void>) | null
+  resumeApply: ((wt: WorktreeInfo, ref: ChangeRef, threadId: string, text?: string) => Promise<void>) | null
 }
 
 const NewThread = z.object({ anchor: z.enum(['scenario', 'phrase', 'change']), ref: z.string(), text: z.string().trim().min(1) })
@@ -48,7 +50,10 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     if (body.anchor === 'scenario' && !findScenario(view, body.ref)) throw new HttpError(404, 'unknown_scenario', `No scenario ${body.ref}`)
     if (body.anchor === 'phrase' && !findPhrase(view, body.ref)) throw new HttpError(404, 'unknown_phrase', `No phrase ${body.ref}`)
     const id = newId('t')
-    await executeDiscussionCommand(ref.dir, { type: 'OpenDiscussion', thread: { id, anchor: body.anchor, ref: body.ref, status: 'open', messages: [ownerMessage(body.text)] } })
+    await withExecutionLock(wt, ref, async () => {
+      await assertQuestionAvailable(wt, ref)
+      await executeDiscussionCommand(ref.dir, { type: 'OpenDiscussion', thread: { id, anchor: body.anchor, ref: body.ref, status: 'open', messages: [ownerMessage(body.text)] } })
+    })
     void deps.questions.ask(wt, ref, id)
     changed(wt, ref)
     return c.json({ id }, 201)
@@ -59,11 +64,14 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const id = c.req.param('id')
     const { text } = Reply.parse(await c.req.json())
     const thread = threadOf(await readReview(ref.dir), id)
-    await executeDiscussionCommand(ref.dir, { type: 'ReplyToDiscussion', threadId: id, message: ownerMessage(text) })
     if (thread.anchor === 'apply') {
       if (!deps.resumeApply) throw new HttpError(503, 'apply_unavailable', 'Apply is not available')
-      void deps.resumeApply(wt, ref, id)
+      await deps.resumeApply(wt, ref, id, text)
     } else {
+      await withExecutionLock(wt, ref, async () => {
+        await assertQuestionAvailable(wt, ref)
+        await executeDiscussionCommand(ref.dir, { type: 'ReplyToDiscussion', threadId: id, message: ownerMessage(text) })
+      })
       void deps.questions.ask(wt, ref, id)
     }
     changed(wt, ref)
@@ -111,6 +119,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
       const doc = await readReview(ref.dir)
       const patch = patchAt(doc, id, index)
       let plan = patch.effect_id ? doc.git_effects.find(effect => effect.plan.effectId === patch.effect_id)?.plan : undefined
+      await assertWorktreeAdmission(wt.path, { operation: 'git', effectId: plan?.effectId })
       if (patch.effect_id && !plan) throw new HttpError(409, 'patch_effect_missing', 'The recorded patch application has no Git effect')
       if (!plan) {
         if (patch.state !== 'proposed') throw new HttpError(409, 'patch_not_proposed', 'Only a proposed patch can be applied')
@@ -136,4 +145,19 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
   })
 
   app.get(`${base}/:id/events`, (c) => sseFromBus(c, ctx.bus, `thread:${c.req.param('id')}`))
+  app.post('/api/changes/:wt/:name/executions/:run/resume', async c => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    await deps.questions.resume(wt, ref, c.req.param('run'))
+    return c.json({ ok: true }, 202)
+  })
+  app.post('/api/changes/:wt/:name/executions/:run/stop', async c => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    await deps.questions.stop(wt, ref, c.req.param('run'))
+    return c.json({ ok: true }, 202)
+  })
+  app.post('/api/changes/:wt/:name/executions/recover', async c => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    await deps.questions.recover(wt, ref)
+    return c.json({ ok: true })
+  })
 }

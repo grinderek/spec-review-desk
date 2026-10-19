@@ -56,11 +56,12 @@ export interface AgentContainer {
   // directly (NO_PROXY — through the proxy the CLI's MCP requests are refused) and loads it as its
   // MCP server.
   browser?: boolean
+  retain?: boolean
 }
 
 export function agentRunArgs(c: AgentContainer): string[] {
   return [
-    'run', '--rm', '-i', '--name', containerName(c.runId),
+    'run', ...(c.retain ? [] : ['--rm']), '-i', '--name', containerName(c.runId),
     '--network', networkName(c.runId),
     // Two --network flags need Docker >= 25. The agent is dual-homed (sr-net and sr-bnet); isolation
     // relies on --cap-drop ALL here and on the browser — never add NET_ADMIN/NET_RAW, or the agent could

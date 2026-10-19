@@ -12,10 +12,8 @@ export default defineConfig({
     url: 'http://127.0.0.1:4620/',
     reuseExistingServer: false,
     timeout: 60_000,
-    // Without this, Playwright SIGKILLs the process group on teardown — the fixture never gets a
-    // chance to run its own exit handler, which is what removes its temp git repo and replies/writes
-    // files under /tmp (see e2e/serve-fixture.ts). SIGTERM first gives that handler the chance; the
-    // timeout still SIGKILLs if it somehow doesn't exit in time.
+    // The fixture needs SIGTERM to stop detached workers before deleting their temporary artifacts.
+    // Its own bounded teardown retains artifacts if inactivity cannot be proven.
     gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
   },
 })

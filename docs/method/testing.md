@@ -40,6 +40,10 @@ coverage. The remaining product and browser flows do not claim equivalent covera
 
 Approvals, discussions, owner decisions, patch lifecycle and decision/patch Git receipts replay from
 review history. Initiative metadata, brief/input content, plans and permissions replay from its
-journal and immutable blobs. Agent run state still uses YAML until S4. Contracts select review or
-initiative history explicitly and compare its complete event delta; public GETs observe other views. All verification runs
-use disposable fixture repositories and never forge owner approvals in the real repository.
+journal and immutable blobs. Reviewer/Apply executions replay from review history, sandboxed
+initiative runs from initiative history, and verification attempts/reports from their worktree
+verification journal. Contracts select review, initiative or verification history explicitly and
+compare the complete event delta; public GETs observe other views. Product fixtures use disposable
+repositories. Self-review executes the actual repository's corpus through its local runner and
+records verification evidence, without writing owner approvals. See
+`openspec/changes/event-sourced-desk/tasks.md` for remaining S4 effects and recovery work.

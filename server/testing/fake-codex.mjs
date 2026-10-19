@@ -30,6 +30,7 @@ writeFileSync(path.join(sessions, id), 'known')
 emit({ type: 'thread.started', thread_id: id })
 
 const mode = process.env.FAKE_CODEX_MODE ?? 'answer'
+const usage = process.env.FAKE_CODEX_OMIT_USAGE === '1' ? {} : { usage: { input_tokens: 1, output_tokens: 1 } }
 const structuredMode = process.env.FAKE_CODEX_STRUCTURED ?? 'valid'
 const structured = args.includes('--output-schema') && structuredMode !== 'off'
 const readText = () =>
@@ -106,6 +107,7 @@ const hangOnce = Boolean(hangMatch) && prompt.includes(hangMatch) && hangCountFi
 if (hangOnce) writeFileSync(hangCountFile, 'hung once')
 
 if (mode === 'hang' || hangOnce) {
+  emit({ type: 'item.completed', item: { id: 'waiting', type: 'agent_message', text: 'Waiting for owner stop. '.repeat(20) } })
   setInterval(() => undefined, 1000)
 } else if (structured) {
   const reply = chooseReply()
@@ -117,11 +119,11 @@ if (mode === 'hang' || hangOnce) {
   }
   const failed = mode === 'fail'
   emit({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: JSON.stringify(reply) } })
-  emit(failed ? { type: 'turn.failed', error: { message: 'boom' } } : { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } })
+  emit(failed ? { type: 'turn.failed', error: { message: 'boom' } } : { type: 'turn.completed', ...usage })
   process.exit(failed ? 1 : 0)
 } else {
   const failed = mode === 'fail'
   emit({ type: 'item.completed', item: { id: 'answer', type: 'agent_message', text: readText() } })
-  emit(failed ? { type: 'turn.failed', error: { message: 'boom' } } : { type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } })
+  emit(failed ? { type: 'turn.failed', error: { message: 'boom' } } : { type: 'turn.completed', ...usage })
   process.exit(failed ? 1 : 0)
 }

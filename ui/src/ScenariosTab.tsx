@@ -29,7 +29,7 @@ export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey, onD
   const [filter, setFilter] = useState<Filter>('all')
   const [open, setOpen] = useState<Set<string>>(new Set())
   const [cursor, setCursor] = useState<string | null>(null)
-  const runOf = (s: ScenarioWithStatus) => runner?.result?.scenarios[corpusKey(s.file, s.title)]
+  const runOf = (s: ScenarioWithStatus) => !runner?.stale && (runner?.outcome === 'done' || (runner?.result?.totals.failed ?? 0) > 0) ? runner?.result?.scenarios[corpusKey(s.file, s.title)] : undefined
   const shown = (s: ScenarioWithStatus) =>
     filter === 'all' || (filter === 'red' ? runOf(s)?.status === 'failed' : s.effective.status === filter)
   const visible = view.features.flatMap((f) => f.scenarios.filter(shown))

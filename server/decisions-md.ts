@@ -1,6 +1,7 @@
 import { decideOwnerDecision, projectOwnerDecision } from './decision-commands.ts'
 import { type DecisionChoiceInput, findDecision } from './decision-model.ts'
 import { HttpError } from './errors.ts'
+import { assertWorktreeAdmission } from './execution-admission.ts'
 import { executeGitEffect, prepareGitEffect, withGitEffectLock } from './git-effect.ts'
 import { commitMessage } from './patch.ts'
 import { requestReviewEffect, reviewEffectReceipt } from './review-effects.ts'
@@ -58,6 +59,7 @@ export function commitChangeDecision(input: ChangeDecisionInput): Promise<{ comm
     if (record.status === 'recorded' && record.recorded?.commit) return { commit: record.recorded.commit }
     if (record.status !== 'open' && record.status !== 'decided') throw new HttpError(409, 'decision_closed', 'This decision is closed')
     let plan = doc.git_effects.findLast(e => e.plan.purpose.kind === 'record-decision' && e.plan.purpose.ref === record.id && e.status !== 'failed' && e.status !== 'completed')?.plan
+    await assertWorktreeAdmission(input.cwd, { operation: 'git', effectId: plan?.effectId })
     if (!plan) {
       await recordReviewEvents(input.changeDir, async previous => {
         const events = record.status === 'open' ? decideOwnerDecision(previous, { type: 'ChooseOwnerDecision', id: record.id, choice, at: nowIso(input.now) }) : []

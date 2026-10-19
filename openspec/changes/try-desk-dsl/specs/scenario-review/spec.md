@@ -191,3 +191,54 @@ The executable contract records the command, journal events and public observati
 #### Scenario: Refuse an old correction after its owner choice moves to another scenario
 
 A correction remains bound to the exact scenario and choice shown to its agent. Reattaching the decision requires a fresh resolving correction.
+
+#### Scenario: Recover the completed question answer from its terminal receipt
+
+#### Scenario: Repeated recovery retains one answer and one execution attempt
+
+#### Scenario: Show uncertainty when the previous execution outcome cannot be proved
+
+#### Scenario: Refuse implementation while a prior question requires recovery
+
+#### Scenario: Resume a question explicitly with a new execution attempt
+
+#### Scenario: Record the owner stop before accepting the stopped execution result
+
+#### Scenario: Resume stopped implementation as a new attempt under current approval gates
+
+#### Scenario: A partial or foreign report cannot replace the previous successful run
+
+#### Scenario: Restart accepts an already completed verification without running it again
+
+#### Scenario: Rebuilding a lost verification view preserves the recorded result and history
+
+#### Scenario: A successful verification becomes stale after its source inputs change
+
+#### Scenario: Repeating unchanged owner approval returns its existing commit
+
+#### Scenario: A rejected approval commit retains the recorded owner intent
+
+#### Scenario: Retry a rejected commit without requesting another owner approval
+
+#### Scenario: Recover an approval commit completed before the server stopped
+
+#### Scenario: Repeated approval recovery keeps one commit and one owner approval
+
+
+#### Scenario: Verification waits while implementation is running in the same worktree
+
+#### Scenario: Refuse implementation until the retained owner approval is committed
+
+#### Scenario: An uncertain verification blocks implementation in its worktree
+
+#### Scenario: An uncertain verification blocks a new Git approval commit in its worktree
+
+#### Scenario: Recover completed research from its receipt without running the agent again
+
+#### Scenario: Keep unconfirmed research uncertain until the owner chooses what to do
+
+#### Scenario: Start another research attempt only after the owner explicitly resumes
+
+#### Scenario: Stop unconfirmed research after proving its execution is inactive
+
+#### Scenario: Preserve owner plan edits when recovering an older planner result

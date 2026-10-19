@@ -2,9 +2,11 @@ import { executeOwnerDecision } from '../decision-commands.ts'
 import { chmod, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { ApplyService } from '../apply.ts'
-import { worktreeId } from '../discovery.ts'
+import { worktreeId, listChanges } from '../discovery.ts'
+import { decideDiscussion } from '../discussion-commands.ts'
+import { observeAttempt, startLocalAttempt } from '../execution-receipts.ts'
 import { git } from '../git.ts'
-import { readReview, readReviewEvents, REVIEW_FILE, ReviewSchema } from '../review-store.ts'
+import { readReview, readReviewEvents, recordReviewEvents, REVIEW_FILE, ReviewSchema } from '../review-store.ts'
 import { FINISHERS } from '../run-kinds.ts'
 import { InitiativeRunService } from '../run-service.ts'
 import { RunnerService } from '../runner.ts'
@@ -12,7 +14,7 @@ import { registerCorpusRoutes } from '../routes/corpus.ts'
 import { registerApplyRoutes } from '../routes/apply.ts'
 import { registerDecisionRoutes } from '../routes/decisions.ts'
 import { registerInitiativeDecisionRoutes } from '../routes/initiative-decisions.ts'
-import { registerInitiativeRoutes } from '../routes/initiatives.ts'
+import { registerInitiativeRoutes, type InitiativeRouteDeps } from '../routes/initiatives.ts'
 import { registerRunnerRoutes } from '../routes/runner.ts'
 import { registerThreadRoutes } from '../routes/threads.ts'
 import { FAKE_CODEX, FAKE_OPENSPEC, resetFakeCodex } from './fake-codex-path.ts'
@@ -22,14 +24,20 @@ import { ReviewWorld } from './review-world.ts'
 import { writeFiles } from './repo.ts'
 import { INITIATIVE_FILE, readInitiative } from '../initiative-store.ts'
 import { readInitiativeStream } from '../initiative-events.ts'
+import { readVerificationStream, updateVerification } from '../verification-events.ts'
+import { attemptDirectory } from '../execution-receipts.ts'
+import type { Finishers } from '../run-service.ts'
+import { prepareVerificationAttempt, prepareVerificationReceipt } from './verification-fixture.ts'
 
 // One public-API adapter per domain. The CLI transport is scripted, not the application services.
 export class DeskWorld {
   readonly vars: Record<string, unknown>
   private readonly savedEnv = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('FAKE_')))
-  private readonly runs: InitiativeRunService
+  private runs: InitiativeRunService
+  private readonly sandbox = new FakeSandbox()
+  private readonly initiativeDeps: InitiativeRouteDeps
   private readonly apply: ApplyService
-  private readonly runner: RunnerService
+  private runner: RunnerService
   private constructor(private readonly review: ReviewWorld) {
     this.vars = review.vars
     resetFakeCodex()
@@ -38,26 +46,32 @@ export class DeskWorld {
     process.env.FAKE_CODEX_SESSIONS = path.join(review.repo, '.spec-review/sessions')
     review.ctx.config.codexBin = FAKE_CODEX
     review.ctx.config.openspecBin = FAKE_OPENSPEC
-    const sandbox = new FakeSandbox()
+    const sandbox = this.sandbox
     this.runs = new InitiativeRunService({ config: review.ctx.config, bus: review.ctx.bus, sandbox, finishers: FINISHERS })
     this.apply = new ApplyService({ config: review.ctx.config, bus: review.ctx.bus, pollMs: 10 })
     this.runner = new RunnerService({ profiles: [{ name: 'fixture', execution: 'local', worktreePath: review.repo,
       command: [process.execPath, 'verify.mjs'], watch: [], applyAllowedTools: [] }], bus: review.ctx.bus })
-    registerThreadRoutes(review.app, review.ctx, { questions: review.questions, applyActive: p => this.apply.active(p), resumeApply: (wt, ref, id) => this.apply.resume(wt, ref, id) })
+    registerThreadRoutes(review.app, review.ctx, { questions: review.questions, applyActive: p => this.apply.active(p), resumeApply: (wt, ref, id, text) => this.apply.resume(wt, ref, id, text) })
     registerDecisionRoutes(review.app, review.ctx, { questions: review.questions })
-    registerInitiativeRoutes(review.app, review.ctx, { runs: this.runs, sandbox })
+    this.initiativeDeps = { runs: this.runs, sandbox }
+    registerInitiativeRoutes(review.app, review.ctx, this.initiativeDeps)
     registerInitiativeDecisionRoutes(review.app, review.ctx)
     registerApplyRoutes(review.app, review.ctx, { apply: this.apply })
     registerCorpusRoutes(review.app, review.ctx)
-    registerRunnerRoutes(review.app, review.ctx, this.runner)
+    registerRunnerRoutes(review.app, review.ctx, {
+      profileFor: cwd => this.runner.profileFor(cwd), state: cwd => this.runner.state(cwd),
+      refresh: cwd => this.runner.refresh(cwd), start: cwd => this.runner.start(cwd),
+      runNow: (cwd, explicit) => this.runner.runNow(cwd, explicit), stop: cwd => this.runner.stop(cwd),
+    })
   }
   static async create() { return new DeskWorld(await ReviewWorld.create()) }
   get repo() { return this.review.repo }
   resolve(value: unknown): any { return this.review.resolve(value) }
   async ready() { const change = this.vars.change; await this.review.ready(); if (this.changeDir) this.vars.change = change; this.vars.runner = `/api/runner/${worktreeId(this.review.repo)}` }
   private changeDir = ''
-  async events(stream: 'review' | 'initiative' = 'review') {
+  async events(stream: 'review' | 'initiative' | 'verification' = 'review') {
     if (stream === 'review') return readReviewEvents(this.changeDir || this.review.dir)
+    if (stream === 'verification') return (await readVerificationStream(this.repo)).events.map(({ event, ...envelope }) => ({ ...envelope, ...event }))
     const root = path.join(this.repo, 'openspec/initiatives')
     const names = await readdir(root).catch(() => [] as string[])
     if (names.length > 1) throw new Error('An initiative event observation must select one stream')
@@ -72,6 +86,10 @@ export class DeskWorld {
     return r
   }
   private cliReply(reply: unknown) { process.env.FAKE_CODEX_REPLY = JSON.stringify(reply) }
+  private replaceInitiativeService(finishers: Finishers = FINISHERS) {
+    this.runs = new InitiativeRunService({ config: this.review.ctx.config, bus: this.review.ctx.bus, sandbox: this.sandbox, finishers })
+    this.initiativeDeps.runs = this.runs
+  }
   private async patch() {
     const file = path.join(this.review.dir, 'features/subject.desk.yaml')
     const original = await readFile(file, 'utf8')
@@ -81,7 +99,40 @@ export class DeskWorld {
     return diff
   }
   async given(name: string, data: Record<string, any>) {
-    if (name === 'DiscussionAnswered') {
+    if (['QuestionReceiptAwaitingRecovery', 'QuestionAttemptOutcomeUnknown', 'QuestionOutcomeUncertain', 'QuestionRecovered'].includes(name)) {
+      await this.ready()
+      const wt = this.review.ctx.registry.all()[0]!
+      const ref = (await listChanges(wt)).find(ref => ref.dir === this.review.dir)!
+      this.vars.thread = 't_recovery'
+      await recordReviewEvents(ref.dir, async doc => ({ events: decideDiscussion(doc, { type: 'OpenDiscussion', thread: {
+        id: String(this.vars.thread), anchor: 'scenario', ref: String(this.vars.key), status: 'open', messages: [
+          { role: 'owner', at: String(this.vars.at), text: 'Explain the recovered contract.', note: null, patch: null },
+        ],
+      } }) }), 'fixture')
+      const run = (await readReview(ref.dir)).executions.at(-1)!
+      this.vars.questionRun = run.request.id
+      const attempt = await this.review.questions.prepareAttempt(wt, ref, run, 'initial')
+      await recordReviewEvents(ref.dir, async () => ({ events: [{ type: 'ExecutionAttemptRequested', runId: run.request.id, attempt }] }), 'fixture')
+      if (name === 'QuestionReceiptAwaitingRecovery' || name === 'QuestionRecovered') {
+        await startLocalAttempt(attempt, 5000, { FAKE_CODEX_REPLY: JSON.stringify({ answer: 'The durable answer is recovered once.', patch: null, decisions: [], resolves: [], status: 'answered' }) })
+        for (let i = 0; ; i++) {
+          const observed = await observeAttempt(wt.path, attempt.id)
+          if (observed.kind === 'receipt') break
+          if (observed.kind !== 'live' || i >= 200) throw new Error('Fixture execution did not produce a terminal receipt')
+          await new Promise(resolve => setTimeout(resolve, 20))
+        }
+      }
+      if (name === 'QuestionOutcomeUncertain' || name === 'QuestionRecovered') await this.review.questions.recover(wt, ref)
+    } else if (name === 'ApplyRunning' || name === 'ApplyStopped') {
+      await this.ready()
+      process.env.FAKE_CODEX_MODE = 'hang'
+      const response = await call(this.review.app, 'POST', `${this.vars.change}/apply`)
+      if (response.status !== 202) throw new Error(`Cannot prepare running Apply: ${JSON.stringify(response.json)}`)
+      this.vars.applyRun = response.json.run.id
+      process.env.FAKE_CODEX_MODE = 'answer'
+      if (name === 'ApplyStopped') await this.setupCommand('StopApply', {})
+    } else if (name === 'DiscussionAnswered') {
+      this.review.agentUsageReported = data.usageReported !== false
       this.review.agentReply = { answer: data.answer ?? 'Noted.', patch: data.patch ? await this.patch() : null, decisions: [], resolves: data.resolves ?? [], status: 'answered' }
       const r = await this.setupCommand('OpenDiscussion', { anchor: 'scenario', ref: this.vars.key, text: data.text ?? 'Explain the contract.' })
       this.vars.thread = r.body.id
@@ -144,7 +195,31 @@ export class DeskWorld {
       this.vars.decision = (await readReview(this.changeDir || this.review.dir)).decisions.at(-1)!.id
     } else if (name === 'ApplyDecisionRecorded') await this.setupCommand('DecideOwnerQuestion', { id: this.vars.decision, option: 'yes' })
     else if (name === 'PlanApproved') await this.setupCommand('ApprovePlan', {})
-    else if (name === 'ResearchDrafted') {
+    else if (name === 'PlannerResultRecorded') {
+      this.replaceInitiativeService({ ...FINISHERS, planner: async () => {} })
+      this.cliReply({ answer: 'Plan ready.', patch: null, decisions: [], resolves: [], status: 'done', slices: [{ title: 'Agent plan', scope: 'Agent proposal.', depends_on: [] }] })
+      await this.setupCommand('RunPlanner', {})
+      this.replaceInitiativeService()
+    } else if (name === 'OwnerPlanRevised') {
+      await this.setupCommand('EditPlan', { slices: [{ id: null, title: 'Owner plan', scope: 'Owner revision.', depends_on: [] }] })
+    } else if (name === 'ResearchResultRecorded') {
+      // A completed transport receipt whose consumer exited before applying its domain result.
+      this.replaceInitiativeService({ ...FINISHERS, research: async () => {} })
+      this.cliReply({ answer: 'Research ready.', patch: null, decisions: [], resolves: [], status: 'done', document: '# Findings\n\n## Sources\n- https://example.com\n' })
+      const result = await this.setupCommand('RunResearch', { topic: 'Contract', questions: 'What is known?' })
+      this.vars.researchRun = result.body.run.id
+      this.replaceInitiativeService()
+    } else if (name === 'InitiativeReceiptUnavailable') {
+      const doc = await readInitiative(String(this.vars.initiativeDir))
+      const run = doc.runs.find(run => run.id === this.vars.researchRun)!
+      const attempt = doc.executions.find(item => item.request.id === run.execution_id)!.attempts.at(-1)!
+      await rm(path.join(attemptDirectory(this.repo, attempt.id), 'receipt.json'), { force: true })
+      await rm(path.join(attemptDirectory(this.repo, attempt.id), 'result.ndjson'), { force: true })
+    } else if (name === 'ResearchOutcomeUnknown') {
+      await this.given('ResearchResultRecorded', {})
+      await this.given('InitiativeReceiptUnavailable', {})
+      await this.setupCommand('ReconcileInitiativeRuns', {})
+    } else if (name === 'ResearchDrafted') {
       this.cliReply({ answer: 'Research ready.', patch: null, decisions: [], resolves: [], status: 'done', document: data.document ?? '# Findings\n\n## Sources\n- https://example.com\n' })
       await this.setupCommand('RunResearch', { topic: data.topic ?? 'Contract', questions: 'What is known?' })
     } else if (name === 'ResearchWaitingForDomains') {
@@ -177,13 +252,31 @@ export class DeskWorld {
     else if (name === 'CorpusDrifted') {
       const source = await readFile(path.join(this.changeDir || this.review.dir, 'features/subject.desk.yaml'), 'utf8')
       await writeFiles(this.review.repo, { 'features/subject.desk.yaml': source.replace('status: 200', 'status: 201') })
-    } else if (name === 'VerificationPrepared') {
+    } else if (name === 'VerificationCompleted') await this.setupCommand('RunVerification', {})
+    else if (name === 'VerificationOutcomeUncertain') {
+      const { runId, attempt } = await prepareVerificationAttempt(this.review.repo)
+      await updateVerification(this.review.repo, () => ({ events: [{ type: 'ExecutionUncertain', runId, attemptId: attempt.id, reason: 'The previous verification outcome cannot be proved' }], value: undefined }))
+    }
+    else if (name === 'VerificationReceiptAvailable') await prepareVerificationReceipt(this.review.repo)
+    else if (name === 'VerificationProjectionLost') await rm(path.join(this.review.repo, '.spec-review/verification.json'), { force: true })
+    else if (name === 'VerificationSourceChanged') await writeFiles(this.review.repo, { 'README.md': 'Changed verification input\n' })
+    else if (name === 'VerificationPrepared') {
       const status = data.status ?? 'passed'
-      const messages = [{ deskScenarioResult: { key: 'subject.desk.yaml::Subject contract', status } }, { deskRunFinished: { at: String(this.vars.at) } }]
-      await writeFiles(this.review.repo, { 'verify.mjs': `import {mkdir,writeFile} from 'node:fs/promises'; await mkdir('.spec-review',{recursive:true}); await writeFile('.spec-review/last-run.ndjson', ${JSON.stringify(messages.map(m => JSON.stringify(m)).join('\n'))}); process.exit(${status === 'failed' ? 1 : 0});\n` })
+      const mode = data.mode ?? 'complete'
+      const source = await readFile(path.join(this.changeDir || this.review.dir, 'features/subject.desk.yaml'), 'utf8')
+      await writeFiles(this.review.repo, { 'features/subject.desk.yaml': source,
+        'verify.mjs': `import {writeFile} from 'node:fs/promises'; const env=process.env; const messages=[{deskScenarioResult:{key:'subject.desk.yaml::Subject contract',status:${JSON.stringify(status)},message:null,row:null,rows:null}},{deskRunFinished:{at:new Date().toISOString(),runId:env.DESK_RUN_ID,attemptId:env.DESK_ATTEMPT_ID,sourceHash:env.DESK_SOURCE_HASH}}]; const mode=${JSON.stringify(mode)}; if(mode==='incomplete')messages.pop(); if(mode==='foreign')messages[1].deskRunFinished.sourceHash='0'.repeat(64); if(mode==='duplicate')messages.splice(1,0,messages[0]); await writeFile(env.DESK_RESULT_FILE,messages.map(m=>JSON.stringify(m)).join('\\n')+'\\n',{flag:'wx'}); process.exit(${status === 'failed' ? 1 : 0});\n` })
     } else await this.review.given(name, data)
   }
   async command(name: string, data: Record<string, any>) {
+    if (name === 'RestartVerification') {
+      this.runner = new RunnerService({ profiles: [{ name: 'fixture', execution: 'local', worktreePath: this.review.repo,
+        command: [process.execPath, 'verify.mjs'], watch: [], applyAllowedTools: [] }], bus: this.review.ctx.bus })
+      await this.runner.loadLast(this.review.repo)
+      await this.runner.idle(this.review.repo)
+      return this.read(String(this.vars.runner))
+    }
+    if (name === 'InspectVerification') return this.read(String(this.vars.runner))
     const base = String(this.vars.change), ini = String(this.vars.initiative)
     if (name === 'OpenInitiative') {
       const form = new FormData()
@@ -201,7 +294,10 @@ export class DeskWorld {
       EditBrief: ['PUT', `${ini}/brief`, { brief: data.brief }], RunPlanner: ['POST', `${ini}/plan/run`], ApprovePlan: ['POST', `${ini}/plan/approve`],
       ProposeSlice: ['POST', `${ini}/slices/${data.slice}/propose`, { change: data.change }],
       RunResearch: ['POST', `${ini}/research`, data], DecideResearchPermission: ['POST', `${ini}/decisions/${data.id}/decide`, { option: data.option }], ResumeResearch: ['POST', `${ini}/runs/${data.run}/resume`, {}], AcceptResearch: ['POST', `${ini}/inputs/${data.file}/accept`],
+      ReconcileInitiativeRuns: ['POST', `${ini}/runs/reconcile`], StopResearch: ['POST', `${ini}/runs/${data.run}/stop`],
       StartApply: ['POST', `${base}/apply`], ReapplyContract: ['POST', `${base}/reapply`], ResumeApply: ['POST', `${base}/apply/resume`, { runId: data.run }], RunVerification: ['POST', `${this.vars.runner}/run`],
+      StopApply: ['POST', `${base}/apply/stop`], RecoverExecutions: ['POST', `${base}/executions/recover`],
+      ResumeQuestion: ['POST', `${base}/executions/${data.run}/resume`],
     }
     const route = routes[name]
     if (!route) return this.review.command(name, data)
@@ -212,12 +308,22 @@ export class DeskWorld {
       else await this.runs.settled(r.json.run.id)
     }
     if (name === 'ResumeResearch') await this.runs.settled(data.run)
+    if (name === 'StopResearch') await this.runs.settled(data.run)
     if (name === 'ResumeApply') await this.apply.settled(data.run)
+    if (name === 'StopApply') await this.apply.settled(String(this.vars.applyRun))
+    if (name === 'ResumeQuestion') await this.review.questions.settled(data.run)
     if (name === 'RunVerification') await this.runner.idle(this.review.repo)
     return { status: r.status, body: r.json }
   }
   async close() {
     try {
+      const doc = await readReview(this.changeDir || this.review.dir)
+      for (const run of doc.apply_runs.filter(run => run.outcome === 'running')) {
+        const wt = this.review.ctx.registry.all()[0]!
+        const ref = (await listChanges(wt)).find(ref => ref.dir === (this.changeDir || this.review.dir))!
+        await this.apply.stop(wt, ref)
+        await this.apply.settled(run.id)
+      }
       await this.runner.idle(this.review.repo)
       await this.review.close()
     } finally {

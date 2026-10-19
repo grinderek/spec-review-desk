@@ -36,8 +36,13 @@ scenarios:
       events:
         - OwnerDecisionChosen: { decisionId: $decision }
         - DiscussionOpened: { thread: { id: $decisionThread, anchor: scenario, ref: $key } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
         - ReviewAgentSessionSet: {}
         - DiscussionAgentReplied: { threadId: $decisionThread, message: { role: agent, resolves: [$decision] }, status: answered }
+        - ExecutionSettled: { outcome: done }
       response: { status: 200, body: { status: decided, threadId: $decisionThread } }
       reads:
         - path: $change

@@ -23,6 +23,8 @@ export interface SandboxRun {
   // The research read phase: a headless browser (Playwright MCP) next to the agent, behind its own
   // proxy (approved domains only), loaded as the agent's one MCP server.
   browser?: boolean
+  retain?: boolean
+  stopFile?: string
 }
 export interface SandboxOutcome { code: number | null; timedOut: boolean; stopped: boolean; error: string | null }
 export interface SandboxStatus {
@@ -41,6 +43,8 @@ export interface DockerSandboxOptions { browserReadyMs?: number; pollMs?: number
 export interface RunOptions { timeoutMs: number; onLine: (line: string) => void }
 
 export interface Sandbox {
+  durableProvider(): { module: string; config: unknown }
+  inspect(runId: string): Promise<'running' | 'exited' | 'missing' | 'unknown'>
   status(): Promise<SandboxStatus>
   token(): Promise<string | null>
   run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome>
@@ -91,6 +95,14 @@ export class DockerSandbox implements Sandbox {
   constructor(private readonly config: SandboxConfig, opts: DockerSandboxOptions = {}) {
     this.#browserReadyMs = opts.browserReadyMs ?? 30_000
     this.#pollMs = opts.pollMs ?? 250
+  }
+
+  durableProvider() { return { module: import.meta.url, config: this.config } }
+  async inspect(runId: string): Promise<'running' | 'exited' | 'missing' | 'unknown'> {
+    const result = await this.#docker(['inspect', '--format', '{{.State.Running}}', containerName(runId)], true).catch(() => null)
+    if (!result) return 'unknown'
+    if (result.code === 0) return result.stdout.trim() === 'true' ? 'running' : 'exited'
+    return /No such (?:object|container)/i.test(result.stderr) ? 'missing' : 'unknown'
   }
 
   #docker(args: readonly string[], allowFailure = false) {
@@ -153,12 +165,12 @@ export class DockerSandbox implements Sandbox {
       }
       // A stop() during the setup above found no agent container to kill: honour it here instead
       // of starting the agent (it would otherwise run until it finished or timed out).
-      if (this.#stopped.delete(spec.runId)) return STOPPED
+      if (this.#stopped.delete(spec.runId) || (spec.stopFile && await exists(spec.stopFile))) return STOPPED
       if (spec.browser) {
         const problem = await this.#startBrowser(spec)
         if (problem) return { code: null, timedOut: false, stopped: false, error: `the research browser could not start: ${problem}` }
         // The same for a stop while the browser came up: the agent never starts.
-        if (this.#stopped.delete(spec.runId)) return STOPPED
+        if (this.#stopped.delete(spec.runId) || (spec.stopFile && await exists(spec.stopFile))) return STOPPED
       }
       const schemaFile = path.join(spec.runDir, 'reply-schema.json')
       if (spec.codex.jsonSchema) {
@@ -176,12 +188,13 @@ export class DockerSandbox implements Sandbox {
         sessions: spec.sessions,
         codexArgs: [...codexArgs({ ...spec.codex, schemaFile: '/work/reply-schema.json', toolsScript: '/opt/spec-review/desk-tools.mjs' }), ...(spec.extraArgs ?? [])],
         browser: spec.browser === true,
+        retain: spec.retain,
       })
       return await this.#attach(spec, args, opts)
     } finally {
       await rm(envFile, { force: true })
       if (chatgpt) await rm(path.join(spec.sessions, 'auth.json'), { force: true })
-      for (const args of teardownArgs(spec.runId)) await this.#ok(args)
+      if (!spec.retain) for (const args of teardownArgs(spec.runId)) await this.#ok(args)
     }
   }
 
@@ -261,3 +274,5 @@ export class DockerSandbox implements Sandbox {
     await rm(runDir, { recursive: true, force: true }).catch((error: unknown) => console.error(error))
   }
 }
+
+export const createDurableSandbox = (config: SandboxConfig): Sandbox => new DockerSandbox(config)

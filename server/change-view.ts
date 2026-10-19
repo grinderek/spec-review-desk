@@ -161,6 +161,7 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
     parseErrors: errors.length,
     reviewValid: reviewErrors === null,
     pendingEffects: review.git_effects.filter(e => ['requested', 'pending', 'uncertain'].includes(e.status)).length,
+    pendingExecutions: review.executions.filter(run => run.request.role === 'reviewer' && ['queued', 'running', 'uncertain'].includes(run.outcome)).length,
   })
 
   return {

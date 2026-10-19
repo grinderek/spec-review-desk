@@ -11,7 +11,7 @@ export type InitiativeCommand =
   | { type: 'accept-input' | 'discard-input'; file: string }
   | { type: 'set-domains'; domains: readonly string[] }
   | { type: 'grant-domains'; domains: readonly string[]; decision: string; commit: string }
-  | { type: 'draft-plan'; slices: Slice[]; run: string }
+  | { type: 'draft-plan'; slices: Slice[]; run: string; attempt?: string }
   | { type: 'edit-plan'; slices: readonly SliceEdit[]; statuses: Readonly<Record<string, SliceStatus>> }
   | { type: 'approve-plan'; pending: number }
   | { type: 'associate-change'; slice: string; change: string | null }
@@ -56,14 +56,14 @@ export function decideInitiative(doc: InitiativeDoc, command: InitiativeCommand,
     }
     case 'draft-plan':
       if (doc.plan.status === 'approved') throw new HttpError(409, 'plan_approved', 'The slice plan is approved')
-      return [{ type: 'SlicePlanDrafted', slices: command.slices, run: command.run }]
+      return [{ type: 'SlicePlanDrafted', slices: command.slices, run: command.run, ...(command.attempt ? {attempt:command.attempt} : {}) }]
     case 'edit-plan': {
       const plan = editPlan(doc.plan, command.slices, command.statuses)
       return isDeepStrictEqual(plan, doc.plan) ? [] : [{ type: 'SlicePlanEdited', slices: plan.slices }]
     }
     case 'approve-plan': {
       if (command.pending) throw new HttpError(409, 'decisions_pending', `${command.pending} blocking decision(s) of the initiative are open`)
-      if (doc.runs.some(r => r.kind === 'planner' && r.outcome === 'running')) throw new HttpError(409, 'planner_running', 'The planner is running; wait for it to finish before approving the plan')
+      if (doc.runs.some(r => r.kind === 'planner' && ['running','queued','uncertain'].includes(r.outcome))) throw new HttpError(409, 'planner_running', 'The planner has unresolved execution state')
       const plan = approvePlan(doc.plan, at)
       return [{ type: 'SlicePlanApproved', slices: plan.slices, approved_at: at }]
     }

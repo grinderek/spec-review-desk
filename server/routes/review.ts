@@ -2,10 +2,11 @@ import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { executeApprovalCommand, readApprovalFacts, type ApprovalCommand } from '../approval-commands.ts'
-import { commitFiles } from '../git.ts'
+import { commitChangeApproval } from '../approval-effects.ts'
+import { assertQuestionAvailable, withExecutionLock } from '../review-execution.ts'
 import type { QuestionService } from '../questions.ts'
-import { newId, REVIEW_FILE } from '../review-store.ts'
-import { assertWritable, relDirOf, resolveChange } from './resolve.ts'
+import { newId } from '../review-store.ts'
+import { assertWritable, resolveChange } from './resolve.ts'
 
 const Key = z.object({ key: z.string().min(1) })
 const RequestChanges = z.object({ key: z.string().min(1), reason: z.string().trim().min(1) })
@@ -44,7 +45,10 @@ export function registerReviewRoutes(app: Hono, ctx: AppContext, deps: { questio
     const { key, reason } = RequestChanges.parse(await c.req.json())
     const threadId = newId('t')
     const command: ApprovalCommand = { type: 'RequestScenarioChanges', key, reason, threadId }
-    await executeApprovalCommand(ref.dir, command, () => readApprovalFacts(wt, ref, command))
+    await withExecutionLock(wt, ref, async () => {
+      await assertQuestionAvailable(wt, ref)
+      await executeApprovalCommand(ref.dir, command, () => readApprovalFacts(wt, ref, command))
+    })
     void deps.questions.ask(wt, ref, threadId)
     done(wt.id, ref.name)
     return c.json({ threadId })
@@ -70,10 +74,7 @@ export function registerReviewRoutes(app: Hono, ctx: AppContext, deps: { questio
 
   app.post(`${base}/approval`, async (c) => {
     const { wt, ref } = await load(c.req.param('wt'), c.req.param('name'))
-    const command: ApprovalCommand = { type: 'RecordChangeApproval' }
-    const trailer = ctx.config.commitTrailer ? `\n\n${ctx.config.commitTrailer}` : ''
-    const commit = await executeApprovalCommand(ref.dir, command, () => readApprovalFacts(wt, ref, command),
-      () => commitFiles(wt.path, [`${relDirOf(wt, ref)}/${REVIEW_FILE}`], `docs(openspec): ${ref.name} - owner approval${trailer}\n`))
+    const { commit } = await commitChangeApproval(wt, ref, ctx.config.commitTrailer)
     done(wt.id, ref.name)
     return c.json({ commit })
   })

@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { RoutingDecisionSchema } from './agent-routing.ts'
+import { ExecutionRunSchema } from './execution-model.ts'
 
 // openspec/initiatives/<name>/initiative.yaml (spec B §3). Slice statuses are derived, never stored.
 export const INITIATIVE_FILE = 'initiative.yaml'
@@ -35,8 +36,9 @@ export const SliceSchema = z.object({
   depends_on: z.array(z.string()).default([]),
   change: z.string().regex(CHANGE_NAME).nullable().default(null),
 })
-const RunSchema = z.object({
+export const RunSchema = z.object({
   id: z.string().regex(RUN_ID),
+  execution_id: z.uuid(),
   kind: z.enum(['research', 'planner', 'author']),
   slice: z.string().nullable().default(null),
   topic: z.string().nullable().default(null),
@@ -45,7 +47,7 @@ const RunSchema = z.object({
   log: z.string(),
   started_at: z.string(),
   ended_at: z.string().nullable().default(null),
-  outcome: z.enum(['running', 'done', 'needs_owner', 'failed', 'stopped']),
+  outcome: z.enum(['queued', 'running', 'done', 'needs_owner', 'failed', 'stopped', 'uncertain']),
   notes: z.string().nullable().default(null),
   // Research only: the owner's questions and the phase (search: WebSearch only; read: after the
   // fetch-domains decision) and whether WebFetch is enabled in the read phase.
@@ -79,6 +81,7 @@ export const InitiativeSchema = z.object({
     })
     .default({ status: 'none', approved_at: null, slices: [] }),
   runs: z.array(RunSchema).default([]),
+  executions: z.array(ExecutionRunSchema).default([]),
 })
 
 export type InitiativeDoc = z.infer<typeof InitiativeSchema>

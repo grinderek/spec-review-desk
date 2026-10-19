@@ -12,7 +12,8 @@ import type { ChangeRef, WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { OptionSchema, ScopeSchema } from '../protocol.ts'
 import { ownerMessage, type QuestionService } from '../questions.ts'
-import { newId, nowIso, readReview, recordReviewEvents, type ReviewDoc, type DiscussionEvent } from '../review-store.ts'
+import { assertQuestionAvailable, withExecutionLock } from '../review-execution.ts'
+import { newId, nowIso, readReview, recordReviewEvents, type ReviewDoc, type ReviewDomainEvent } from '../review-store.ts'
 import { assertWritable, relDirOf, resolveChange } from './resolve.ts'
 
 const NewDecision = z
@@ -32,7 +33,7 @@ export interface DecisionRouteDeps { questions: QuestionService }
 
 // Spec §6: a decided scenario decision goes back to the agent — into the thread that raised it, or
 // a new thread on its scenario — asking for the "# Owner decision" patch that resolves it.
-function postDecision(doc: ReviewDoc, decisionId: string, newThreadId: string, at: string): { events: DiscussionEvent[]; threadId: string } {
+function postDecision(doc: ReviewDoc, decisionId: string, newThreadId: string, at: string): { events: ReviewDomainEvent[]; threadId: string } {
   const decided = findDecision(doc, decisionId)
   if (decided.scope.kind !== 'scenario') return { events: [], threadId: newThreadId }
   const message = ownerMessage(ownerDecisionText(decided, at.slice(0, 10)), new Date(at))
@@ -95,14 +96,17 @@ export function registerDecisionRoutes(app: Hono, ctx: AppContext, deps: Decisio
     const at = nowIso()
     const fresh = newId('t')
     let threadId = fresh
-    await recordReviewEvents(ref.dir, async (doc) => {
+    await withExecutionLock(wt, ref, async () => {
+      await assertQuestionAvailable(wt, ref)
+      await recordReviewEvents(ref.dir, async (doc) => {
       const events = decideOwnerDecision(doc, { type: 'ChooseOwnerDecision', id, choice, at })
       const decided = structuredClone(doc)
       for (const event of events) projectOwnerDecision(decided, event)
       const posted = postDecision(decided, id, fresh, at)
       threadId = posted.threadId
       return { events: [...events, ...posted.events] }
-    }, 'decision-command')
+      }, 'decision-command')
+    })
     void deps.questions.ask(wt, ref, threadId)
     changed(wt, ref)
     return c.json({ status: 'decided', threadId })

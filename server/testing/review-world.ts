@@ -1,5 +1,5 @@
 import { executeOwnerDecision } from '../decision-commands.ts'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { stringify } from 'yaml'
@@ -9,6 +9,7 @@ import { contractHash, type DeskScenario } from '../desk-dsl.ts'
 import { parseCatalog } from '../catalog.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
+import { FAKE_CODEX } from './fake-codex-path.ts'
 import {
   readReviewEvents, recordApprovalEvents, recordReviewEvents,
   type ApprovalEvent, type DecisionRecord, type Entry, type Section,
@@ -16,6 +17,10 @@ import {
 import { registerReadRoutes } from '../routes/read.ts'
 import { registerReviewRoutes } from '../routes/review.ts'
 import { call, testContext } from './http.ts'
+import { recoverChangeApproval, requestChangeApproval } from '../approval-effects.ts'
+import { withWorktreeAdmission } from '../execution-admission.ts'
+import { executeGitEffect } from '../git-effect.ts'
+import { readReview, withReviewLock } from '../review-store.ts'
 import { sh, writeFiles } from './repo.ts'
 
 // The adapter contains transport and environment mechanics only; expectations live in DSL.
@@ -26,14 +31,14 @@ export class ReviewWorld {
   readonly ctx: AppContext
   readonly questions: QuestionService
   agentReply: Record<string, unknown> = { answer: 'Noted.', patch: null, decisions: [], resolves: [], status: 'answered' }
+  agentUsageReported = true
   private subjectRel = 'features/subject.desk.yaml'
   private constructor(readonly repo: string, head: string) {
-    this.ctx = testContext(repo, { commitTrailer: '' })
+    this.ctx = testContext(repo, { commitTrailer: '', codexBin: FAKE_CODEX })
     this.app = createBaseApp(this.ctx)
     this.questions = new QuestionService({ config: this.ctx.config, bus: this.ctx.bus,
-      // The external LLM is deterministic; the real service still validates and persists its reply.
-      runCodex: async spec => ({ ok: true, text: String(this.agentReply.answer), structured: this.agentReply,
-        sessionId: spec.sessionId, numTurns: 1, error: null, timedOut: false }),
+      // The actual detached transport executes a deterministic local CLI.
+      environment: () => ({ FAKE_CODEX_REPLY: JSON.stringify(this.agentReply), FAKE_CODEX_REPLY_FILE: '', FAKE_CODEX_REPLIES_FILE: '', FAKE_CODEX_OMIT_USAGE: this.agentUsageReported ? '' : '1' }),
     })
     registerReadRoutes(this.app, this.ctx, { codex: false, docker: false })
     registerReviewRoutes(this.app, this.ctx, { questions: this.questions })
@@ -113,6 +118,32 @@ export class ReviewWorld {
         recorded: decision.recorded ?? { how: 'decisions_md', commit: (await git(this.repo, ['rev-parse', 'HEAD'])).trim() } }, 'fixture')
       if (status === 'dismissed') await executeOwnerDecision(this.dir, { type: 'DismissOwnerDecision', id: decision.id,
         reason: decision.dismissed?.reason ?? 'Outside the fixture scope', at: String(this.vars.at) }, 'fixture')
+    } else if (name === 'ApprovalCommitRejected' || name === 'ApprovalCommitFailed') {
+      const hook = path.join(this.repo, '.git/hooks/pre-commit')
+      await writeFile(hook, '#!/bin/sh\nexit 1\n'); await chmod(hook, 0o755)
+      if (name === 'ApprovalCommitFailed') {
+        await this.ready()
+        const result = await this.command('RecordChangeApproval', {})
+        if (result.status !== 409) throw Error('Expected the configured commit rejection')
+        this.vars.approvalEffect = (await readReview(this.dir)).git_effects.at(-1)!.plan.effectId
+        await rm(hook)
+      }
+    } else if (name === 'ChangeApprovalCompleted') {
+      await this.ready()
+      const result = await this.command('RecordChangeApproval', {})
+      if (result.status !== 200) throw Error('Could not record prior owner approval')
+      this.vars.approvalCommit = result.body.commit
+    } else if (name === 'ApprovalReceiptAwaitingRecovery' || name === 'ApprovalRecovered') {
+      await this.ready()
+      const wt = this.ctx.registry.all()[0]!
+      const ref = { worktreeId: wt.id, dir: this.dir, name: 'subject', archived: false, mtimeMs: 0 }
+      await withWorktreeAdmission(this.repo, () => withReviewLock(this.dir, async () => {
+        const plan = await requestChangeApproval(wt, ref, '')
+        const receipt = await executeGitEffect(this.repo, plan)
+        if (receipt.status !== 'completed') throw Error('Could not prepare the committed approval receipt')
+        this.vars.approvalEffect = plan.effectId; this.vars.approvalCommit = receipt.commit
+      }))
+      if (name === 'ApprovalRecovered') await recoverChangeApproval(wt, ref)
     } else throw Error(`Unsupported Given event ${name}`)
   }
   async ready(): Promise<void> {
@@ -124,6 +155,11 @@ export class ReviewWorld {
   async events() { return readReviewEvents(this.dir) }
   async command(name: string, data: Record<string, any>) {
     const base = String(this.vars.change)
+    if (name === 'RecoverApproval') {
+      const wt = this.ctx.registry.all()[0]!
+      await recoverChangeApproval(wt, { worktreeId: wt.id, dir: this.dir, name: 'subject', archived: false, mtimeMs: 0 })
+      return { status: 200, body: { ok: true } }
+    }
     const commands: Record<string, { method: string; path: string; body?: unknown }> = {
       ApproveScenario: { method: 'POST', path: `${base}/scenarios/approve`, body: { key: data.key } },
       RevokeScenarioApproval: { method: 'POST', path: `${base}/scenarios/revoke`, body: { key: data.key } },

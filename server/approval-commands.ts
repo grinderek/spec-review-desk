@@ -1,7 +1,9 @@
 import { HttpError } from './errors.ts'
-import { allScenarios, findPhrase, findScenario, loadChangeView } from './change-view.ts'
+import { queueExecution } from './execution-model.ts'
+import { findPhrase, findScenario, loadChangeView } from './change-view.ts'
 import type { ChangeRef, WorktreeInfo } from './discovery.ts'
 import { headSha } from './git.ts'
+import { approvalSourceVersion } from './approval-proof.ts'
 import type { Readiness } from './readiness.ts'
 import { nowIso, recordApprovalEvents, withReviewLock, type ApprovalEvent, type ReviewDomainEvent, type Entry, type ReviewDoc, type Section, type Thread } from './review-store.ts'
 
@@ -58,7 +60,7 @@ export function decideApproval(state: ReviewDoc, command: ApprovalCommand, facts
   if (!facts.hash) throw new HttpError(404, section === 'scenarios' ? 'unknown_scenario' : 'unknown_phrase', `No ${section === 'scenarios' ? 'scenario' : 'phrase'} ${command.key}`)
   if (command.type === 'RequestScenarioChanges') {
     const entry = { status: 'changes_requested' as const, text_hash: facts.hash, approved_commit: null, at }
-    return [{ type: 'ScenarioChangesRequested', key: command.key, entry }, { type: 'DiscussionOpened', thread: requestedThread(command, at) }]
+    return [{ type: 'ScenarioChangesRequested', key: command.key, entry }, { type: 'DiscussionOpened', thread: requestedThread(command, at) }, queueExecution('reviewer', command.threadId, 1, at)]
   }
   const entry = { status: 'approved' as const, text_hash: facts.hash, approved_commit: section === 'scenarios' ? facts.commit ?? null : null, at }
   return [entryEvent(section, command.key, entry)]
@@ -67,10 +69,7 @@ export function decideApproval(state: ReviewDoc, command: ApprovalCommand, facts
 export async function readApprovalFacts(wt: WorktreeInfo, ref: ChangeRef, command: ApprovalCommand): Promise<ApprovalFacts> {
   const view = await loadChangeView(wt, ref, { withCommits: false })
   if (command.type === 'RecordChangeApproval') return {
-    readiness: view.readiness, commit: await headSha(wt.path), sourceVersion: JSON.stringify({
-      scenarios: allScenarios(view).map(({ key, hash }) => ({ key, hash })),
-      phrases: view.phrases.map(({ key, hash }) => ({ key, hash })), joinKey: view.joinKey, errors: view.errors,
-    }),
+    readiness: view.readiness, commit: await headSha(wt.path), sourceVersion: approvalSourceVersion(view),
   }
   if (command.type === 'ReattachOrphanReview') {
     const target = command.section === 'scenarios' ? findScenario(view, command.to) : findPhrase(view, command.to)
@@ -84,15 +83,14 @@ export async function readApprovalFacts(wt: WorktreeInfo, ref: ChangeRef, comman
   return {}
 }
 
-// External effects run only here, after recording and a final source check. Replay only projects.
-export async function executeApprovalCommand<T = void>(changeDir: string, command: ApprovalCommand, readFacts: () => Promise<ApprovalFacts>, afterRecord?: () => Promise<T>): Promise<T | undefined> {
+// Approval commands record source-checked facts. Durable Git completion is coordinated separately.
+export async function executeApprovalCommand(changeDir: string, command: ApprovalCommand, readFacts: () => Promise<ApprovalFacts>): Promise<void> {
   return withReviewLock(changeDir, async () => {
-    let verify: () => Promise<void> = async () => undefined
     await recordApprovalEvents(changeDir, async (previous) => {
       const facts = await readFacts()
       const at = nowIso()
       const events = decideApproval(previous, command, facts, at)
-      verify = async () => {
+      const verify = async () => {
         const latest = await readFacts()
         if (JSON.stringify(latest) !== JSON.stringify(facts)) {
           throw new HttpError(409, command.type === 'ApproveScenario' ? 'scenario_changed' : 'review_source_changed', 'Review source facts changed while preparing approval. Review the current contract and retry.')
@@ -100,6 +98,5 @@ export async function executeApprovalCommand<T = void>(changeDir: string, comman
       }
       return { events, verify }
     })
-    if (afterRecord) { await verify(); return afterRecord() }
   })
 }

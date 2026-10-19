@@ -89,7 +89,7 @@ fake Codex CLI and sandbox transport, with real protocol parsing, services, fini
 Git writes. Local verification executes a real subprocess with a controlled workload. No live LLM
 or Docker is required for this corpus.
 
-`then.events` observes every new event in the selected review or initiative journal. No events
+`then.events` observes every new event in the selected review, initiative or verification journal. No events
 are invented from expected state or transient event-bus notifications.
 
 ## Review persistence
@@ -126,8 +126,8 @@ for current limits and the remaining startup/agent execution recovery work.
 
 ## Review and run Desk itself
 
-`then.stream` selects the event observation boundary explicitly: `review` (the default) or
-`initiative`. Expectations compare the complete new event sequence in that one stream. There is
+`then.stream` selects the event observation boundary explicitly: `review` (the default),
+`initiative` or `verification`. Expectations compare the complete new event sequence in that one stream. There is
 no invented global order across independent streams. An initiative owner decision observes its
 review events; subsequent GET observations verify research permissions in initiative state.
 Initiative contracts select `initiative` for brief, input, plan and domain events. Immutable

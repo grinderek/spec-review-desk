@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict'
+import { randomUUID } from 'node:crypto'
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parseDeskDsl } from '../server/desk-dsl.ts'
 import { corpusKey } from '../server/run-messages.ts'
 import { DeskWorld } from '../server/testing/desk-world.ts'
+import { captureVerificationSource } from '../server/verification-source.ts'
+
+const managed = ['DESK_RUN_ID', 'DESK_ATTEMPT_ID', 'DESK_SOURCE_HASH', 'DESK_RESULT_FILE'].map(name => process.env[name])
+if (managed.some(Boolean) && !managed.every(Boolean)) throw new Error('Verification execution context is incomplete')
+const runId = process.env.DESK_RUN_ID ?? randomUUID()
+const attemptId = process.env.DESK_ATTEMPT_ID ?? randomUUID()
+const sourceHash = process.env.DESK_SOURCE_HASH ?? (await captureVerificationSource(process.cwd())).hash
+const resultFile = process.env.DESK_RESULT_FILE ?? `.spec-review/manual-checks/${attemptId}/result.ndjson`
+if (managed.every(Boolean) && resultFile !== `.spec-review/executions/${attemptId}/result.ndjson`) throw new Error('Verification report path does not belong to this attempt')
 
 const root = path.resolve('features')
 const files = (await readdir(root, { recursive: true })).filter((file) => file.endsWith('.desk.yaml')).sort()
@@ -81,5 +91,6 @@ for (const file of files) {
 await mkdir('.spec-review', { recursive: true })
 await writeFile('.spec-review/desk-spec-results.json', JSON.stringify({ version: 1, passed, failed, scenarios: report }, null, 2))
 console.log(`${passed} passed, ${failed} failed`)
-await writeFile('.spec-review/last-run.ndjson', [...report.map((result) => JSON.stringify({ deskScenarioResult: { key: corpusKey(String(result.file), String(result.title)), status: result.status, message: result.message ?? null, row: result.row, rows: result.rows } })), JSON.stringify({ deskRunFinished: { at: new Date().toISOString() } })].join('\n') + '\n')
+await mkdir(path.dirname(resultFile), { recursive: true })
+await writeFile(resultFile, [...report.map((result) => JSON.stringify({ deskScenarioResult: { key: corpusKey(String(result.file), String(result.title)), status: result.status, message: result.message ?? null, row: result.row, rows: result.rows } })), JSON.stringify({ deskRunFinished: { at: new Date().toISOString(), runId, attemptId, sourceHash } })].join('\n') + '\n', { flag: 'wx' })
 process.exitCode = failed ? 1 : 0

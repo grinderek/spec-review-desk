@@ -26,12 +26,12 @@ sandbox:
   envFile: .env
   timeoutMinutes: 30
 # Verification is optional. Local runners need no Docker; use a command that writes
-# Desk or Cucumber message envelopes to .spec-review/last-run.ndjson in its worktree.
+# Desk envelopes to DESK_RESULT_FILE, or Cucumber messages to the {resultFile} argument.
 # runners:
 #   project:
 #     execution: local
 #     worktree: .
-#     command: [bin/cucumber, --format, message, --out, .spec-review/last-run.ndjson]
+#     command: [bin/cucumber, --format, message, --out, '{resultFile}']
 #     watch: [features, src]
 #     applyAllowedTools: [Read, Grep, Glob, Edit, Write, "Bash(git status:*)", "Bash(git diff:*)"]
 # For a container runner, set execution: compose and add:

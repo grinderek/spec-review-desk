@@ -16,7 +16,7 @@ const Scenario = z.object({
   then: z.object({
     bind: Bind.optional(),
     events: z.array(Fact), response: Response,
-    stream: z.enum(['review', 'initiative']).optional(),
+    stream: z.enum(['review', 'initiative', 'verification']).optional(),
     reads: z.array(z.object({ path: z.string(), response: Response }).strict()).optional(),
   }).strict(),
 }).strict()

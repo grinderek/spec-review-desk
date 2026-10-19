@@ -1,3 +1,6 @@
+import { mkdir, readFile, writeFile } from 'node:fs/promises'
+import { readInitiativeStream } from './initiative-events.ts'
+import { raiseRunDecisions, runGitEffect } from './initiative-finalization.ts'
 import { executeOwnerDecision } from './decision-commands.ts'
 import { readdir, rm } from 'node:fs/promises'
 import path from 'node:path'
@@ -53,7 +56,7 @@ export async function defaultChangeName(wt: WorktreeInfo, initiative: string, ti
 }
 
 function authorRunning(doc: InitiativeDoc): void {
-  if (doc.runs.some((r) => r.kind === 'author' && r.outcome === 'running')) {
+  if (doc.runs.some((r) => r.kind === 'author' && ['running','queued','uncertain','needs_owner'].includes(r.outcome))) {
     throw new HttpError(409, 'author_running', 'An author run of this initiative is already running')
   }
 }
@@ -65,7 +68,7 @@ export function startAuthor(
   input: { notes?: string; change?: string },
 ): Promise<RunRecord> {
   const busy = new HttpError(409, 'author_running', 'An author run of this initiative is already starting')
-  return service.exclusive(`${target.ini.dir}#author`, busy, () => withInitiativeLock(target.ini.dir, () => launchAuthor(service, target, sliceId, input)))
+  return service.exclusive(`${target.ini.dir}#author`, busy, () => launchAuthor(service, target, sliceId, input))
 }
 
 async function launchAuthor(service: InitiativeRunService, target: RunTarget, sliceId: string, input: { notes?: string; change?: string }): Promise<RunRecord> {
@@ -96,31 +99,31 @@ export function resumeAuthor(service: InitiativeRunService, target: RunTarget, r
 export const finishAuthor: Finisher<'author'> = async (ctx, reply) => withInitiativeLock(ctx.target.ini.dir, async () => {
   if (reply.status === 'failed') return ctx.record('failed', reply.answer)
   const { wt, ini } = ctx.target
-  const source = { kind: 'run' as const, run: ctx.run.id, agent: 'author' as const }
   if (reply.status === 'needs_owner') {
-    // Ruling 4: needs_owner decisions go to the initiative inbox.
-    await executeOwnerDecision(ini.dir, { type: 'RaiseOwnerDecisions', decisions: decisionsFromReply(reply.decisions, source, ctx.at) })
-    return ctx.record('needs_owner', reply.answer)
+    await raiseRunDecisions(ctx,ini.dir,reply.decisions)
+    return ctx.record('needs_owner',reply.answer)
   }
-  const change = reply.change
-  const vet = await vetAuthorOutput({ out: ctx.paths.out, change, worktree: wt.path, openspecBin: ctx.config.openspecBin, token: ctx.token })
-  const keys = new Set(vet.scenarioKeys)
-  const keyProblems = reply.decisions.flatMap((d, i) =>
-    d.scope.kind === 'scenario' && !keys.has(d.scope.key) ? [`decisions[${i}].scope.key: no scenario "${d.scope.key}" in ${change}`] : [])
-  const problems = [...vet.problems, ...keyProblems]
-  if (problems.length) return ctx.record('failed', 'The output did not pass vetting; nothing was moved.', problems)
-  const sliceId = ctx.run.slice ?? ''
-  const dir = await moveChange(ctx.paths.out, change, wt.path)
-  // Ruling 4: a finished author's decisions belong to the new change's own review.yaml.
-  await executeOwnerDecision(dir, { type: 'RaiseOwnerDecisions', decisions: decisionsFromReply(reply.decisions, source, ctx.at) })
-  await executeInitiativeCommand(ini.dir, { type: 'associate-change', slice: sliceId, change }, ctx.at)
-  await ctx.record('done', reply.answer)
-  const changeRel = `openspec/changes/${change}`
-  try {
-    await commitPaths(wt.path, [changeRel, ...initiativeBusinessPaths(ini.relDir)], initiativeCommitMessage(`${change} - slice ${sliceId} executable Gherkin (clean room)`, ctx.config.commitTrailer))
-  } catch (error) {
-    await rm(dir, { recursive: true, force: true })
-    await executeInitiativeCommand(ini.dir, { type: 'associate-change', slice: sliceId, change: null }, ctx.at)
-    await ctx.record('failed', `The change was vetted but its commit failed: ${(error as Error).message}`)
+  const saved = (await readInitiativeStream(ini.dir)).events.some(({event}) => event.type === 'InitiativeRunGitRequested' && event.runId === ctx.run.id && event.attemptId === ctx.attempt.id)
+  if (!saved) {
+    const out = path.join(ctx.paths.runDir,'receipt-out')
+    await mkdir(out,{recursive:true})
+    for (const file of ctx.result.outputs) {
+      if (!file.path || file.path.includes('\\') || file.path.split('/').some(part=>!part||part==='.'||part==='..'||part==='.git')) return ctx.record('failed','The recorded output contains an unsafe path')
+      const target = path.join(out,file.path)
+      await mkdir(path.dirname(target),{recursive:true})
+      const before = await readFile(target,'utf8').catch(()=>null)
+      if (before!==null && before!==file.content) return ctx.record('uncertain','The immutable received output changed')
+      if (before===null) await writeFile(target,file.content,{flag:'wx',mode:file.mode})
+    }
+    const vet=await vetAuthorOutput({out,change:reply.change,worktree:wt.path,openspecBin:ctx.config.openspecBin,token:ctx.token})
+    const keys=new Set(vet.scenarioKeys)
+    const problems=[...vet.problems,...reply.decisions.flatMap((decision,i)=>decision.scope.kind==='scenario'&&!keys.has(decision.scope.key)?[`decisions[${i}]: unknown scenario ${decision.scope.key}`]:[])]
+    if(problems.length)return ctx.record('failed','The output did not pass vetting; nothing was moved.',problems)
   }
+  const commit=await runGitEffect(ctx,{purpose:{kind:'author-result',ref:ctx.run.id},outputs:ctx.result.outputs.map(file=>({path:file.path,content:Buffer.from(file.content),mode:file.mode})),extraFiles:[`${ini.relDir}/initiative.events.jsonl`],message:initiativeCommitMessage(`${reply.change} - slice ${ctx.run.slice} executable contract`,ctx.config.commitTrailer)})
+  if(!commit)return
+  const dir=path.join(wt.path,'openspec/changes',reply.change)
+  await raiseRunDecisions(ctx,dir,reply.decisions)
+  await executeInitiativeCommand(ini.dir,{type:'associate-change',slice:ctx.run.slice??'',change:reply.change},ctx.at)
+  await ctx.record('done',reply.answer)
 })

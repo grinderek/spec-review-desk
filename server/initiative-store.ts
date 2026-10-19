@@ -34,30 +34,9 @@ async function readInitiativeLocked(dir: string): Promise<InitiativeDoc> {
     if (present) throw new InitiativeFileError(path.join(dir, INITIATIVE_FILE), ['initiative journal required; snapshot import is unsupported'])
     throw new HttpError(404, 'unknown_initiative', `No initiative at ${dir}`)
   }
-  const file = path.join(dir, INITIATIVE_FILE)
-  let text: string
-  try {
-    text = await readFile(file, 'utf8')
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-      const doc = projectInitiative(stream.events)
-      await restoreInitiativeFiles(dir, stream.events)
-      await writeInitiativeProjection(dir, doc)
-      return doc
-    }
-    throw error
-  }
-  let raw: unknown
-  try {
-    raw = parse(text)
-  } catch (error) {
-    throw new InitiativeFileError(file, [(error as Error).message])
-  }
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new InitiativeFileError(file, ['mixed run snapshot must be an object'])
-  const result = InitiativeSchema.safeParse({ ...projectInitiative(stream.events), runs: (raw as { runs?: unknown } | null)?.runs ?? [] })
-  if (!result.success) throw new InitiativeFileError(file, result.error.issues.map((i) => `${i.path.join('.') || '(root)'}: ${i.message}`))
-  const doc = { ...projectInitiative(stream.events), runs: result.data.runs }
+  const doc = projectInitiative(stream.events)
   await restoreInitiativeFiles(dir, stream.events)
+  await writeInitiativeProjection(dir, doc)
   return doc
 }
 
@@ -66,7 +45,7 @@ export const renderInitiative = (doc: InitiativeDoc): string => stringify(Initia
 export async function writeInitiative(dir: string, doc: InitiativeDoc): Promise<void> {
   return withInitiativeLock(dir, async () => {
     const prior = await readInitiative(dir)
-    if (!isDeepStrictEqual({ ...prior, runs: [] }, { ...doc, runs: [] })) {
+    if (!isDeepStrictEqual(prior, doc)) {
       throw new InitiativeFileError(path.join(dir, INITIATIVE_FILE), ['business state must be changed with initiative commands'])
     }
     await writeInitiativeProjection(dir, doc)

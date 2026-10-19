@@ -50,6 +50,8 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
             </div>
             <div className="sbody">
               <RunProfile routing={run.routing} />
+              {run.outcome === 'uncertain' ? <p className="fail">The execution outcome is uncertain. Inspect its result before continuing.</p> : null}
+              {['uncertain', 'stopped'].includes(run.outcome) ? <button className="btn" onClick={() => void act(() => api.resumeApply(id, run.id), 'Apply resumed explicitly')}>Resume Apply</button> : null}
               {run.outcome === 'running' ? <LiveLog runId={run.id} /> : null}
               {logs[run.id] !== undefined ? <pre className="doc">{logs[run.id] || '(no text output)'}</pre> : null}
             </div>
@@ -57,6 +59,8 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
         )
       })}
       <h4>Corpus</h4>
+      {runner?.outcome ? <p>Verification: {runner.outcome}{runner.stale ? ' - sources changed' : ''}</p> : null}
+      {runner?.error ? <p className="fail">{runner.error}</p> : null}
       {runner?.result ? (
         <p>{runner.result.totals.passed} green · {runner.result.totals.failed} red · {runner.result.totals.other} other</p>
       ) : (
@@ -65,7 +69,7 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
       {failing.length ? (
         <ul>
           {failing.map(([key, r]) => (
-            <li key={key}><span className="mono">{key}</span> — {r.status}{r.failure ? `: ${r.failure.message.split('\n')[0]}` : ''}</li>
+            <li key={key}><span className="mono">{key}</span> - {r.status}{r.failure ? `: ${r.failure.message.split('\n')[0]}` : ''}</li>
           ))}
         </ul>
       ) : null}

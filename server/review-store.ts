@@ -5,6 +5,7 @@ import path from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { parse, stringify } from 'yaml'
 import { z } from 'zod'
+import { ExecutionEventSchemas, ExecutionRunSchema, projectExecution, type ExecutionEvent } from './execution-model.ts'
 import { RoutingDecisionSchema } from './agent-routing.ts'
 import { projectOwnerDecision, type DecisionEvent } from './decision-commands.ts'
 import { GitEffectPlanSchema } from './git-effect.ts'
@@ -59,7 +60,7 @@ const ApplyRunSchema = z.object({
   log: z.string(),
   started_at: z.string(),
   ended_at: z.string().nullable().default(null),
-  outcome: z.enum(['running', 'done', 'stopped', 'failed', 'needs_owner']),
+  outcome: z.enum(['running', 'done', 'stopped', 'failed', 'needs_owner', 'uncertain']),
   // Byte offset in `log` at which the CURRENT attempt (this start, or this resume) began
   // writing. Persisted (not just kept in #follow's closure) so a server restart can still
   // finalize a dead resumed process's outcome from its own attempt only, never a previous one's.
@@ -102,6 +103,7 @@ export const ReviewSchema = z.object({
   phrases: z.record(z.string(), EntrySchema).default({}),
   threads: z.array(ThreadSchema).default([]),
   apply_runs: z.array(ApplyRunSchema).default([]),
+  executions: z.array(ExecutionRunSchema).default([]),
   decisions: z.array(DecisionRecordSchema).default([]),
   git_effects: z.array(z.object({ plan: GitEffectPlanSchema, status: z.enum(['requested', 'pending', 'uncertain', 'failed', 'completed']), commit: z.string().nullable(), reason: z.string().nullable() })).default([]),
 })
@@ -170,7 +172,7 @@ export type DiscussionEvent =
   | { type: 'DiscussionAgentReplied'; threadId: string; message: Message; status: 'open' | 'answered' }
   | { type: 'DiscussionResolved'; threadId: string }
   | { type: 'ReviewAgentSessionSet'; session: string }
-export type ReviewDomainEvent = ApprovalEvent | DiscussionEvent | PatchEvent | DecisionEvent | ReviewEffectEvent
+export type ReviewDomainEvent = ApprovalEvent | DiscussionEvent | PatchEvent | DecisionEvent | ReviewEffectEvent | ExecutionEvent
 const ApprovalEnvelopeSchema = z.object({
   version: z.literal(2),
   stream: z.string().uuid(),
@@ -178,10 +180,11 @@ const ApprovalEnvelopeSchema = z.object({
   id: z.string().uuid(),
   command: z.string().uuid(),
   at: z.string(),
-  origin: z.enum(['approval-command', 'discussion-command', 'patch-command', 'decision-command', 'fixture']),
+  origin: z.enum(['approval-command', 'discussion-command', 'patch-command', 'decision-command', 'execution-command', 'fixture']),
 })
 const ReviewEventSchema = z.discriminatedUnion('type', [
   ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
+  ...ExecutionEventSchemas.map(schema => schema.extend(ApprovalEnvelopeSchema.shape).strict()),
   ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioChangesRequested'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('changes_requested') }) }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('ScenarioReviewRemoved'), key: z.string() }).strict(),
   ApprovalEnvelopeSchema.extend({ type: z.literal('PhraseApproved'), key: z.string(), entry: EntrySchema.extend({ status: z.literal('approved') }) }).strict(),
@@ -248,11 +251,15 @@ export async function readReview(changeDir: string): Promise<ReviewDoc> {
   return projectReview(doc, (await readReviewStream(changeDir)).events)
 }
 export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): ReviewDoc {
-  if (!events.length && (Object.keys(doc.scenarios).length || Object.keys(doc.phrases).length || doc.approved_at || doc.approved_commit || doc.threads.length || doc.agent_session || doc.decisions.length || doc.git_effects.length)) {
+  if (!events.length && (Object.keys(doc.scenarios).length || Object.keys(doc.phrases).length || doc.approved_at || doc.approved_commit || doc.threads.length || doc.agent_session || doc.decisions.length || doc.git_effects.length || doc.executions.length || doc.apply_runs.length)) {
     throw new ReviewFileError(REVIEW_FILE, ['Review snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
-  const next: ReviewDoc = { ...doc, scenarios: replayScenarioReviews(events), phrases: {}, approved_at: null, approved_commit: null, threads: [], agent_session: null, decisions: [], git_effects: [] }
+  const next: ReviewDoc = { ...doc, scenarios: replayScenarioReviews(events), phrases: {}, approved_at: null, approved_commit: null, threads: [], agent_session: null, decisions: [], git_effects: [], executions: [], apply_runs: [] }
   for (const event of events) {
+    if (event.type.startsWith('Execution')) {
+      try { projectExecution(next.executions, event as ExecutionEvent) }
+      catch (error) { throw new ReviewFileError(REVIEW_EVENTS_FILE, [(error as Error).message]) }
+    }
     if (event.type === 'PhraseReviewRemoved') delete next.phrases[event.key]
     else if (event.type === 'PhraseApproved' || event.type === 'PhraseChangesRequested') putEntry(next.phrases, event.key, event.entry)
     else if (event.type === 'ChangeApprovalRecorded') { next.approved_at = event.at; next.approved_commit = event.commit }
@@ -283,11 +290,23 @@ export function projectReview(doc: ReviewDoc, events: readonly ReviewEvent[]): R
       }
     }
   }
+  next.apply_runs = next.executions.filter(run => run.request.role === 'apply').map(run => {
+    const attempt = run.attempts.at(-1)
+    if (!attempt) throw new ReviewFileError(REVIEW_EVENTS_FILE, ['An Apply request requires its initial attempt in the same command'])
+    if (attempt.spec.kind !== 'agent') throw new ReviewFileError(REVIEW_EVENTS_FILE, ['Apply requires an agent attempt'])
+    return { id: run.request.id, session: attempt.session ?? attempt.spec.sessionId, pid: attempt.identity?.pid ?? null,
+      log: `.spec-review/executions/${attempt.id}/events.jsonl`, started_at: run.request.at, ended_at: run.endedAt,
+      outcome: run.outcome === 'queued' ? 'running' : run.outcome, resume_offset: 0, attempt_started_at: attempt.at,
+      validation_retry: attempt.cause === 'validation-retry', routing: attempt.routing ?? undefined }
+  })
   if (doc.threads.some(t => !next.threads.some(recorded => recorded.id === t.id)) || (doc.agent_session && !events.some(e => e.type === 'ReviewAgentSessionSet'))) {
     throw new ReviewFileError(REVIEW_FILE, ['Discussion snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
   if (doc.decisions.some(d => !next.decisions.some(recorded => recorded.id === d.id)) || doc.git_effects.some(e => !next.git_effects.some(recorded => recorded.plan.effectId === e.plan.effectId))) {
     throw new ReviewFileError(REVIEW_FILE, ['Decision or effect snapshot has no supported event history. Legacy snapshot imports are not supported.'])
+  }
+  if (doc.executions.some(run => !next.executions.some(recorded => recorded.request.id === run.request.id)) || doc.apply_runs.some(run => !next.apply_runs.some(recorded => recorded.id === run.id))) {
+    throw new ReviewFileError(REVIEW_FILE, ['Execution snapshot has no supported event history. Legacy snapshot imports are not supported.'])
   }
   return next
 }
@@ -295,7 +314,7 @@ function putEntry(entries: Record<string, Entry>, key: string, entry: Entry): vo
   Object.defineProperty(entries, key, { value: entry, writable: true, configurable: true, enumerable: true })
 }
 function approvalState(doc: ReviewDoc) {
-  return { scenarios: doc.scenarios, phrases: doc.phrases, approved_at: doc.approved_at, approved_commit: doc.approved_commit, threads: doc.threads, agent_session: doc.agent_session, decisions: doc.decisions, git_effects: doc.git_effects }
+  return { scenarios: doc.scenarios, phrases: doc.phrases, approved_at: doc.approved_at, approved_commit: doc.approved_commit, threads: doc.threads, agent_session: doc.agent_session, decisions: doc.decisions, git_effects: doc.git_effects, executions: doc.executions, apply_runs: doc.apply_runs }
 }
 async function replaceFile(file: string, text: string): Promise<void> {
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
@@ -329,7 +348,7 @@ async function commitReviewEvents(changeDir: string, expected: ReviewStream, eve
   return [...expected.events, ...events]
 }
 
-export async function recordReviewEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; review?: ReviewDoc; verify?: () => Promise<void> }>, origin: 'approval-command' | 'discussion-command' | 'patch-command' | 'decision-command' | 'fixture' = 'discussion-command'): Promise<void> {
+export async function recordReviewEvents(changeDir: string, decide: (previous: ReviewDoc) => Promise<{ events: ReviewDomainEvent[]; review?: ReviewDoc; verify?: () => Promise<void> }>, origin: 'approval-command' | 'discussion-command' | 'patch-command' | 'decision-command' | 'execution-command' | 'fixture' = 'discussion-command'): Promise<void> {
   await withReviewLock(changeDir, async () => {
     const stream = await readReviewStream(changeDir)
     const previous = projectReview(await readReviewSnapshot(changeDir), stream.events)
