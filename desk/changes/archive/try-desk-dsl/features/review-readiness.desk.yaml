@@ -1,0 +1,49 @@
+version: 1
+feature: A change becomes ready only when every owner obligation is satisfied
+scenarios:
+  - id: decision-gate
+    scenario: Block only unresolved decisions marked as blocking
+    cases:
+      - { name: open blocking, decisionStatus: open, blocking: true, ready: false, reasons: [1 blocking decision open] }
+      - { name: decided blocking, decisionStatus: decided, blocking: true, ready: false, reasons: [1 blocking decision open] }
+      - { name: open informational, decisionStatus: open, blocking: false, ready: true, reasons: [] }
+      - { name: recorded blocking, decisionStatus: recorded, blocking: true, ready: true, reasons: [] }
+      - { name: dismissed blocking, decisionStatus: dismissed, blocking: true, ready: true, reasons: [] }
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - DecisionRaised: { status: $decisionStatus, blocking: $blocking }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: $ready, reasons: $reasons } } }
+
+  - id: discussion-gate
+    scenario: Require review discussions to be resolved while ignoring Apply discussions
+    cases:
+      - { name: open review, threadStatus: open, anchor: change, ready: false, reasons: [1 thread not resolved] }
+      - { name: answered review, threadStatus: answered, anchor: change, ready: false, reasons: [1 thread not resolved] }
+      - { name: resolved review, threadStatus: resolved, anchor: change, ready: true, reasons: [] }
+      - { name: open Apply, threadStatus: open, anchor: apply, ready: true, reasons: [] }
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - ReviewThreadOpened: { status: $threadStatus, anchor: $anchor }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: $ready, reasons: $reasons } } }
+
+  - id: phrase-gate
+    scenario: Require every proposed phrase to be approved
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - PhraseProposed: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: false, reasons: [1 phrase not approved] } } }

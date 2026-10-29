@@ -18,6 +18,7 @@ import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts
 import { proposeBlocker } from './slice-plan.ts'
 import { vetAuthorOutput } from './vet-output.ts'
 import { executeInitiativeCommand } from './initiative-commands.ts'
+import { implementationEvidence } from './existing-process.ts'
 
 // Spec B §4.4: a clean-room author writes one slice as a behavior-driven change.
 export { CHANGE_NAME } from './initiative-store.ts'
@@ -104,6 +105,7 @@ export const finishAuthor: Finisher<'author'> = async (ctx, reply) => withInitia
     return ctx.record('needs_owner',reply.answer)
   }
   const saved = (await readInitiativeStream(ini.dir)).events.some(({event}) => event.type === 'InitiativeRunGitRequested' && event.runId === ctx.run.id && event.attemptId === ctx.attempt.id)
+  let outputs = ctx.result.outputs
   if (!saved) {
     const out = path.join(ctx.paths.runDir,'receipt-out')
     await mkdir(out,{recursive:true})
@@ -119,8 +121,10 @@ export const finishAuthor: Finisher<'author'> = async (ctx, reply) => withInitia
     const keys=new Set(vet.scenarioKeys)
     const problems=[...vet.problems,...reply.decisions.flatMap((decision,i)=>decision.scope.kind==='scenario'&&!keys.has(decision.scope.key)?[`decisions[${i}]: unknown scenario ${decision.scope.key}`]:[])]
     if(problems.length)return ctx.record('failed','The output did not pass vetting; nothing was moved.',problems)
+    try { outputs = await implementationEvidence(ini.dir, await readInitiative(ini.dir), wt.id, vet.scenarioKeys, outputs, reply.change) }
+    catch (error) { return ctx.record('failed', 'Ссылки на реализацию не прошли проверку; пакет не опубликован.', [error instanceof Error ? error.message : String(error)]) }
   }
-  const commit=await runGitEffect(ctx,{purpose:{kind:'author-result',ref:ctx.run.id},outputs:ctx.result.outputs.map(file=>({path:file.path,content:Buffer.from(file.content),mode:file.mode})),extraFiles:[`${ini.relDir}/initiative.events.jsonl`],message:initiativeCommitMessage(`${reply.change} - slice ${ctx.run.slice} executable contract`,ctx.config.commitTrailer)})
+  const commit=await runGitEffect(ctx,{purpose:{kind:'author-result',ref:ctx.run.id},outputs:outputs.map(file=>({path:file.path,content:Buffer.from(file.content),mode:file.mode})),extraFiles:[`${ini.relDir}/initiative.events.jsonl`],message:initiativeCommitMessage(`${reply.change} - slice ${ctx.run.slice} executable contract`,ctx.config.commitTrailer)})
   if(!commit)return
   const dir=changeDir(wt.path,reply.change)
   await raiseRunDecisions(ctx,dir,reply.decisions)

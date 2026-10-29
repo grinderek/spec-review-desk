@@ -104,6 +104,13 @@ scenarios:
   sh(repo, 'git', ['commit', '-q', '-m', 'a base for the initiative flow'])
   sh(repo, 'git', ['checkout', '-q', 'main'])
   const ageDiff = await diffOf(repo, FEATURE, '  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by business-hour age.\n')
+  // Another accepted edit changes the patch context before the question is answered.
+  // Regenerating must use this current file rather than retrying the earlier diff.
+  const ageFile = path.join(repo, FEATURE)
+  await writeFile(ageFile, (await readFile(ageFile, 'utf8')).replace('  Scenario Outline:', '  Scenario Outline: '))
+  sh(repo, 'git', ['add', '--', FEATURE])
+  sh(repo, 'git', ['commit', '-q', '-m', 'Independent formatting revision'])
+  const refreshedAgeDiff = await diffOf(repo, FEATURE, '  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by business-hour age.\n')
   const partialDiff = await diffOf(repo, DECISION_FEATURE, "  Scenario: The founder's reply", '  # Owner decision 2026-09-24: partial days count as business days only.\n')
   const plannerReply = reply({
     answer: 'Two slices: the engine, then delivery.',
@@ -112,6 +119,8 @@ scenarios:
   })
   // First match wins, so the most specific prompt text comes first: a thread replays its history.
   const replies = [
+    { match: 'Explain the founder reply.', reply: reply({ answer: 'The founder reply is a separate discussion.' }) },
+    { match: 'Обнови устаревший патч из сообщения', reply: reply({ answer: 'The correction has been rebuilt against the current files.', patch: refreshedAgeDiff }) },
     { match: 'Owner decided', reply: reply({ answer: 'Recorded the decision above the scenario.', patch: partialDiff, resolves: ['$DECISION_ID'] }) },
     {
       match: 'Partial counts?',

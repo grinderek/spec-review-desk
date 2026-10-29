@@ -2,6 +2,7 @@ import { stringify } from 'yaml'
 import type { ChangePackage, NativeContract, ParsedContractFile } from './change-package.ts'
 import type { Fact } from './desk-dsl.ts'
 import type { ExamplesView, StepView } from './gherkin.ts'
+import { processReading, type ReadingPart } from './contract-reading.ts'
 
 const heading = (text: string): string => text.replace(/[\r\n]+/g, ' ').replace(/[\\`*_[\]<>#]/g, '\\$&')
 function code(text: string, language = ''): string {
@@ -26,11 +27,28 @@ function gherkinSteps(steps: readonly StepView[]): string {
     ...(step.docString !== null ? [code(step.docString)] : []),
   ].filter(Boolean).join('\n\n')).join('\n\n')
 }
+function readingParts(parts: ReadingPart[]): string[] {
+  return parts.map(part => typeof part === 'string' ? heading(part) : [
+    heading(part.text),
+    ...(part.table ? [table(part.table[0] ?? [], part.table.slice(1))] : []),
+    ...(part.docString !== undefined ? [code(part.docString, part.mediaType?.replace(/[^\w+-]/g, '') ?? '')] : []),
+  ].join('\n\n'))
+}
 function examples(examples: readonly ExamplesView[]): string {
   return examples.map(example => [`**Examples${example.name ? `: ${heading(example.name)}` : ''}**`, table(example.header, example.rows)].filter(Boolean).join('\n\n')).join('\n\n')
 }
 export function renderContract(contract: NativeContract): string {
   const sections = [`### ${heading(contract.title)}`, code(contract.key), `Contract hash: ${contract.hash}`, `Source hash: ${contract.sourceHash}`]
+  const reading = contract.scenario.reading
+  if (reading) {
+    const variants = reading.variants ?? [{ label: '', reading }]
+    sections.unshift(`### ${heading(reading.title)}`, ...variants.flatMap(({ label, reading: variant }) => [
+      ...(label ? [`**Вариант: ${heading(label)}**`] : []),
+      '**Дано**', ...readingParts(variant.given), '**Когда**', ...readingParts(Array.isArray(variant.when) ? variant.when : [variant.when]),
+      '**Тогда**', ...readingParts(variant.then),
+      ...(variant.observations?.length ? ['**В Desk**', ...variant.observations.map(line => `- ${heading(line)}`)] : []),
+    ]), '**Технические подробности**')
+  }
   if (contract.yaml) {
     const scenario = contract.yaml
     if (scenario.cases) {
@@ -54,7 +72,7 @@ export function renderContract(contract: NativeContract): string {
 // Generated from executable data. No second editable title list or assertion source is created.
 export function renderContractDocumentation(files: readonly ParsedContractFile[]): string {
   return files.map(file => [
-    `## ${heading(file.feature.name)}`,
+    `## ${heading(processReading(file.file)?.title ?? file.feature.name)}`,
     code(file.file),
     ...(file.feature.description ? [file.feature.description] : []),
     ...(file.feature.background.length ? ['**Background**', gherkinSteps(file.feature.background)] : []),

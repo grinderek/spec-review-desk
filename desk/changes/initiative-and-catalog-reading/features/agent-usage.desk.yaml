@@ -1,0 +1,17 @@
+version: 1
+feature: Show agent usage without inventing charges
+scenarios:
+  - id: report-unknown-billing
+    scenario: Keep unreported token usage and actual billing unknown
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { text: Explain this contract., answer: The contract is clear., usageReported: false }
+    when:
+      HttpRequest: { method: GET, path: /api/usage }
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          totals: { attempts: 1, completed: 1, unfinished: 0, unknownUsage: 1, actualBilledUsd: null }
+          attempts: [{ role: reviewer, routing: { source: fixed }, usage: null, estimatedApiUsd: null }]

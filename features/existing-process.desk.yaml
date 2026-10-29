@@ -1,0 +1,103 @@
+version: 1
+feature: Описание существующего процесса по коду продукта
+scenarios:
+  - id: capture-process-and-implementation
+    scenario: Сохранить выбранный процесс и источники для исследования без согласования правил
+    given:
+      - ProductConfigured: { workerAvailable: true }
+    when:
+      OpenInitiative:
+        name: describe-process
+        title: Описание обработки сообщений
+        processProduct: monitoring
+        processName: Обработка сообщений
+        processBoundary: От приема сообщения до сохранения результата.
+        processRepos: [worker]
+    then:
+      stream: initiative
+      bind: { processWorktree: response.body.worktreeId }
+      events:
+        - InitiativeCreated:
+            existingProcess: { product: monitoring, process: Обработка сообщений, boundary: От приема сообщения до сохранения результата., snapshot: implementation-snapshot.json }
+        - InitiativeInputAdded: { input: { file: implementation-snapshot.json, source: { kind: implementation, product: monitoring }, draft: false } }
+      response: { status: 201, body: { name: describe-process } }
+      reads:
+        - path: /api/initiatives/$processWorktree/describe-process
+          response: { status: 200, body: { doc: { existingProcess: { product: monitoring, process: Обработка сообщений }, plan: { status: none }, runs: [] } } }
+        - path: /api/initiatives/$processWorktree/describe-process/implementation
+          response: { status: 200, body: { product: monitoring, sources: [{ repo: worker, files: [{ path: README.md, lines: 2 }] }] } }
+  - id: restrict-process-to-product
+    scenario: Исследование использует только репозитории выбранного продукта
+    given:
+      - ProductConfigured: { workerAvailable: true }
+    when:
+      OpenInitiative:
+        processProduct: monitoring
+        processName: Обработка сообщений
+        processBoundary: От приема до сохранения.
+        processRepos: [unrelated-project]
+    then:
+      stream: initiative
+      events: []
+      response: { status: 422, body: { error: { code: invalid_process_scope } } }
+  - id: propose-observed-rules-with-evidence
+    scenario: Подготовленные по коду правила со ссылками остаются на согласовании владельца
+    given:
+      - ScenarioDiscovered: {}
+      - ProductConfigured: { workerAvailable: true }
+      - InitiativeOpened: { processProduct: monitoring, processName: Обработка сообщений, processBoundary: От приема до сохранения., processRepos: [worker] }
+      - PlanDrafted: { slices: [{ title: Обработка сообщения, scope: Описать наблюдаемое поведение., depends_on: [] }] }
+      - PlanApproved: {}
+      - AuthorOutputPrepared:
+          change: described-process
+          sources: [{ rule: 'subject.desk.yaml::subject', repo: worker, path: README.md, line: 1 }]
+    when:
+      ProposeSlice: { slice: s1, change: described-process }
+    then:
+      stream: initiative
+      events:
+        - InitiativeRunRequested: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionQueued } }
+        - InitiativeRunParametersSelected: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptRequested } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptObserved } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionReceiptAccepted } }
+        - InitiativeRunGitRequested: {}
+        - InitiativeRunGitCompleted: {}
+        - SliceChangeAssociated: { slice: s1, change: described-process }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: done } }
+        - InitiativeRunOutcomeRecorded: { outcome: done }
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { statuses: { s1: proposed } } }
+        - path: $proposedChange
+          response: { status: 200, body: { approvalCommitted: false, readiness: { ready: false }, features: [{ scenarios: [{ effective: { status: pending } }] }] } }
+  - id: refuse-unverifiable-rule-evidence
+    scenario: Не публиковать правила с неподтвержденными ссылками на реализацию
+    given:
+      - ScenarioDiscovered: {}
+      - ProductConfigured: { workerAvailable: true }
+      - InitiativeOpened: { processProduct: monitoring, processName: Обработка сообщений, processBoundary: От приема до сохранения., processRepos: [worker] }
+      - PlanDrafted: { slices: [{ title: Обработка сообщения, scope: Описать наблюдаемое поведение., depends_on: [] }] }
+      - PlanApproved: {}
+      - AuthorOutputPrepared:
+          change: described-process
+          sources: [{ rule: 'subject.desk.yaml::subject', repo: worker, path: nonexistent.rb, line: 1 }]
+    when:
+      ProposeSlice: { slice: s1, change: described-process }
+    then:
+      stream: initiative
+      events:
+        - InitiativeRunRequested: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionQueued } }
+        - InitiativeRunParametersSelected: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptRequested } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptObserved } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionReceiptAccepted } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: failed } }
+        - InitiativeRunOutcomeRecorded: { outcome: failed }
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { statuses: { s1: planned } } }

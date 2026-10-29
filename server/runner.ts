@@ -96,7 +96,7 @@ export class RunnerService {
       let stale = accepted ? !accepted.sourceUnchanged : false
       let sourceError: string | null = null
       if (accepted) {
-        try { stale ||= (await captureVerificationSource(cwd)).hash !== attempt!.sourceHash }
+        try { stale ||= (await captureVerificationSource(cwd, this.profileFor(cwd)?.sources ?? stream.projection.sources[latest.request.id]?.components)).hash !== attempt!.sourceHash }
         catch (error) { stale = true; sourceError = error instanceof Error ? error.message : String(error) }
       }
       const rejection = attempt ? stream.projection.rejections[attempt.id] : undefined
@@ -120,7 +120,7 @@ export class RunnerService {
   }
   watch(): () => Promise<void> {
     const watchers = this.deps.profiles.map(profile => {
-      const watcher = watch(profile.watch.map(dir => path.join(profile.worktreePath, dir)), {
+      const watcher = watch([...profile.watch.map(dir => path.join(profile.worktreePath, dir)), ...(profile.sources ?? []).map(source => source.path)], {
         ignoreInitial: true, ignored: (file: string) => isIgnoredWatchPath(profile.worktreePath, file),
       })
       watcher.on('all', () => this.schedule(profile.worktreePath)); return watcher

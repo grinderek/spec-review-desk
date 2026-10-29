@@ -1,6 +1,6 @@
 import { initiativeDir as nativeInitiativeDir } from './change-package.ts'
 import { randomBytes } from 'node:crypto'
-import { chmod, readFile, rename, writeFile } from 'node:fs/promises'
+import { chmod, lstat, readFile, rename, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { parse, stringify } from 'yaml'
 import { HttpError } from './errors.ts'
@@ -55,8 +55,19 @@ export async function writeInitiative(dir: string, doc: InitiativeDoc): Promise<
 
 export async function writeInitiativeProjection(dir: string, doc: InitiativeDoc): Promise<void> {
   const file = path.join(dir, INITIATIVE_FILE)
+  const rendered = renderInitiative(doc)
+  // Reads also repair derived views. An unchanged projection must not produce another
+  // filesystem event, otherwise the live-update observer keeps refetching its own writes.
+  const current = await readFile(file, 'utf8').catch(error => {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null
+    throw error
+  })
+  if (current === rendered) {
+    const info = await lstat(file)
+    if (info.isFile() && (info.mode & 0o7777) === 0o644) return
+  }
   const tmp = `${file}.${process.pid}.${randomBytes(3).toString('hex')}.tmp`
-  await writeFile(tmp, renderInitiative(doc))
+  await writeFile(tmp, rendered)
   await chmod(tmp,0o644)
   await rename(tmp, file)
 }

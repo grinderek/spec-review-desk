@@ -50,22 +50,17 @@ results show each row and aggregate the worst row status for the contract.
 
 ```yaml
 cases:
-  - { name: new phrase, extension: false }
-  - { name: extended phrase, extension: true }
+  - { name: new template, extension: false }
+  - { name: extended template, extension: true }
 given:
   - ScenarioDiscovered: {}
+  - ScenarioApproved: { key: $key, hash: $hash, at: $at }
   - PhraseProposed: { extension: $extension }
 when:
-  ApprovePhrase: { key: $phrase }
+  ReadChange: {}
 then:
-  events:
-    - PhraseApproved: { key: $phrase, hash: $phraseHash }
-  response: { status: 200, body: { ok: true } }
-  reads:
-    - path: $change
-      response:
-        status: 200
-        body: { phrases: [{ key: $phrase, effective: { status: approved } }] }
+  events: []
+  response: { status: 200, body: { readiness: { ready: true, reasons: [] } } }
 ```
 
 Each `then.reads` entry issues a GET and compares its response. Observations must not emit events.
@@ -144,13 +139,33 @@ npm run test:spec
 npm run desk
 ```
 
+For an interface review while the full corpus run is paused, use
+`npm run desk -- --no-auto-run`. This disables the file-triggered runner for that
+server session; explicit Run actions remain available.
+
+Gherkin step templates in `NEW_STEPS.md` are technical catalog entries, not a second owner
+approval stage. Desk still validates expressions, catalog coverage and scenario shape. The
+template tab shows technical diagnostics without approve/revoke controls. Existing scenario
+hashes and review journals are unchanged by this policy; whole-change Git proof continues to
+bind the catalog content alongside the contracts.
+
 `config.desk.yaml` discovers this repository and configures a local runner for `npm run test:spec`.
 Run now executes the corpus and loads its per-contract/per-case results. Local runners execute the
 configured argv on the host; configuration is trusted. Compose runners remain supported. Results
 live in gitignored `.spec-review/`, with native Desk envelopes and support for Cucumber envelopes.
 
-The UI displays YAML contracts, generated documentation, event/command summaries, approvals and
-diffs. Keys use the complete relative contract path plus stable id, such as
+The Rules section reads the implemented corpus directly from `features/`, grouped by process.
+It does not infer owner approval from the presence of a contract or a passing check. Active
+change packages have their own review workflow; archived migration packages appear separately
+under change history. All current product processes have readable cards: message and field
+formatters turn executable Given/When/Then and response observations into owner-facing text.
+Case-based rules have a variant selector; conditions and expectations describe that selected
+case, while generated documentation includes every case. Large review packages can be filtered
+by process. Expected public state is shown separately under "В Desk". Unsupported
+message shapes retain the full executable contract in details rather than inventing a summary.
+The same reading is used in review cards and generated documentation. YAML, identity and hash
+are available in collapsed details. Presentation does not change semantic hashes or approvals.
+Keys use the complete relative contract path plus stable id, such as
 `billing/approve.desk.yaml::approve`. Gherkin uses the same identity with an explicit `@id:approve`
 tag. Renaming display text does not orphan its review entry; semantic content changes may still
 require approval.

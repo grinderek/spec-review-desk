@@ -1,20 +1,24 @@
-import { Fragment, type ReactNode } from 'react'
-import { type Inline, parseMarkdown } from './markdown.ts'
+import ReactMarkdown, { defaultUrlTransform, type Components } from 'react-markdown'
+import remarkGfm from 'remark-gfm'
+import type { ReactNode } from 'react'
 
-function inlines(parts: Inline[]): ReactNode {
-  return parts.map((p, i) => (p.kind === 'bold' ? <strong key={i}>{p.text}</strong> : p.kind === 'code' ? <code key={i}>{p.text}</code> : <Fragment key={i}>{p.text}</Fragment>))
+export function TableFrame({ children, label = 'Таблица' }: { children: ReactNode; label?: string }) {
+  return <div className="table-scroll" role="region" aria-label={label} tabIndex={0}>{children}</div>
+}
+
+const components: Components = {
+  table: ({ node: _node, children, ...props }) => <TableFrame><table {...props}>{children}</table></TableFrame>,
+  pre: ({ node: _node, ...props }) => <pre className="doc" {...props} />,
+  a: ({ node: _node, href, children, ...props }) => href
+    ? <a {...props} href={href} {...(!href.startsWith('#') ? { target: '_blank', rel: 'noopener noreferrer' } : {})}>{children}</a>
+    : <span>{children}</span>,
+  // Documents may refer to external illustrations; loading them requires following the link.
+  img: ({ src, alt }) => src?.startsWith('/api/') && !src.includes('\\')
+    ? <img src={src} alt={alt ?? ''} loading="lazy" />
+    : src ? <a href={src} target="_blank" rel="noopener noreferrer">{alt || 'Открыть изображение'}</a> : <span>{alt}</span>,
 }
 
 export function Markdown({ text }: { text: string }) {
-  return (
-    <div className="md">
-      {parseMarkdown(text).map((b, i) => {
-        if (b.kind === 'p') return <p key={i}>{inlines(b.inlines)}</p>
-        if (b.kind === 'h') return <h5 key={i}>{inlines(b.inlines)}</h5>
-        if (b.kind === 'code') return <pre key={i} className="doc">{b.text}</pre>
-        const items = b.items.map((it, j) => <li key={j}>{inlines(it)}</li>)
-        return b.kind === 'ul' ? <ul key={i}>{items}</ul> : <ol key={i}>{items}</ol>
-      })}
-    </div>
-  )
+  return <div className="md"><ReactMarkdown remarkPlugins={[remarkGfm]} components={components}
+    urlTransform={url => defaultUrlTransform(url)}>{text}</ReactMarkdown></div>
 }

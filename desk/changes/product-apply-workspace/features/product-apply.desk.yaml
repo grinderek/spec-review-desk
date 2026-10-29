@@ -1,0 +1,68 @@
+version: 1
+feature: Реализация согласованных правил в репозиториях продукта
+scenarios:
+  - id: show-product-workspace
+    scenario: Apply получает компоненты того продукта, которому принадлежат правила
+    given:
+      - ScenarioDiscovered: {}
+      - ProductConfigured: { workerAvailable: true }
+    when:
+      ReadApplyWorkspace: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          roots:
+            - { name: api, git: true }
+            - { name: worker, git: true }
+            - { name: tools, git: false }
+          checks: []
+  - id: refuse-unavailable-component
+    scenario: Недоступный компонент блокирует Apply до запуска агента
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ProductConfigured: { workerAvailable: false }
+    when:
+      StartApply: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: apply_component_unavailable } } }
+  - id: run-approved-product-implementation
+    scenario: Apply запускается для согласованных правил продукта с несколькими репозиториями
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ProductConfigured: { workerAvailable: true }
+      - ApplyReplyPrepared: { deliver: false }
+    when:
+      StartApply: {}
+    then:
+      events:
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ExecutionSettled: { outcome: done }
+      response: { status: 202 }
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { apply_runs: [{ outcome: done }] } } }
+  - id: reserve-participating-component
+    scenario: Во время Apply проверка участвующего репозитория ожидает завершения реализации
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ProductConfigured: { workerAvailable: true }
+      - ComponentVerificationConfigured: {}
+      - ApplyRunning: {}
+    when:
+      RunComponentVerification: {}
+    then:
+      stream: verification
+      events: []
+      response: { status: 409, body: { error: { code: apply_running } } }

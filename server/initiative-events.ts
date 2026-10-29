@@ -6,7 +6,7 @@ import path from 'node:path'
 import { z } from 'zod'
 import { HttpError } from './errors.ts'
 import { withReviewLock } from './review-lock.ts'
-import { INITIATIVE_NAME, INPUT_FILE, CHANGE_NAME, InputSchema, SliceSchema, InitiativeSchema, RunSchema, type InitiativeDoc } from './initiative-model.ts'
+import { INITIATIVE_NAME, INPUT_FILE, CHANGE_NAME, InputSchema, SliceSchema, InitiativeSchema, RunSchema, ExistingProcessSchema, type InitiativeDoc } from './initiative-model.ts'
 import { ExecutionEventSchema, projectExecution } from './execution-model.ts'
 import { GitEffectPlanSchema } from './git-effect.ts'
 import { InitiativeFileError, writeInitiativeProjection } from './initiative-store.ts'
@@ -16,7 +16,7 @@ export const INITIATIVE_EVENTS_FILE = 'initiative.events.jsonl'
 const hash = (bytes: Uint8Array | string): string => createHash('sha256').update(bytes).digest('hex')
 const Blob = z.string().regex(/^[0-9a-f]{64}$/)
 const Payload = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('InitiativeCreated'), creationId:z.uuid(), name: z.string().regex(INITIATIVE_NAME), title: z.string().min(1), repo: z.string().min(1), created_at: z.string(), brief: Blob }),
+  z.object({ type: z.literal('InitiativeCreated'), creationId:z.uuid(), name: z.string().regex(INITIATIVE_NAME), title: z.string().min(1), repo: z.string().min(1), created_at: z.string(), brief: Blob, existingProcess: ExistingProcessSchema.optional() }),
   z.object({ type: z.literal('InitiativeBriefSaved'), blob: Blob }),
   z.object({ type: z.literal('InitiativeInputAdded'), input: InputSchema }),
   z.object({ type: z.literal('ResearchInputAccepted'), file: z.string().regex(INPUT_FILE) }),
@@ -42,9 +42,9 @@ export type InitiativeEvent = z.infer<typeof Event>
 export interface InitiativeStream { events: InitiativeEvent[]; bytes: string; version: string }
 
 // Creation prepares these exact bytes before any worktree or repository effect starts.
-export function buildInitialInitiativeStream(input:{creationId:string;streamId:string;commandId:string;at:string;name:string;title:string;repo:string;brief:string;inputs:InitiativeDoc['inputs']}):{bytes:string;projection:InitiativeDoc} {
+export function buildInitialInitiativeStream(input:{creationId:string;streamId:string;commandId:string;at:string;name:string;title:string;repo:string;brief:string;inputs:InitiativeDoc['inputs'];existingProcess?:InitiativeDoc['existingProcess']}):{bytes:string;projection:InitiativeDoc} {
   z.uuid().parse(input.creationId);z.uuid().parse(input.streamId);z.uuid().parse(input.commandId)
-  const payloads:InitiativeEventPayload[]=[{type:'InitiativeCreated',creationId:input.creationId,name:input.name,title:input.title,repo:input.repo,created_at:input.at,brief:input.brief},...input.inputs.map(entry=>({type:'InitiativeInputAdded' as const,input:entry}))]
+  const payloads:InitiativeEventPayload[]=[{type:'InitiativeCreated',creationId:input.creationId,name:input.name,title:input.title,repo:input.repo,created_at:input.at,brief:input.brief,...(input.existingProcess?{existingProcess:input.existingProcess}:{})},...input.inputs.map(entry=>({type:'InitiativeInputAdded' as const,input:entry}))]
   const events=payloads.map((event,index)=>{
     const digest=hash(`${input.creationId}:${input.streamId}:${input.commandId}:${index+1}`)
     const id=`${digest.slice(0,8)}-${digest.slice(8,12)}-4${digest.slice(13,16)}-8${digest.slice(17,20)}-${digest.slice(20,32)}`

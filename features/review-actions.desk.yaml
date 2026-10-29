@@ -95,6 +95,7 @@ scenarios:
     given:
       - ScenarioDiscovered: {}
       - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+      - PhraseProposed: {}
     when:
       RecordChangeApproval: {}
     then:

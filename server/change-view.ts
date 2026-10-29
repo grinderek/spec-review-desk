@@ -50,6 +50,7 @@ export interface ChangeView {
 export interface ChangeSummary {
   name: string
   archived: boolean
+  reviewStatus: 'pending' | 'approved'
   approved: number
   total: number
   phrasesApproved: number
@@ -138,7 +139,6 @@ export async function loadChangeView(wt: WorktreeInfo, ref: ChangeRef, opts: { w
   const validation = { valid: change.valid, problems: change.problems }
   const readiness = computeReadiness({
     scenarios: scenarios.map((s) => s.effective),
-    phrases: phrases.map((p) => p.effective),
     threads: review.threads.filter((t) => t.anchor !== 'apply'),
     decisions: review.decisions,
     packageProblems: change.problems,
@@ -193,6 +193,7 @@ export function summarize(view: ChangeView): ChangeSummary {
   return {
     name: view.name,
     archived: view.archived,
+    reviewStatus: view.readiness.ready && view.approvalCommitted ? 'approved' : 'pending',
     approved: scenarios.filter((s) => s.effective.status === 'approved').length,
     total: scenarios.length,
     phrasesApproved: view.phrases.filter((p) => p.effective.status === 'approved').length,

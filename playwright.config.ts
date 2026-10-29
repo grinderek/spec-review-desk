@@ -9,7 +9,9 @@ export default defineConfig({
   use: { baseURL: 'http://127.0.0.1:4620' },
   webServer: {
     command: 'npx tsx e2e/serve-fixture.ts',
-    url: 'http://127.0.0.1:4620/',
+    // Wait for our fixture's readiness marker. Probing an unused loopback port before
+    // launch can hang in WSL networking, outside Playwright's startup timeout.
+    wait: { stdout: /e2e fixture repo:/ },
     reuseExistingServer: false,
     timeout: 60_000,
     // The fixture needs SIGTERM to stop detached workers before deleting their temporary artifacts.

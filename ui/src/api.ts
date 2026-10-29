@@ -69,9 +69,11 @@ export interface RepoChoice { name: string; path: string; worktrees: { id: strin
 export interface InitiativesResponse { initiatives: InitiativeSummary[]; repos: RepoChoice[]; defaultBase: string }
 
 export const api = {
+  products: () => request<Awaited<ReturnType<typeof import('../../server/products.ts').readProducts>>>('GET', '/api/products'),
   usage: () => request<Awaited<ReturnType<typeof import('../../server/agent-usage.ts').readUsage>> & { router: { enabled: boolean; ready: boolean; model?: string } }>('GET', '/api/usage'),
   status: () => request<{ capabilities: Capabilities }>('GET', '/api/status'),
   changes: () => request<ChangesResponse>('GET', '/api/changes'),
+  rules: (wt: string) => request<Awaited<ReturnType<typeof import('../../server/corpus.ts').loadCorpus>>>('GET', `/api/rules/${wt}`),
   change: (id: ChangeId) => request<ChangeView>('GET', base(id)),
   scenarioDiff: (id: ChangeId, key: string) =>
     request<{ before: string | null; after: string; approvedCommit: string | null }>('GET', `${base(id)}/scenario-diff?key=${encodeURIComponent(key)}`),
@@ -92,6 +94,8 @@ export const api = {
     request<{ commit: string }>('POST', `${base(id)}/threads/${threadId}/patches/${index}/apply`, { summary }),
   recheckPatch: (id: ChangeId, threadId: string, index: number) =>
     request<{ state: string; error: string | null }>('POST', `${base(id)}/threads/${threadId}/patches/${index}/recheck`),
+  refreshPatch: (id: ChangeId, threadId: string, index: number) =>
+    request<Ok>('POST', `${base(id)}/threads/${threadId}/patches/${index}/refresh`),
   rejectPatch: (id: ChangeId, threadId: string, index: number) => request<Ok>('POST', `${base(id)}/threads/${threadId}/patches/${index}/reject`),
   runner: (wt: string) => request<{ state: RunnerState | null }>('GET', `/api/runner/${wt}`),
   startRunner: (wt: string) => request<{ state: RunnerState | null }>('POST', `/api/runner/${wt}/start`),
@@ -101,6 +105,7 @@ export const api = {
   stopApply: (id: ChangeId) => request<Ok>('POST', `${base(id)}/apply/stop`),
   reapply: (id: ChangeId) => request<{ run: ApplyRun }>('POST', `${base(id)}/reapply`),
   runLog: (id: ChangeId, runId: string) => request<{ run: ApplyRun; text: string }>('GET', `${base(id)}/runs/${runId}/log`),
+  applyWorkspace: (id: ChangeId) => request<{ roots: { name: string; path: string; git: boolean }[]; checks: { name: string; cwd: string; argv: string[]; timeoutMs: number }[] }>('GET', `${base(id)}/apply/workspace`),
   addDecision: (id: ChangeId, body: NewDecisionBody) => request<{ id: string }>('POST', `${base(id)}/decisions`, body),
   decide: (id: ChangeId, decisionId: string, body: { option: string | null; note: string }) =>
     request<DecideResponse>('POST', `${base(id)}/decisions/${decisionId}/decide`, body),
@@ -111,6 +116,7 @@ export const api = {
   stopQuestion: (id: ChangeId, runId: string) => request<Ok>('POST', `${base(id)}/executions/${runId}/stop`),
   initiatives: () => request<InitiativesResponse>('GET', '/api/initiatives'),
   initiative: (id: InitiativeId) => request<InitiativeView>('GET', ibase(id)),
+  implementation: (id: InitiativeId) => request<{ product: string; sources: { repo: string; title: string; head: string; excluded: number; files: { path: string; hash: string; lines: number; url: string }[] }[] }>('GET', `${ibase(id)}/implementation`),
   sandboxStatus: () => request<SandboxStatus>('GET', '/api/sandbox/status'),
   createInitiative: (form: FormData) => request<{ worktreeId: string; name: string }>('POST', '/api/initiatives', form),
   initiativeCreations: (repo: string) => request<{ creations: { id: string; name: string; status: string; reason: string | null; commit: string | null; worktreeId: string }[] }>('GET', `/api/initiative-creations/${encodeURIComponent(repo)}`),

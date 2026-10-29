@@ -6,6 +6,8 @@ Write only under /work/out/desk/changes/<change>/ (the name is in the prompt):
 - `change.yaml` with `version: 1` and `kind: behavior-driven`;
 - executable contracts under `features/`, preserving nested directories;
 - optional `proposal.md`, `design.md` or `tasks.md` when they help explain the change.
+- For an existing-process initiative, also write `implementation-references.yaml` as specified
+  in the task. Every rule needs a real file and line from the supplied implementation snapshot.
 Only `.md`, `.feature` and `.yaml` files are allowed. Never write Desk-owned state, journals or
 `decisions.md`. Contract documentation is generated from executable contracts; a second editable
 specification or matching Markdown title list is unnecessary.

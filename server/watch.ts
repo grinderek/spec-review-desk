@@ -6,7 +6,7 @@ import { CHANGE_ROOT, INITIATIVE_ROOT } from './change-package.ts'
 
 export function watchChanges(worktrees: readonly WorktreeInfo[], bus: EventBus): () => Promise<void> {
   const watchers = worktrees.map((wt) => {
-    const watcher = watch([path.join(wt.path, CHANGE_ROOT), path.join(wt.path, INITIATIVE_ROOT), path.join(wt.path, 'features', 'STEPS.md')], {
+    const watcher = watch([path.join(wt.path, CHANGE_ROOT), path.join(wt.path, INITIATIVE_ROOT), path.join(wt.path, 'features')], {
       ignoreInitial: true,
       ignored: (p: string) => p.endsWith('.tmp'),
     })

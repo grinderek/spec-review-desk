@@ -77,7 +77,7 @@ export class VerificationExecution {
 
   async #prepare(profile: RunnerProfile): Promise<{ runId: string; events: VerificationEvent[] }> {
     const cwd = profile.worktreePath
-    const source = await captureVerificationSource(cwd)
+    const source = await captureVerificationSource(cwd, profile.sources)
     if (!source.contracts.length) throw new HttpError(409, 'empty_corpus', 'No executable contracts are available for verification')
     const runId = randomUUID(), attemptId = randomUUID(), at = new Date().toISOString()
     const resultFile = path.relative(cwd, path.join(attemptDirectory(cwd, attemptId), 'result.ndjson'))
@@ -218,7 +218,7 @@ export class VerificationExecution {
       await assertWorktreeAdmission(cwd, { operation: 'verification', runId })
       // The same domain lock fences stale drivers through admission and external dispatch.
       if (attempt.stopRequested) return { events: [{ type: 'VerificationLaunchRejected' as const, runId, attemptId: attempt.id, at: new Date().toISOString(), reason: 'Stopped by the owner before dispatch', stopped: true }], value: undefined }
-      if ((await captureVerificationSource(cwd)).hash !== attempt.sourceHash) return { events: [{ type: 'VerificationLaunchRejected' as const, runId, attemptId: attempt.id, at: new Date().toISOString(), reason: 'Sources changed before verification dispatch', stopped: false }], value: undefined }
+      if ((await captureVerificationSource(cwd, stream.projection.sources[runId]?.components)).hash !== attempt.sourceHash) return { events: [{ type: 'VerificationLaunchRejected' as const, runId, attemptId: attempt.id, at: new Date().toISOString(), reason: 'Sources changed before verification dispatch', stopped: false }], value: undefined }
       await startLocalAttempt(attempt, this.deps.timeoutMs ?? 900_000)
       return { events: [], value: undefined }
     }))
@@ -281,7 +281,7 @@ export class VerificationExecution {
       if (result.artifactError) throw new Error(result.artifactError)
       if (!result.artifact) throw new Error('Verification command produced no report')
       const report = acceptVerificationReport(Buffer.from(result.artifact.content, 'base64'), { runId, attemptId: attempt.id, source: projection.sources[runId]! })
-      const sourceUnchanged = (await captureVerificationSource(cwd)).hash === attempt.sourceHash
+      const sourceUnchanged = (await captureVerificationSource(cwd, projection.sources[runId]?.components)).hash === attempt.sourceHash
       const stopped = attempt.stopRequested || receipt.stopped
       const commandError = stopped ? 'Stopped by the owner' : result.timedOut ? 'Verification timed out' : result.error ?? (result.code !== 0 ? `Verification command exited with ${result.code ?? 'no exit code'}` : null)
       events.push({ type: 'VerificationReportAccepted', runId, attemptId: attempt.id, artifactHash: result.artifact.hash, sourceUnchanged, commandError, report })

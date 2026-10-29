@@ -5,7 +5,7 @@ import { lstat, mkdir, open, realpath, rename, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { z } from 'zod'
 import { GitEffectPlanSchema } from './git-effect.ts'
-import { InputSchema, INITIATIVE_NAME } from './initiative-model.ts'
+import { InputSchema, INITIATIVE_NAME, ExistingProcessSchema } from './initiative-model.ts'
 import { withReviewLock } from './review-lock.ts'
 import { WORKTREE_EVENTS_FILE, initiativeRelative, worktreeRel } from './creation-layout.ts'
 import { ProcessBoundarySchema } from './execution-model.ts'
@@ -19,6 +19,7 @@ export const CreationRequestSchema = z.object({
   where: z.discriminatedUnion('kind', [z.object({ kind: z.literal('new'), base: z.string() }), z.object({ kind: z.literal('existing'), worktreeId: z.string() })]),
   existingIdentity: WorktreeIdentitySchema.nullable(), streamId: z.uuid(), commandId: z.uuid(),
   brief: Hash, inputs: z.array(InputSchema), trailer: z.string(),
+  existingProcess: ExistingProcessSchema.optional(),
 })
 export type CreationRequest = z.infer<typeof CreationRequestSchema>
 export function creationRequestHash(value: unknown): string {
@@ -44,7 +45,7 @@ export function projectWorktree(events: readonly Envelope[]): CreationState[] {
     if (event.type === 'InitiativeCreationRequested') {
       if (creations.some(state => state.request.id === event.request.id || state.request.name === event.request.name)) throw new Error('Duplicate initiative creation request')
       const request = event.request
-      if (request.requestHash !== creationRequestHash({ name: request.name, repo: request.repo, title: request.title, where: request.where, brief: request.brief,
+      if (request.requestHash !== creationRequestHash({ name: request.name, repo: request.repo, title: request.title, where: request.where, brief: request.brief, ...(request.existingProcess ? { existingProcess: request.existingProcess } : {}),
         inputs: request.inputs.map(({ added_at, ...entry }) => entry) })) throw new Error('Creation input identity mismatch')
       if (request.where.kind === 'new' && (request.targetPath !== path.join(request.anchor.root, worktreeRel(request.name)) || request.branch !== `refs/heads/plan/${request.name}` || request.existingIdentity !== null)) throw new Error('Creation worktree location mismatch')
       creations.push({ request: event.request, identity: null, plan: null, status: 'requested', reason: null, commit: null }); continue

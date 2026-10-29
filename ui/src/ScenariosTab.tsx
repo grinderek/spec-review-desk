@@ -10,6 +10,7 @@ import { scenarioOpen } from './decision-view.ts'
 import { cssId, useKeys } from './keys.ts'
 import { ScenarioCard } from './ScenarioCard.tsx'
 import { StepLines } from './StepLines.tsx'
+import { processReading } from '../../server/contract-reading.ts'
 
 const FILTERS = [['all', 'All'], ['pending', 'Pending'], ['changes_requested', 'Changes requested'], ['red', 'Red']] as const
 type Filter = (typeof FILTERS)[number][0]
@@ -27,15 +28,17 @@ export interface ScenariosTabProps {
 export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey, onDecision }: ScenariosTabProps) {
   const act = useAction()
   const [filter, setFilter] = useState<Filter>('all')
-  const [open, setOpen] = useState<Set<string>>(new Set())
+  const [process, setProcess] = useState(() => view.features.length > 3 ? (view.features.find(f => f.file === 'features/initiatives.desk.yaml') ?? view.features[0])?.file ?? '' : '')
+  const scoped = view.features.filter(f => !process || f.file === process)
+  const [open, setOpen] = useState<Set<string>>(() => new Set(view.features.flatMap(f => f.scenarios.filter(s => s.reading && s.tags.includes('desk-dsl')).map(s => s.key))))
   const [cursor, setCursor] = useState<string | null>(null)
   const runOf = (s: ScenarioWithStatus) => !runner?.stale && (runner?.outcome === 'done' || (runner?.result?.totals.failed ?? 0) > 0) ? runner?.result?.scenarios[s.key] : undefined
   const shown = (s: ScenarioWithStatus) =>
     filter === 'all' || (filter === 'red' ? runOf(s)?.status === 'failed' : s.effective.status === filter)
-  const visible = view.features.flatMap((f) => f.scenarios.filter(shown))
+  const visible = scoped.flatMap((f) => f.scenarios.filter(shown))
   const threadFor = (key: string) => {
     const threads = view.review.threads.filter((t) => t.anchor === 'scenario' && t.ref === key)
-    return threads.find((t) => t.status !== 'resolved') ?? threads.at(-1)
+    return threads.find((t) => t.status !== 'resolved')
   }
   const ask = (s: ScenarioWithStatus) => {
     const thread = threadFor(s.key)
@@ -77,6 +80,12 @@ export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey, onD
 
   return (
     <>
+      {view.features.length > 1 ? <label className="rules-select">Процесс согласования
+        <select value={process} onChange={e => { setProcess(e.target.value); setCursor(null) }}>
+          <option value="">Все процессы</option>
+          {view.features.map(f => <option key={f.file} value={f.file}>{processReading(f.file)?.title ?? f.name} ({f.scenarios.length})</option>)}
+        </select>
+      </label> : null}
       <div className="toolbar">
         {FILTERS.map(([key, label]) => (
           <button key={key} className="chip" aria-pressed={filter === key} onClick={() => setFilter(key)}>{label}</button>
@@ -88,15 +97,15 @@ export function ScenariosTab({ id, view, corpus, runner, setPanel, focusKey, onD
           <span>keys: j / k · a approve · q ask</span>
         </span>
       </div>
-      {view.features.map((feature) => (
+      {scoped.map((feature) => (
         <section key={feature.file} className="feature">
           <div className="fhead">
             {feature.tags.map((t) => <span key={t} className="tag">{t}</span>)}
-            <h3>Feature: {feature.name}</h3>
+            <h3>{processReading(feature.file)?.title ?? `Feature: ${feature.name}`}</h3>
             <span className="file">{feature.file}</span>
           </div>
           {feature.preamble.map((note, i) => <p key={i} className="note">{note}</p>)}
-          {feature.background.length ? (
+          {feature.background.length && !feature.scenarios.every(s => s.reading) ? (
             <div className="background code">
               <div className="kwline">Background:</div>
               <StepLines steps={feature.background} />

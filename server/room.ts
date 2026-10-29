@@ -9,6 +9,8 @@ import { fileURLToPath } from 'node:url'
 import { stringify } from 'yaml'
 import type { InitiativeDoc, RunKind } from './initiative-store.ts'
 import type { SliceStatus } from './slice-plan.ts'
+import { readImplementation, implementationUrl } from './existing-process.ts'
+import { worktreeId } from './discovery.ts'
 
 // Spec B §5.1: the room is the only thing an agent sees - copied (never linked) per run.
 export interface RoomInput {
@@ -95,6 +97,15 @@ export async function assembleRoom(room: string, input: RoomInput): Promise<stri
     if ((await kind(file)) === 'file') add(file, `initiative/inputs/${entry.file}`)
   }
   const texts: [string, string][] = []
+  if (input.doc.existingProcess && input.kind !== 'research') {
+    const snapshot = await readImplementation(ini, input.doc)
+    const sources = snapshot.sources.map((source, index) => ({ ...source, files: source.files.map(file => {
+      const location = `implementation/${index}/${file.path}`
+      texts.push([location, file.content])
+      return { path: file.path, location, hash: file.hash, lines: file.lines, url: implementationUrl(worktreeId(input.worktree), input.doc.name, source.repo, file.path) }
+    }) }))
+    texts.push(['implementation/index.json', JSON.stringify({ version: 1, process: input.doc.existingProcess, sources }, null, 2)])
+  }
   if (input.kind !== 'research') {
     texts.push(['initiative/decisions.md',renderDecisionContext(await readReview(ini),input.doc.name)])
     const catalogSource=(await kind(path.join(input.worktree,'features/STEPS.md')))==='file'?await readFile(path.join(input.worktree,'features/STEPS.md'),'utf8'):null

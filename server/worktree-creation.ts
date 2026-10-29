@@ -142,7 +142,7 @@ export async function prepareCreationGit(state: CreationState): Promise<Awaited<
   for (const hash of hashes) await writeCreationBlob(target, hash, await readCreationBlob(request.anchor.root, hash))
   const briefBytes = await readCreationBlob(target, request.brief)
   const initial = buildInitialInitiativeStream({ creationId: request.id, streamId: request.streamId, commandId: request.commandId,
-    at: request.at, name: request.name, title: request.title, repo: request.repo, brief: request.brief, inputs: request.inputs })
+    at: request.at, name: request.name, title: request.title, repo: request.repo, brief: request.brief, inputs: request.inputs, existingProcess: request.existingProcess })
   const outputs: GitEffectInput['outputs'][number][] = [
     { path: `${relative}/initiative.events.jsonl`, content: Buffer.from(initial.bytes) },
     { path: `${relative}/initiative.yaml`, content: Buffer.from(stringify(initial.projection, { lineWidth: 0 })) },

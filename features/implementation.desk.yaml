@@ -1,6 +1,36 @@
 version: 1
 feature: Implement reviewed changes and expose their verification results
 scenarios:
+  - id: expose-apply-outcome
+    scenario: Сохранять объяснение агента в отчете Apply после завершения
+    cases:
+      - name: реализация завершилась
+        outcome: done
+        answer: The reviewed change is implemented.
+        report: "Reading the change.\n\nThe reviewed change is implemented."
+      - name: реализация не смогла начаться
+        outcome: failed
+        answer: Implementation is blocked because the required repositories are read-only.
+        report: "Reading the change.\n\nImplementation is blocked because the required repositories are read-only."
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ApplyReplyPrepared: { status: $outcome, answer: $answer, deliver: false }
+    when:
+      StartApply: {}
+    then:
+      bind: { run: response.body.run.id }
+      events:
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ExecutionSettled: { outcome: $outcome }
+      response: { status: 202 }
+      reads:
+        - path: $change/runs/$run/log
+          response: { status: 200, body: { run: { outcome: $outcome }, text: $report } }
   - id: require-recorded-approval
     scenario: Require recorded owner approval before implementation starts
     given:

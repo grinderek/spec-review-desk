@@ -13,13 +13,20 @@ export interface PatchCardProps {
   index: number
   message: Message
   disabled: boolean
+  agentBusy: boolean
   archived: boolean
 }
 
-export function PatchCard({ id, threadId, index, message, disabled, archived }: PatchCardProps) {
+export function PatchCard({ id, threadId, index, message, disabled, agentBusy, archived }: PatchCardProps) {
   const act = useAction()
   const patch = message.patch!
   const [summary, setSummary] = useState(defaultSummary(message.text))
+  const [refreshing, setRefreshing] = useState(false)
+  const refresh = async () => {
+    setRefreshing(true)
+    try { await act(() => api.refreshPatch(id, threadId, index), 'Запрошен новый патч по текущим файлам') }
+    finally { setRefreshing(false) }
+  }
   const inputId = `summary-${threadId}-${index}`
   return (
     <div className="patch">
@@ -46,11 +53,12 @@ export function PatchCard({ id, threadId, index, message, disabled, archived }: 
           <button className="btn" disabled={disabled} onClick={() => void act(() => api.applyPatch(id, threadId, index, summary || 'Resume recorded application'), 'Patch commit verified')}>Retry recorded application</button>
         </div>
       ) : null}
-      {patch.state === 'stale' && !archived ? (
+      {patch.state === 'stale' && !patch.effect_id && !archived ? (
         <div className="pa">
+          <button className="btn pri" disabled={disabled || agentBusy || refreshing} onClick={() => void refresh()}>{refreshing ? 'Запрашивается патч...' : agentBusy ? 'Ожидание ответа агента...' : 'Обновить патч'}</button>
           <button className="btn" disabled={disabled} onClick={() => void act(() => api.recheckPatch(id, threadId, index), 'Patch re-checked')}>Re-check</button>
           <button className="btn" disabled={disabled} onClick={() => void act(() => api.rejectPatch(id, threadId, index), 'Patch rejected')}>Reject</button>
-          <span className="hash">Checks the patch again against the current files.</span>
+          <span className="hash">Обновить патч - запросить новую версию у агента. Re-check - только проверить прежний diff.</span>
         </div>
       ) : null}
       {patch.state === 'applied' ? <div className="pa"><span className="state ok">Applied{patch.commit ? ` · ${patch.commit}` : ''}</span></div> : null}

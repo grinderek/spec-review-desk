@@ -1,6 +1,61 @@
 version: 1
 feature: Discuss contracts and record the agreed correction
 scenarios:
+  - id: resolve-only-selected-discussion
+    scenario: Resolve only the selected discussion and keep other discussions open
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { text: Explain this scenario., answer: The scenario is explained. }
+      - ReviewThreadOpened: { id: t_other, anchor: change, ref: '', status: open }
+    when:
+      ResolveDiscussion: { thread: $thread }
+    then:
+      events:
+        - DiscussionResolved: { threadId: $thread }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - { id: $thread, status: resolved }
+                  - { id: t_other, status: open }
+  - id: refresh-stale-patch
+    scenario: Request a new patch against current files without applying it
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - DiscussionAnswered: { patch: stale }
+      - AgentReplyPrepared: { answer: The updated correction preserves the current files., patch: true }
+    when:
+      RefreshReviewPatch: { thread: $thread, index: 1 }
+    then:
+      events:
+        - DiscussionOwnerReplied: { threadId: $thread, message: { role: owner } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, patch: { state: proposed, commit: null } }, status: answered }
+        - ExecutionSettled: { outcome: done }
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              features: [{ scenarios: [{ effective: { status: pending, changedSinceApproval: true } }] }]
+              review:
+                threads:
+                  - id: $thread
+                    status: answered
+                    messages:
+                      - { role: owner }
+                      - { role: agent, patch: { state: stale, commit: null } }
+                      - { role: owner }
+                      - { role: agent, text: The updated correction preserves the current files., patch: { state: proposed, commit: null } }
   - id: resolve-discussion
     scenario: Resolve a discussion after the agent answers
     given:

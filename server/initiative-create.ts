@@ -16,11 +16,12 @@ import { withReviewLock } from './review-lock.ts'
 import { creationHash, observeInitiativeCreation, prepareCreationGit, proveCreationWorktree, provisionCreationWorktree, withCreationLease, worktreeIdentity, writeCreationBlob } from './worktree-creation.ts'
 import { creationRequestHash, readWorktreeStream, recordWorktreeEvents, type CreationRequest, type CreationState } from './worktree-events.ts'
 import { initiativeRelative, worktreeRel } from './creation-layout.ts'
+import type { ExistingProcess } from './existing-process.ts'
 export { worktreeRel } from './creation-layout.ts'
 export { observeInitiativeCreation } from './worktree-creation.ts'
 
 export type Where = { kind: 'new'; base: string } | { kind: 'existing'; worktreeId: string }
-export interface CreateInput { name: string; repo: string; where: Where; title: string; brief: string; files: IncomingFile[]; fromRepo: string[]; requestId?: string }
+export interface CreateInput { name: string; repo: string; where: Where; title: string; brief: string; files: IncomingFile[]; fromRepo: string[]; requestId?: string; existingProcess?: ExistingProcess }
 export function createCommands(input: Pick<CreateInput, 'name' | 'where'>, repoPath: string): string[][] {
   if (input.where.kind !== 'new') return []
   return [['git', '-C', repoPath, 'worktree', 'add', worktreeRel(input.name), '-b', `plan/${input.name}`, input.where.base]]
@@ -58,7 +59,7 @@ export async function requestInitiativeCreation(config: Config, input: CreateInp
   const planned = planInputs({ inputs: [] }, [...input.files, ...copies])
   const briefBytes = Buffer.from(briefText(input.brief)), brief = creationHash(briefBytes)
   const inputs = planned.map(({ name, file }) => ({ file: name, bytes: file.bytes.byteLength, blob: creationHash(file.bytes), source: file.source, added_at: at, draft: false }))
-  const requestHash = creationRequestHash({ name: input.name, repo: input.repo, title: input.title, where: input.where, brief,
+  const requestHash = creationRequestHash({ name: input.name, repo: input.repo, title: input.title, where: input.where, brief, ...(input.existingProcess ? { existingProcess: input.existingProcess } : {}),
     inputs: inputs.map(({ added_at, ...entry }) => entry) })
   if (planned.length + new Set([brief, ...inputs.map(input => input.blob)]).size + 3 > 1000) throw new HttpError(413, 'inputs_too_many', 'The initiative has too many separate input files')
   return withCreationLease(anchor.root, async () => {
@@ -89,7 +90,7 @@ export async function requestInitiativeCreation(config: Config, input: CreateInp
     for (let index = 0; index < planned.length; index++) await writeCreationBlob(anchor.root, inputs[index]!.blob, planned[index]!.file.bytes)
     const request: CreationRequest = { id: input.requestId ?? randomUUID(), requestHash, name: input.name, title: input.title, repo: input.repo, at,
       processBoundary: await captureExecutionBoundary(),
-      anchor, targetPath, base, branch, where: input.where, existingIdentity, streamId: randomUUID(), commandId: randomUUID(), brief, inputs, trailer: config.commitTrailer }
+      anchor, targetPath, base, branch, where: input.where, existingIdentity, streamId: randomUUID(), commandId: randomUUID(), brief, inputs, trailer: config.commitTrailer, ...(input.existingProcess ? { existingProcess: input.existingProcess } : {}) }
     await recordWorktreeEvents(anchor.root, () => [{ type: 'InitiativeCreationRequested', request }])
     return creationState(anchor.root, request.id)
   })

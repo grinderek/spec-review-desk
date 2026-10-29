@@ -1,0 +1,37 @@
+version: 1
+feature: Подключение продукта из нескольких репозиториев
+scenarios:
+  - id: show-product-without-contracts
+    scenario: Состав продукта виден до подключения исполняемых правил
+    given:
+      - ProductConfigured: { workerAvailable: true }
+    when:
+      ReadProducts: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          products:
+            - name: monitoring
+              components:
+                - { name: api, kind: repository, availability: available, rules: { count: 0 }, runner: null }
+                - { name: worker, kind: repository, availability: available, rules: { count: 0 }, runner: null }
+                - { name: tools, kind: directory, availability: available, source: null, rules: null, runner: null }
+  - id: retain-unavailable-component
+    scenario: Недоступный репозиторий остается в составе продукта
+    given:
+      - ProductConfigured: { workerAvailable: false }
+    when:
+      ReadProducts: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          products:
+            - name: monitoring
+              components:
+                - { name: api, availability: available }
+                - { name: worker, kind: repository, availability: unavailable, source: null, rules: null, runner: null }
+                - { name: tools, availability: available }

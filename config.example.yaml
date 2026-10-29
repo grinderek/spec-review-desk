@@ -4,6 +4,15 @@ hubRoot: .
 repos:
   - { name: project, path: . }
   # Multi-repo example: [{ name: backend, path: backend }, { name: frontend, path: frontend }]
+# Optional product catalog. Repo references use names declared above; supporting paths
+# resolve from hubRoot. A catalog entry does not configure a combined verification run.
+# products:
+#   - name: product
+#     title: My product
+#     description: One product, several independently versioned components.
+#     components:
+#       - { name: api, title: API, role: Public API, repo: project }
+#       - { name: tools, title: Tools, role: Load generation, path: tools }
 model: gpt-6.1-sol
 reasoningEffort: high
 agents:
@@ -33,7 +42,13 @@ sandbox:
 #     worktree: .
 #     command: [bin/cucumber, --format, message, --out, '{resultFile}']
 #     watch: [features, src]
-#     applyAllowedTools: [Read, Grep, Glob, Edit, Write, "Bash(git status:*)", "Bash(git diff:*)"]
+#     # Optional independently versioned inputs exercised by the same command:
+#     sources: [{ name: frontend, path: ../frontend }]
+#     # Apply automatically gets the product components and this verification command.
+#     # Optional extra exact commands, called by name rather than arbitrary shell:
+#     applyChecks:
+#       - { name: prepare, command: [npm, run, environment:up], timeoutMinutes: 45 }
+#     # applyAllowedTools is optional. Defaults allow scoped edits and local Git commits.
 # For a container runner, set execution: compose and add:
 #     compose:
 #       project: project-specs

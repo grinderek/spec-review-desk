@@ -1,0 +1,19 @@
+version: 1
+feature: Проверка продукта с несколькими репозиториями
+scenarios:
+  - id: component-change-invalidates-verification
+    scenario: Изменение исходников компонента делает общую проверку устаревшей
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationComponentAttached: {}
+      - VerificationCompleted: {}
+      - VerificationComponentChanged: {}
+    when:
+      InspectVerification: {}
+    then:
+      stream: verification
+      events: []
+      response:
+        status: 200
+        body: { state: { outcome: done, running: false, stale: true } }

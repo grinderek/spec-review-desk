@@ -32,6 +32,8 @@ import type { Finishers } from '../run-service.ts'
 import { prepareVerificationAttempt, prepareVerificationReceipt } from './verification-fixture.ts'
 import { randomUUID } from 'node:crypto'
 import { captureVerificationProfile } from '../verification-rerun.ts'
+import { loadConfig } from '../config.ts'
+import { stringify } from 'yaml'
 
 // One public-API adapter per domain. The CLI transport is scripted, not the application services.
 export class DeskWorld {
@@ -98,15 +100,48 @@ export class DeskWorld {
     this.runs = new InitiativeRunService({ config: this.review.ctx.config, bus: this.review.ctx.bus, sandbox: this.sandbox, finishers })
     this.initiativeDeps.runs = this.runs
   }
-  private async patch() {
+  private async patch(stale = false) {
     const file = path.join(this.review.dir, 'features/subject.desk.yaml')
     const original = await readFile(file, 'utf8')
-    await writeFile(file, '# Owner decision 2026-10-02: respond with the revised status.\n' + original.replace('status: 200', 'status: 201'))
+    await writeFile(file, '# Owner decision 2026-10-02: respond with the revised status.\n' + original.replace(/status: (?:200|202)/, 'status: 201'))
     const diff = await git(this.review.repo, ['diff', '--', file])
-    await writeFile(file, original)
+    await writeFile(file, stale ? original.replace('status: 200', 'status: 202') : original)
+    if (stale) {
+      await git(this.review.repo, ['add', '--', file])
+      await git(this.review.repo, ['commit', '-q', '-m', 'Independent contract revision'])
+    }
     return diff
   }
   async given(name: string, data: Record<string, any>) {
+    if (name === 'ProductConfigured') {
+      const worker = path.join(this.repo, 'components/worker')
+      if (data.workerAvailable) {
+        await writeFiles(worker, { 'README.md': 'Worker component\n' })
+        await git(worker, ['init', '-q', '-b', 'main'])
+        await git(worker, ['add', 'README.md'])
+        await git(worker, ['-c', 'user.name=Desk specs', '-c', 'user.email=spec@example.com', 'commit', '-q', '-m', 'fixture'])
+      }
+      await writeFiles(this.repo, { 'components/tools/README.md': 'Support tools\n', 'product-config.yaml': stringify({
+        repos: [{ name: 'api', path: '.' }, { name: 'worker', path: 'components/worker' }],
+        products: [{ name: 'monitoring', title: 'Monitoring', components: [
+          { name: 'api', title: 'API', role: 'Public API', repo: 'api' },
+          { name: 'worker', title: 'Worker', role: 'Message processing', repo: 'worker' },
+          { name: 'tools', title: 'Tools', role: 'Load generation', path: 'components/tools' },
+        ] }],
+      }) })
+      const config = await loadConfig(path.join(this.repo, 'product-config.yaml'))
+      this.review.ctx.config.products = config.products
+      this.review.ctx.config.repos = config.repos
+      this.review.ctx.config.runners = []
+      return
+    }
+    if (name === 'ComponentVerificationConfigured') {
+      const worker = this.review.ctx.config.repos.find(repo => repo.name === 'worker')!
+      this.runner = new RunnerService({ profiles: [{ name: 'component', execution: 'local', worktreePath: worker.path,
+        command: [process.execPath, 'verify.mjs'], watch: [] }], bus: this.review.ctx.bus })
+      this.vars.componentRunner = `/api/runner/${worktreeId(worker.path)}`
+      return
+    }
     if (name === 'InitiativeCreationPrepared') {
       const { state } = await prepareCreationFixture(this.review.ctx.config, data.phase ?? 'requested', data)
       this.vars.creation = state.request.id; this.vars.creationName = state.request.name
@@ -145,10 +180,18 @@ export class DeskWorld {
       if (response.status !== 202) throw new Error(`Cannot prepare running Apply: ${JSON.stringify(response.json)}`)
       this.vars.applyRun = response.json.run.id
       process.env.FAKE_CODEX_MODE = 'answer'
+      // The worker can be observed before the CLI has opened its conversation. Prepare an
+      // actually running conversation before stopping it, so a later resume has a session.
+      for (let i = 0; ; i++) {
+        const log = await call(this.review.app, 'GET', `${this.vars.change}/runs/${this.vars.applyRun}/log`)
+        if (log.status === 200 && log.json.text?.includes('Waiting for owner stop.')) break
+        if (i >= 200) throw new Error('Fixture Apply did not open its conversation')
+        await new Promise(resolve => setTimeout(resolve, 20))
+      }
       if (name === 'ApplyStopped') await this.setupCommand('StopApply', {})
     } else if (name === 'DiscussionAnswered') {
       this.review.agentUsageReported = data.usageReported !== false
-      this.review.agentReply = { answer: data.answer ?? 'Noted.', patch: data.patch ? await this.patch() : null, decisions: [], resolves: data.resolves ?? [], status: 'answered' }
+      this.review.agentReply = { answer: data.answer ?? 'Noted.', patch: data.patch ? await this.patch(data.patch === 'stale') : null, decisions: [], resolves: data.resolves ?? [], status: 'answered' }
       const r = await this.setupCommand('OpenDiscussion', { anchor: 'scenario', ref: this.vars.key, text: data.text ?? 'Explain the contract.' })
       this.vars.thread = r.body.id
     } else if (name === 'DiscussionClosed') {
@@ -259,9 +302,11 @@ export class DeskWorld {
       const source = await readFile(path.join(this.review.dir, 'features/subject.desk.yaml'), 'utf8')
       this.cliReply({ answer: 'Change ready.', patch: null, decisions: [], resolves: [], status: 'done', change: data.change ?? 'slice-contract' })
       const rel = `desk/changes/${data.change ?? 'slice-contract'}`
+      this.vars.proposedChange = `/api/changes/${worktreeId(this.repo)}/${data.change ?? 'slice-contract'}`
       await writeFile(path.join(this.review.repo, '.spec-review/author-writes.json'), JSON.stringify([{ match: 'Slice', files: {
         [`${rel}/change.yaml`]: 'version: 1\nkind: behavior-driven\n', [`${rel}/proposal.md`]: '## Why\n\nReview the contract.\n',
         [`${rel}/features/subject.desk.yaml`]: source,
+        ...(data.sources ? { [`${rel}/implementation-references.yaml`]: stringify({ version: 1, sources: data.sources }) } : {}),
       } }]))
       process.env.FAKE_CODEX_WRITES_FILE = path.join(this.review.repo, '.spec-review/author-writes.json')
     } else if (name === 'ApplyReplyPrepared') {
@@ -294,6 +339,16 @@ export class DeskWorld {
       } }], value: undefined }))
     }
     else if (name === 'VerificationProjectionLost') await rm(path.join(this.review.repo, '.spec-review/verification.json'), { force: true })
+    else if (name === 'VerificationComponentAttached') {
+      const component = path.join(this.repo, '.spec-review/source-component')
+      await writeFiles(component, { 'README.md': 'Component source\n' })
+      await git(component, ['init', '-q', '-b', 'main'])
+      await git(component, ['add', 'README.md'])
+      await git(component, ['-c', 'user.name=Desk specs', '-c', 'user.email=spec@example.com', 'commit', '-q', '-m', 'fixture'])
+      this.runner.profileFor(this.repo)!.sources = [{ name: 'component', path: component }]
+      this.vars.componentSource = component
+    }
+    else if (name === 'VerificationComponentChanged') await writeFiles(String(this.vars.componentSource), { 'README.md': 'Changed component source\n' })
     else if (name === 'VerificationSourceChanged') await writeFiles(this.review.repo, { 'README.md': 'Changed verification input\n' })
     else if (name === 'VerificationPrepared') {
       const status = data.status ?? 'passed'
@@ -304,6 +359,8 @@ export class DeskWorld {
     } else await this.review.given(name, data)
   }
   async command(name: string, data: Record<string, any>) {
+    if (name === 'ReadProducts') return this.read('/api/products')
+    if (name === 'ReadApplyWorkspace') return this.read(`${this.vars.change}/apply/workspace`)
     if (name === 'RestartVerification') {
       this.runner = new RunnerService({ profiles: [{ name: 'fixture', execution: 'local', worktreePath: this.review.repo,
         command: [process.execPath, 'verify.mjs'], watch: [], applyAllowedTools: [] }], bus: this.review.ctx.bus })
@@ -322,12 +379,17 @@ export class DeskWorld {
     if (name === 'OpenInitiative') {
       const form = new FormData()
       for (const [k, v] of Object.entries({ name: data.name ?? 'hs', title: data.title ?? 'Health score', brief: data.brief ?? '# Brief\n', repo: 'api', where: 'existing', worktreeId: worktreeId(this.review.repo) })) form.set(k, String(v))
+      if (data.processProduct) {
+        for (const field of ['processProduct', 'processName', 'processBoundary']) form.set(field, data[field])
+        for (const repo of data.processRepos ?? []) form.append('processRepos', repo)
+      }
       const r = await callForm(this.review.app, '/api/initiatives', form)
       return { status: r.status, body: r.json }
     }
     const routes: Record<string, [string, string, unknown?]> = {
       OpenDiscussion: ['POST', `${base}/threads`, data], ReplyToDiscussion: ['POST', `${base}/threads/${data.thread}/messages`, { text: data.text }],
       ResolveDiscussion: ['POST', `${base}/threads/${data.thread}/resolve`], ApplyReviewPatch: ['POST', `${base}/threads/${data.thread}/patches/1/apply`, { summary: data.summary }],
+      RefreshReviewPatch: ['POST', `${base}/threads/${data.thread}/patches/${data.index}/refresh`],
       DecideOwnerQuestion: ['POST', `${base}/decisions/${data.id}/decide`, { option: data.option, note: data.note }],
       ReattachOwnerQuestion: ['POST', `${base}/decisions/${data.id}/reattach`, { to: data.to }],
       DismissOwnerQuestion: ['POST', `${base}/decisions/${data.id}/dismiss`, { reason: data.reason }],
@@ -339,6 +401,7 @@ export class DeskWorld {
       ReconcileInitiativeRuns: ['POST', `${ini}/runs/reconcile`], StopResearch: ['POST', `${ini}/runs/${data.run}/stop`],
       StartApply: ['POST', `${base}/apply`], ReapplyContract: ['POST', `${base}/reapply`], ResumeApply: ['POST', `${base}/apply/resume`, { runId: data.run }], RunVerification: ['POST', `${this.vars.runner}/run`], StopVerification: ['POST', `${this.vars.runner}/stop`],
       StopApply: ['POST', `${base}/apply/stop`], RecoverExecutions: ['POST', `${base}/executions/recover`],
+      RunComponentVerification: ['POST', `${this.vars.componentRunner}/run`],
       ResumeQuestion: ['POST', `${base}/executions/${data.run}/resume`],
       RecoverInitiativeCreations: ['POST', '/api/initiative-creations/api/recover'],
       RetryInitiativeCreation: ['POST', `/api/initiative-creations/api/${data.id}/retry`],

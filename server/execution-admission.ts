@@ -1,4 +1,4 @@
-import { lstat, realpath } from 'node:fs/promises'
+import { lstat, readFile, readdir, realpath } from 'node:fs/promises'
 import path from 'node:path'
 import { listChanges, parseWorktreeList, type WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
@@ -12,6 +12,8 @@ import { readWorktreeStream } from './worktree-events.ts'
 import { git } from './git.ts'
 import { INITIATIVE_ROOT } from './change-package.ts'
 import { nativeScopeDirectories } from './native-path.ts'
+import { requireAttemptInactive } from './execution-receipts.ts'
+import { z } from 'zod'
 
 export interface WorktreeAdmission {
   operation: 'reviewer' | 'apply' | 'verification' | 'initiative' | 'git'
@@ -26,6 +28,28 @@ export const withWorktreeAdmission = withGitEffectLock
 
 export async function assertWorktreeAdmission(cwd: string, request: WorktreeAdmission): Promise<void> {
   const canonical = await realpath(cwd)
+  // Links only locate the authoritative review journal. They never declare a run active
+  // or completed themselves, and a lost journal cannot silently release its components.
+  const links = path.join(canonical, '.spec-review/apply-links')
+  const linked = await readdir(links).catch(error => { if (error.code === 'ENOENT') return [] as string[]; throw error })
+  for (const name of linked) {
+    if (!name.endsWith('.json')) continue
+    const file = path.join(links, name)
+    const info = await lstat(file)
+    if (!info.isFile() || info.size > 16_000) throw new HttpError(409, 'apply_scope_uncertain', 'An Apply workspace link cannot be read safely')
+    const link = z.object({ anchor: z.string(), reviewDir: z.string(), runId: z.uuid() }).parse(JSON.parse(await readFile(file, 'utf8')))
+    if (name !== `${link.runId}.json`) throw new HttpError(409, 'apply_scope_uncertain', 'Apply workspace link identity mismatch')
+    if (link.runId === request.runId) continue
+    const run = (await readReview(link.reviewDir)).executions.find(run => run.request.id === link.runId)
+    const attempt = run?.attempts.at(-1)
+    if (!run || run.request.role !== 'apply' || attempt?.spec.kind !== 'agent'
+      || !attempt.spec.workspaceRoots?.some(root => root.path === canonical)) {
+      throw new HttpError(409, 'apply_scope_uncertain', 'The review journal cannot confirm this component reservation')
+    }
+    if (executionBusy(run)) throw new HttpError(409, 'apply_running', 'An Apply execution uses this component or requires recovery')
+    try { await requireAttemptInactive(link.anchor, attempt.id, attempt.processBoundary) }
+    catch { throw new HttpError(409, 'apply_scope_uncertain', 'A previous Apply process still owns this component') }
+  }
   for (const wt of parseWorktreeList(await git(cwd, ['worktree', 'list', '--porcelain']))) {
     for (const creation of (await readWorktreeStream(wt.path)).creations) {
       if (creation.request.id !== request.creationId && creation.request.targetPath === canonical && creation.status !== 'completed') {

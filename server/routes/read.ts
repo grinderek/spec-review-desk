@@ -1,14 +1,16 @@
 import { routerStatus } from '../router-runtime.ts'
 import { readUsage } from '../agent-usage.ts'
+import { readProducts } from '../products.ts'
 import type { Hono } from 'hono'
 import type { AppContext } from '../app.ts'
 import { findScenario, loadChangeView, summarize } from '../change-view.ts'
 import { parseNativeContract } from '../change-package.ts'
+import { loadCorpus } from '../corpus.ts'
 import { discover } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { showFile } from '../git.ts'
 import { initiativeTags } from '../initiatives.ts'
-import { resolveChange } from './resolve.ts'
+import { resolveChange, resolveWorktree } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
 
 export interface Capabilities { codex: boolean; docker: boolean }
@@ -16,6 +18,12 @@ export interface Capabilities { codex: boolean; docker: boolean }
 export function registerReadRoutes(app: Hono, ctx: AppContext, capabilities: Capabilities): void {
   app.get('/api/usage', async c => c.json({ ...await readUsage(ctx.config), router: await routerStatus(ctx.config) }))
   app.get('/api/status', (c) => c.json({ capabilities }))
+  app.get('/api/products', async c => c.json(await readProducts(ctx.config)))
+
+  app.get('/api/rules/:wt', async c => {
+    const wt = await resolveWorktree(ctx, c.req.param('wt'))
+    return c.json(await loadCorpus(wt.path))
+  })
 
   app.get('/api/changes', async (c) => {
     const trees = await discover(ctx.config.repos, ctx.registry)

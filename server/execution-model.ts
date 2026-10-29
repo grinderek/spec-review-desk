@@ -14,6 +14,8 @@ export const AgentExecutionSpecSchema = z.object({
   allowedTools: z.array(z.string()), disallowedTools: z.array(z.string()), permissionMode: z.enum(['default', 'acceptEdits']),
   appendSystemPrompt: z.string().nullable(), prompt: z.string().max(2_000_000), jsonSchema: z.string().nullable().optional(),
   schemaFile: z.string().optional(), toolsScript: z.string().optional(), writeRoot: z.string().optional(),
+  workspaceRoots: z.array(z.object({ name: z.string().min(1), path: z.string().min(1), git: z.boolean() })).optional(),
+  checks: z.array(z.object({ name: z.string().min(1), cwd: z.string().min(1), argv: z.array(z.string()).min(1), timeoutMs: z.number().positive().max(3_600_000) })).optional(),
   search: z.boolean().optional(), readDomains: z.array(z.string()).optional(),
 })
 export const CommandExecutionSpecSchema = z.object({

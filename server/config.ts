@@ -15,6 +15,7 @@ export interface AgentProfile { model?: string; reasoningEffort?: ReasoningEffor
 
 const RunnerSchema = z.object({
   worktree: z.string().min(1),
+  sources: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) })).default([]),
   execution: z.enum(['compose', 'local']).default('compose'),
   compose: z.object({
     project: z.string().min(1),
@@ -23,13 +24,24 @@ const RunnerSchema = z.object({
   }).optional(),
   command: z.array(z.string().min(1)).min(1),
   watch: z.array(z.string().min(1)).min(1),
-  applyAllowedTools: z.array(z.string().min(1)).min(1),
+  applyAllowedTools: z.array(z.string().min(1)).min(1).optional(),
+  applyChecks: z.array(z.object({
+    name: z.string().min(1), command: z.array(z.string().min(1)).min(1),
+    timeoutMinutes: z.number().positive().max(60).default(45),
+  })).default([]),
 }).refine((r) => r.execution === 'local' || r.compose !== undefined, 'compose settings are required for a compose runner')
 
 const ConfigSchema = z.object({
   port: z.number().int().min(1).max(65535).default(4600),
   hubRoot: z.string().default('.'),
   repos: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) })).min(1),
+  products: z.array(z.object({
+    name: z.string().regex(/^[a-z][a-z0-9-]*$/), title: z.string().min(1), description: z.string().default(''),
+    components: z.array(z.object({
+      name: z.string().min(1), title: z.string().min(1), role: z.string().min(1),
+      repo: z.string().min(1).optional(), path: z.string().min(1).optional(),
+    }).refine(c => Boolean(c.repo) !== Boolean(c.path), 'specify either repo or path')).min(1),
+  })).default([]),
   model: z.string().min(1).default('gpt-6.1-sol'),
   reasoningEffort: ReasoningEffortSchema.default('high'),
   agents: z.object({
@@ -73,17 +85,20 @@ export interface SandboxConfig { auth?: 'chatgpt' | 'api'; authVolume?: string; 
 export interface RunnerProfile {
   name: string
   worktreePath: string
+  sources?: { name: string; path: string }[]
   execution?: 'compose' | 'local'
   compose?: { project: string; files: string[]; service: string }
   command: string[]
   watch: string[]
-  applyAllowedTools: string[]
+  applyAllowedTools?: string[]
+  applyChecks?: { name: string; command: string[]; timeoutMs: number }[]
 }
 
 export interface Config {
   port: number
   hubRoot: string
   repos: { name: string; path: string }[]
+  products?: ProductConfig[]
   model: string
   reasoningEffort?: ReasoningEffort
   agents?: Partial<Record<AgentRole, AgentProfile>>
@@ -99,6 +114,11 @@ export interface Config {
 }
 
 export class ConfigError extends Error {}
+
+export interface ProductConfig {
+  name: string; title: string; description: string
+  components: { name: string; title: string; role: string; repo?: string; path: string }[]
+}
 
 export function configPathFromArgs(args: readonly string[]): string {
   const index = args.indexOf('--config')
@@ -127,10 +147,22 @@ export async function loadConfig(file: string): Promise<Config> {
   }
   const c = result.data
   const hubRoot = path.resolve(configDir, c.hubRoot)
+  const repos = c.repos.map(r => ({ name: r.name, path: path.resolve(hubRoot, r.path) }))
+  if (new Set(repos.map(r => r.name)).size !== repos.length) throw new ConfigError('Repository names must be unique')
+  if (new Set(c.products.map(p => p.name)).size !== c.products.length) throw new ConfigError('Product names must be unique')
+  const products = c.products.map(product => {
+    if (new Set(product.components.map(c => c.name)).size !== product.components.length) throw new ConfigError(`Duplicate component in ${product.name}`)
+    return { ...product, components: product.components.map(component => {
+      const repo = repos.find(r => r.name === component.repo)
+      if (component.repo && !repo) throw new ConfigError(`Unknown repository ${component.repo} in ${product.name}`)
+      return { ...component, path: repo?.path ?? path.resolve(hubRoot, component.path!) }
+    }) }
+  })
   return {
     port: c.port,
     hubRoot,
-    repos: c.repos.map((r) => ({ name: r.name, path: path.resolve(hubRoot, r.path) })),
+    repos,
+    products,
     model: c.model,
     reasoningEffort: c.reasoningEffort,
     agents: c.agents,
@@ -143,11 +175,13 @@ export async function loadConfig(file: string): Promise<Config> {
     runners: Object.entries(c.runners).map(([name, r]) => ({
       name,
       worktreePath: path.resolve(hubRoot, r.worktree),
+      sources: r.sources.map(source => ({ ...source, path: path.resolve(hubRoot, source.path) })),
       execution: r.execution,
       compose: r.compose ? { ...r.compose, files: r.compose.files.map((f) => path.resolve(configDir, f)) } : undefined,
       command: r.command,
       watch: r.watch,
       applyAllowedTools: r.applyAllowedTools,
+      applyChecks: r.applyChecks.map(check => ({ name: check.name, command: check.command, timeoutMs: check.timeoutMinutes * 60_000 })),
     })),
     sandbox: {
       auth: c.sandbox.auth,

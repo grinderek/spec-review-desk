@@ -2,6 +2,9 @@ import { randomUUID } from 'node:crypto'
 import { readFile } from 'node:fs/promises'
 import { selectAgent } from './agent-routing.ts'
 import { DEFAULT_APPLY_DENY, DEFAULT_APPLY_TOOLS, applyPrompt } from './apply.ts'
+import { logText } from './apply-outcome.ts'
+import { applyWorkspace } from './apply-workspace.ts'
+import { admitApplyScope, linkApplyScope, withApplyScope } from './apply-scope.ts'
 import { approvalCommitProven } from './approval-proof.ts'
 import { allScenarios, loadChangeView, type ChangeView } from './change-view.ts'
 import type { Config } from './config.ts'
@@ -17,7 +20,7 @@ import { ensureExcluded } from './git.ts'
 import { buildResumePrompt } from './prompt.ts'
 import { AGENT_REPLY_SCHEMA_ARG, parseReply, retryPrompt, validateReply, type AgentReply } from './protocol.ts'
 import { replyContext } from './questions.ts'
-import { acceptedReceipt, assertApplyAvailable, executionHead, executionRun, newAttempt, ReviewExecutionTransport, sourceHash, withExecutionLock } from './review-execution.ts'
+import { acceptedReceipt, assertApplyAvailable, executionHead, executionRun, newAttempt, ReviewExecutionTransport, sourceHash } from './review-execution.ts'
 import { findThread, newId, readReview, recordReviewEvents, type ApplyRun, type Message, type ReviewDomainEvent } from './review-store.ts'
 
 export interface ApplyDeps { config: Config; bus: EventBus; pollMs?: number; now?: () => Date }
@@ -36,15 +39,23 @@ export class ApplyService {
     const routing = previous?.routing ?? await selectAgent(this.deps.config, 'apply', prompt)
     if (!routing) throw new Error('Apply requires agent routing')
     const session = previous?.session ?? (previous?.spec.kind === 'agent' ? previous.spec.sessionId : randomUUID())
+    const workspace = await applyWorkspace(this.deps.config, wt)
+    const allowedTools = workspace.allowedTools ?? DEFAULT_APPLY_TOOLS
+    if (!allowedTools.some(tool => tool === 'Write' || tool === 'Edit')) throw new HttpError(409, 'apply_read_only', 'Apply needs Write or Edit capability; remove the read-only applyAllowedTools override')
     return newAttempt({ cause, processBoundary: await captureExecutionBoundary(), head: await executionHead(wt.path), sourceHash: sources(view), decisions: view.review.decisions, routing,
       spec: { kind: 'agent', bin: this.deps.config.codexBin, cwd: wt.path, sessionId: session, resume: cause !== 'initial', model: routing.model,
-        reasoningEffort: routing.reasoningEffort, allowedTools: this.deps.config.runners.find(profile => profile.worktreePath === wt.path)?.applyAllowedTools ?? DEFAULT_APPLY_TOOLS,
-        disallowedTools: DEFAULT_APPLY_DENY, permissionMode: 'acceptEdits', appendSystemPrompt: await readFile(new URL('./prompts/apply.md', import.meta.url), 'utf8'), jsonSchema: AGENT_REPLY_SCHEMA_ARG, prompt } })
+        reasoningEffort: routing.reasoningEffort, allowedTools, workspaceRoots: workspace.roots, checks: workspace.checks,
+        disallowedTools: DEFAULT_APPLY_DENY, permissionMode: 'acceptEdits', appendSystemPrompt: await readFile(new URL('./prompts/apply.md', import.meta.url), 'utf8'), jsonSchema: AGENT_REPLY_SCHEMA_ARG,
+        prompt: `${prompt}\n\n${workspace.context}` } })
   }
   async #dispatch(wt: WorktreeInfo, ref: ChangeRef, runId: string, attempt: ExecutionAttempt): Promise<void> {
     const fresh = await loadChangeView(wt, ref, { withCommits: false })
     if (await executionHead(wt.path) !== attempt.head || sources(fresh) !== attempt.sourceHash) {
       await this.#transport.uncertain(ref, runId, attempt.id, 'Approved source facts changed before agent dispatch'); return
+    }
+    if (attempt.spec.kind === 'agent' && attempt.spec.workspaceRoots) {
+      await admitApplyScope(attempt.spec.workspaceRoots, runId)
+      await linkApplyScope(wt, ref, attempt.spec.workspaceRoots, runId)
     }
     this.#active.add(wt.path)
     await this.#transport.dispatch(wt, ref, runId, attempt, this.deps.config.sandbox.timeoutMs)
@@ -52,7 +63,9 @@ export class ApplyService {
     this.deps.bus.publish('change', { worktreeId: wt.id, name: ref.name })
   }
   async start(wt: WorktreeInfo, ref: ChangeRef, opts: { onlyKeys?: readonly string[] } = {}): Promise<ApplyRun> {
-    return withExecutionLock(wt, ref, async () => {
+    const workspace = await applyWorkspace(this.deps.config, wt)
+    return withApplyScope(wt, ref, workspace.roots, async () => {
+      await admitApplyScope(workspace.roots)
       await assertApplyAvailable(wt)
       await ensureExcluded(wt.path)
       const view = await loadChangeView(wt, ref, { withCommits: false })
@@ -81,7 +94,9 @@ export class ApplyService {
       if (observed.kind === 'live') throw new HttpError(409, 'apply_running', 'The recorded Apply attempt is still running')
       if (observed.kind === 'receipt') { await this.#transport.acceptReceipt(wt, ref, runId, observed); return }
     }
-    await withExecutionLock(wt, ref, async () => {
+    const workspace = await applyWorkspace(this.deps.config, wt)
+    await withApplyScope(wt, ref, workspace.roots, async () => {
+      await admitApplyScope(workspace.roots, runId)
       await assertApplyAvailable(wt, runId)
       const view = await loadChangeView(wt, ref, { withCommits: false }), doc = view.review
       const run = executionRun(doc.executions, runId)
@@ -105,7 +120,8 @@ export class ApplyService {
     if (observed.receipt.kind !== 'agent') throw new Error('Apply received a command receipt')
     const receipt = observed.receipt
     let retry: ExecutionAttempt | undefined, outcome = 'running'
-    await withExecutionLock(wt, ref, async () => {
+    const current = executionRun((await readReview(ref.dir)).executions, runId).attempts.at(-1)?.spec
+    await withApplyScope(wt, ref, current?.kind === 'agent' ? current.workspaceRoots ?? [] : [], async () => {
       await recordReviewEvents(ref.dir, async doc => {
         const run = executionRun(doc.executions, runId), attempt = run.attempts.at(-1)!
         if (run.request.role !== 'apply') throw new HttpError(409, 'wrong_execution_role', 'This execution is not an Apply run')
@@ -163,7 +179,18 @@ export class ApplyService {
     const doc = await readReview(ref.dir), execution = executionRun(doc.executions, id)
     const run = doc.apply_runs.find(run => run.id === id)
     if (!run) throw new HttpError(404, 'unknown_run', 'This execution is not an Apply run')
-    const logs = await Promise.all(execution.attempts.map(attempt => executionLog(wt.path, attempt.id)))
-    return { run, text: logs.flat().flatMap(event => event.type === 'delta' ? [event.text] : []).join('') }
+    const logs = await Promise.all(execution.attempts.map(async attempt => {
+      const events = await executionLog(wt.path, attempt.id)
+      if (attempt.receiptHash) {
+        const observed = await observeAttempt(wt.path, attempt.id)
+        if (observed.kind !== 'receipt' || observed.hash !== attempt.receiptHash || observed.receipt.kind !== 'agent') {
+          throw new HttpError(409, 'apply_report_unavailable', 'The accepted Apply result artifact cannot be verified')
+        }
+        const result = observed.receipt.result
+        events.push({ ...result, type: 'result', text: result.text || result.error || '' })
+      }
+      return events
+    }))
+    return { run, text: logs.map(events => logText(events)).filter(Boolean).join('\n\n') }
   }
 }

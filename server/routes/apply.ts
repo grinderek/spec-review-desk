@@ -7,11 +7,18 @@ import { corpusReport } from '../corpus.ts'
 import { HttpError } from '../errors.ts'
 import { assertWritable, resolveChange } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
+import { applyWorkspace } from '../apply-workspace.ts'
 
 const Resume = z.object({ runId: z.string().min(1) })
 
 export function registerApplyRoutes(app: Hono, ctx: AppContext, deps: { apply: ApplyService }): void {
   const base = '/api/changes/:wt/:name'
+
+  app.get(`${base}/apply/workspace`, async (c) => {
+    const { wt } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))
+    const workspace = await applyWorkspace(ctx.config, wt)
+    return c.json({ roots: workspace.roots, checks: workspace.checks })
+  })
 
   app.post(`${base}/apply`, async (c) => {
     const { wt, ref } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))

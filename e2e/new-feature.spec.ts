@@ -20,7 +20,10 @@ async function openForm(page: Page, name: string): Promise<void> {
 }
 
 async function createAndRead(page: Page, name: string): Promise<{ brief: string; inputs: { file: string; source: { kind: string; path?: string } }[] }> {
+  const creating = page.waitForResponse(response => response.url().endsWith('/api/initiatives') && response.request().method() === 'POST')
   await page.getByRole('button', { name: 'Create' }).click()
+  const response = await creating
+  expect(response.status(), await response.text()).toBe(201)
   await expect(page.getByRole('heading', { name: new RegExp(name) })).toBeVisible({ timeout: 20_000 })
   const wt = /#\/i\/([^/]+)\//.exec(page.url())![1]
   return (await page.request.get(`/api/initiatives/${wt}/${name}`)).json()

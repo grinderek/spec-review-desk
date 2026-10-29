@@ -7,6 +7,7 @@ export const VerificationProfileSchema = z.object({
   name: z.string().min(1), worktreePath: z.string().min(1), execution: z.enum(['local', 'compose']),
   compose: z.object({ project: z.string().min(1), files: z.array(z.string().min(1)).min(1), service: z.string().min(1) }).optional(),
   command: z.array(z.string().min(1)).min(1),
+  sources: z.array(z.object({ name: z.string().min(1), path: z.string().min(1) })).optional(),
 }).strict().refine(profile => profile.execution === 'local' || Boolean(profile.compose), 'Compose settings are required')
 const Request = z.object({ id: z.uuid(), afterRunId: z.uuid(), at: z.iso.datetime(), profile: VerificationProfileSchema }).strict()
 export const VerificationRerunEventSchemas = [
@@ -18,7 +19,8 @@ export const VerificationRerunEventSchemas = [
 export type VerificationRerun = z.infer<typeof Request> & { reason: string | null }
 export function captureVerificationProfile(profile: RunnerProfile): z.infer<typeof VerificationProfileSchema> {
   return VerificationProfileSchema.parse({ name: profile.name, worktreePath: profile.worktreePath,
-    execution: profile.execution ?? 'compose', ...(profile.compose ? { compose: profile.compose } : {}), command: profile.command })
+    execution: profile.execution ?? 'compose', ...(profile.compose ? { compose: profile.compose } : {}), command: profile.command,
+    ...(profile.sources?.length ? { sources: profile.sources } : {}) })
 }
 export function restoreVerificationProfile(profile: VerificationRerun['profile']): RunnerProfile {
   return { ...structuredClone(profile), watch: [], applyAllowedTools: [] }

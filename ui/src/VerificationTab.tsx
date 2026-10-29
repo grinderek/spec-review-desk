@@ -1,4 +1,5 @@
 import { RunProfile } from './AgentUsage.tsx'
+import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import type { ChangeView } from '../../server/change-view.ts'
 import type { RunnerState } from '../../server/runner.ts'
@@ -17,9 +18,15 @@ function LiveLog({ runId }: { runId: string }) {
   return <pre className="doc">{text || 'Waiting for the agent…'}</pre>
 }
 
+function ApplyReport({ id, runId, revision }: { id: ChangeId; runId: string; revision: string }) {
+  const report = useQuery({ queryKey: ['apply-log', id.wt, id.name, runId, revision], queryFn: () => api.runLog(id, runId) })
+  if (report.isPending) return <p role="status">Загружается отчет Apply...</p>
+  if (report.error) return <div className="fail" role="alert">Не удалось загрузить отчет: {report.error.message} <button className="btn" onClick={() => void report.refetch()}>Повторить загрузку отчета</button></div>
+  return <pre className="doc">{report.data.text || 'Агент не оставил текстовый отчет.'}</pre>
+}
+
 export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; view: ChangeView; runner: RunnerState | null; setPanel: (t: PanelTarget) => void }) {
   const act = useAction()
-  const [logs, setLogs] = useState<Record<string, string>>({})
   const current = new Map(view.contracts.map(contract => [contract.key, contract]))
   const failing = Object.entries(runner?.result?.scenarios ?? {}).filter(([key, result]) => current.has(key) && result.status !== 'passed')
   return (
@@ -35,26 +42,13 @@ export function VerificationTab({ id, view, runner, setPanel }: { id: ChangeId; 
               <span className={`pill ${run.outcome === 'done' ? 'r-passed' : run.outcome === 'running' ? 'p-thread' : 'r-failed'}`}>{run.outcome}</span>
               <span className="hash">{run.started_at}{run.ended_at ? ` → ${run.ended_at}` : ''}</span>
               {thread ? <button className="btn pri" onClick={() => setPanel({ kind: 'thread', id: thread.id })}>Open thread</button> : null}
-              {run.outcome !== 'running' ? (
-                <button
-                  className="btn"
-                  onClick={() =>
-                    void act(async () => {
-                      const r = await api.runLog(id, run.id)
-                      setLogs((c) => ({ ...c, [run.id]: r.text }))
-                    })
-                  }
-                >
-                  Show log
-                </button>
-              ) : null}
             </div>
             <div className="sbody">
               <RunProfile routing={run.routing} />
               {run.outcome === 'uncertain' ? <p className="fail">The execution outcome is uncertain. Inspect its result before continuing.</p> : null}
               {['uncertain', 'stopped'].includes(run.outcome) ? <button className="btn" onClick={() => void act(() => api.resumeApply(id, run.id), 'Apply resumed explicitly')}>Resume Apply</button> : null}
               {run.outcome === 'running' ? <LiveLog runId={run.id} /> : null}
-              {logs[run.id] !== undefined ? <pre className="doc">{logs[run.id] || '(no text output)'}</pre> : null}
+              {run.outcome !== 'running' ? <ApplyReport id={id} runId={run.id} revision={`${run.ended_at}:${run.outcome}`} /> : null}
             </div>
           </div>
         )

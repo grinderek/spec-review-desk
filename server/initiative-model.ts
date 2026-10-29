@@ -16,7 +16,12 @@ export const INPUT_FILE = /^[A-Za-z0-9_][A-Za-z0-9._-]{0,99}$/
 const SESSION_ID = /^[A-Za-z0-9-]{1,64}$/
 export const runLogPath = (id: string): string => `.spec-review/runs/${id}.ndjson`
 
+export const ExistingProcessSchema = z.object({
+  product: z.string().min(1), process: z.string().trim().min(1).max(200),
+  boundary: z.string().trim().min(1).max(4000), snapshot: z.literal('implementation-snapshot.json'),
+}).strict()
 const InputSourceSchema = z.union([
+  z.object({ kind: z.literal('implementation'), product: z.string().min(1) }).strict(),
   z.object({ kind: z.literal('upload') }).strict(),
   z.object({ kind: z.literal('repo'), path: z.string(), commit: z.string() }).strict(),
   z.object({ kind: z.literal('research'), run: z.string().regex(RUN_ID), domains: z.array(z.string()).default([]) }).strict(),
@@ -72,6 +77,7 @@ export const InitiativeSchema = z.object({
   title: z.string().min(1),
   repo: z.string().min(1),
   created_at: z.string(),
+  existingProcess: ExistingProcessSchema.optional(),
   inputs: z.array(InputSchema).default([]),
   research: z.object({ domains: z.array(z.string()).default([]) }).default({ domains: [] }),
   plan: z

@@ -4,7 +4,6 @@ import type { DecisionRecord, Effective, Thread } from './review-store.ts'
 
 export interface ReadinessInput {
   scenarios: readonly Effective[]
-  phrases: readonly Effective[]
   threads: readonly Thread[]
   decisions: readonly Pick<DecisionRecord, 'blocking' | 'status'>[]
   packageProblems: readonly PackageProblem[]
@@ -26,8 +25,6 @@ export function computeReadiness(input: ReadinessInput): Readiness {
   if (input.scenarios.length === 0) reasons.push('no scenarios')
   const scenarios = input.scenarios.filter((e) => e.status !== 'approved').length
   if (scenarios) reasons.push(`${count(scenarios, 'scenario')} not approved`)
-  const phrases = input.phrases.filter((e) => e.status !== 'approved').length
-  if (phrases) reasons.push(`${count(phrases, 'phrase')} not approved`)
   const threads = input.threads.filter((t) => t.status !== 'resolved').length
   if (threads) reasons.push(`${count(threads, 'thread')} not resolved`)
   // Spec §9: only blocking decisions that are still open or decided (not yet recorded) block.

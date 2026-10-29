@@ -109,6 +109,33 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     return c.json({ state: vetted.state, error: vetted.error })
   })
 
+  app.post(`${base}/:id/patches/:msg/refresh`, async (c) => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    const id = c.req.param('id')
+    const index = Number(c.req.param('msg'))
+    await withExecutionLock(wt, ref, async () => {
+      await assertQuestionAvailable(wt, ref)
+      const doc = await readReview(ref.dir)
+      const thread = threadOf(doc, id)
+      if (thread.anchor === 'apply') throw new HttpError(409, 'patch_refresh_unavailable', 'Apply discussions use the recorded Apply workflow')
+      const patch = patchAt(doc, id, index)
+      if (patch.state !== 'stale' || patch.effect_id) throw new HttpError(409, 'patch_not_stale', 'Only an unrequested stale patch can be refreshed')
+      if (doc.executions.some(run => run.request.role === 'reviewer' && run.request.threadId === id && ['queued', 'running'].includes(run.outcome))) return
+      const text = [
+        `Обнови устаревший патч из сообщения №${index + 1} этого обсуждения по текущему содержимому файлов.`,
+        'Сохрани смысл первоначальной просьбы владельца и все последующие согласованные изменения. Прочитай текущие версии затронутых файлов.',
+        'Если файл уже существует, измени его вместо повторного создания. Если исправление уже внесено, объясни это и не предлагай повторный патч.',
+        'Верни новый проверяемый diff. Не применяй его, не делай коммит и не меняй историю согласования.',
+        `Причина устаревания: ${patch.error ?? 'Патч не применяется к текущим файлам.'}`,
+        '', 'Исходный патч:', '```diff', patch.diff.trimEnd(), '```',
+      ].join('\n')
+      await executeDiscussionCommand(ref.dir, { type: 'ReplyToDiscussion', threadId: id, message: ownerMessage(text) })
+    })
+    void deps.questions.ask(wt, ref, id)
+    changed(wt, ref)
+    return c.json({ ok: true }, 202)
+  })
+
   app.post(`${base}/:id/patches/:msg/apply`, async (c) => {
     const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
     const id = c.req.param('id')

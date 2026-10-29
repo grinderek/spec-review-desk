@@ -8,6 +8,7 @@ import { createBaseApp, type AppContext } from '../app.ts'
 import { contractKey } from '../contract-identity.ts'
 import { contractHash, type DeskScenario } from '../desk-dsl.ts'
 import { parseCatalog } from '../catalog.ts'
+import { parseNativeContract } from '../change-package.ts'
 import { git, headSha } from '../git.ts'
 import { QuestionService } from '../questions.ts'
 import { FAKE_CODEX } from './fake-codex-path.ts'
@@ -84,10 +85,16 @@ export class ReviewWorld {
   async given(name: string, data: Record<string, any>): Promise<void> {
     if (name === 'ScenarioDiscovered' || name === 'ScenarioRevised') {
       if (data.file) this.subjectRel = data.file
+      if (data.format === 'gherkin') this.subjectRel = 'features/subject.feature'
       if (data.status) this.subject.then.response.status = Number(data.status)
       await mkdir(path.dirname(this.sourceFile), { recursive: true })
-      await writeFile(this.sourceFile, stringify({ version: 1, feature: 'Subject', scenarios: [this.subject] }))
-      this.vars.key = contractKey(this.subjectRel, 'subject'); this.vars.hash = contractHash(this.subject)
+      const source = data.format === 'gherkin'
+        ? 'Feature: Subject\n  @id:subject\n  Scenario: Subject contract\n    Given the source is available\n    When the owner reviews "subject"\n    Then the response is available\n'
+        : stringify({ version: 1, feature: 'Subject', scenarios: [this.subject] })
+      await writeFile(this.sourceFile, source)
+      if (data.format === 'gherkin') await writeFiles(this.repo, { 'features/STEPS.md': '## Given\n\n| Phrase | Meaning |\n|---|---|\n| `the source is available` | The source is available. |\n\n## Then\n\n| Phrase | Meaning |\n|---|---|\n| `the response is available` | The response is available. |\n' })
+      this.vars.key = contractKey(this.subjectRel, 'subject')
+      this.vars.hash = data.format === 'gherkin' ? parseNativeContract(source, this.subjectRel).contracts[0]!.hash : contractHash(this.subject)
       if (name === 'ScenarioDiscovered') { sh(this.repo, 'git', ['add', '-A']); sh(this.repo, 'git', ['commit', '-q', '-m', 'source contract discovered']); this.vars.head = await headSha(this.repo) }
     } else if (name === 'ScenarioRetitled') {
       this.subject.scenario = String(data.title)

@@ -1,0 +1,25 @@
+version: 1
+feature: Approved cards can be recorded with valid technical templates
+scenarios:
+  - id: record-ready-change
+    scenario: Commit owner approval and its event history
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+      - PhraseProposed: {}
+    when:
+      RecordChangeApproval: {}
+    then:
+      bind: { newCommit: response.body.commit }
+      events:
+        - ChangeApprovalRecorded: { commit: $head }
+        - GitEffectRequested: { effect: { purpose: { kind: change-approval } } }
+        - GitEffectCompleted: { commit: $newCommit }
+      response: { status: 200, body: { commit: $newCommit } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review: { approved_commit: $head }
+              readiness: { ready: true, reasons: [] }

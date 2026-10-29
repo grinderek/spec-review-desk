@@ -30,7 +30,7 @@ import { RunnerService } from './runner.ts'
 import { DockerSandbox, type Sandbox } from './sandbox.ts'
 import { watchChanges } from './watch.ts'
 
-export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number; sandbox?: Sandbox }
+export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number; sandbox?: Sandbox; autoRun?: boolean }
 
 async function available(cmd: string, args: string[]): Promise<boolean> {
   try {
@@ -66,7 +66,7 @@ export async function startServer(opts: StartOptions) {
   const runner = new RunnerService({ profiles: config.runners, bus })
   await Promise.all(config.runners.map((p) => runner.loadLast(p.worktreePath)))
   await Promise.all(config.runners.filter((p) => capabilities.docker || p.execution === 'local').map((p) => runner.refreshUp(p.worktreePath).catch(() => false)))
-  const stopRunner = capabilities.docker || config.runners.some((p) => p.execution === 'local') ? runner.watch() : async () => undefined
+  const stopRunner = opts.autoRun !== false && (capabilities.docker || config.runners.some((p) => p.execution === 'local')) ? runner.watch() : async () => undefined
   registerRunnerRoutes(app, ctx, runner)
   registerCorpusRoutes(app, ctx)
   registerApplyRoutes(app, ctx, { apply })
@@ -100,8 +100,15 @@ export async function startServer(opts: StartOptions) {
   }
   const stopWatching = watchChanges(registry.all(), bus)
   const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: config.port })
+  await new Promise<void>((resolve, reject) => {
+    const listening = () => { server.off('error', failed); resolve() }
+    const failed = (error: Error) => { server.off('listening', listening); reject(error) }
+    server.once('listening', listening)
+    server.once('error', failed)
+  })
   const base = opts.dev ? config.devUiOrigin : `http://127.0.0.1:${config.port}`
   console.log(`Spec Review Desk: ${base}/?t=${token}`)
+  if (opts.autoRun === false) console.log('Automatic corpus runs are disabled for this session')
   if (!capabilities.codex) console.warn(`${config.codexBin} not found on PATH - threads and Apply are disabled`)
   if (!capabilities.docker) console.warn('docker not found - Compose runners and initiative agents are unavailable; local runners remain available')
   return {
@@ -118,7 +125,7 @@ export async function startServer(opts: StartOptions) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2)
-  Promise.resolve().then(() => startServer({ configPath: configPathFromArgs(args), dev: args.includes('--dev'), token: process.env.SPEC_REVIEW_TOKEN })).catch((error: unknown) => {
+  Promise.resolve().then(() => startServer({ configPath: configPathFromArgs(args), dev: args.includes('--dev'), autoRun: !args.includes('--no-auto-run'), token: process.env.SPEC_REVIEW_TOKEN })).catch((error: unknown) => {
     console.error(error)
     process.exit(1)
   })

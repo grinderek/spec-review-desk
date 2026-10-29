@@ -21,20 +21,24 @@ registerRunnerRoutes(app, ctx, runner)
 const trees = await discover(config.repos, ctx.registry)
 const wt = trees.flatMap(t => t.worktrees).find(w => w.path === process.cwd())!
 assert.ok(wt, 'Desk must discover its configured worktree')
-const ref = wt.changes.find(c => c.name === 'try-desk-dsl')!
-assert.ok(ref, 'The proposed self-review change must exist')
-const view = await loadChangeView(wt, ref, { withCommits: false })
-assert.equal(view.validation.valid, true)
-assert.deepEqual(view.errors, [])
-const reviewedScenarios = view.features.flatMap(f => f.scenarios)
-assert.ok(reviewedScenarios.length > 0)
 const corpus = await loadCorpus(wt.path)
 assert.deepEqual(corpus.errors, [])
-assert.ok(Object.values(compareToCorpus(view.features, corpus.features, view.review.approved_at !== null).states).every(s => s === 'same'))
+const reviewedScenarios = []
+for (const name of ['scenario-approval-reading', 'discussion-decision-reading', 'initiative-and-catalog-reading', 'product-onboarding', 'multi-repository-verification']) {
+  const ref = wt.changes.find(c => !c.archived && c.name === name)
+  assert.ok(ref, `The proposed self-review change ${name} must exist`)
+  const view = await loadChangeView(wt, ref, { withCommits: false })
+  assert.equal(view.validation.valid, true, name)
+  assert.deepEqual(view.errors, [], name)
+  assert.ok(Object.values(compareToCorpus(view.features, corpus.features, view.review.approved_at !== null).states).every(s => s === 'same'), name)
+  reviewedScenarios.push(...view.features.flatMap(f => f.scenarios))
+}
+assert.ok(reviewedScenarios.length > 0)
 // The runner executes the whole DSL corpus, beyond the contracts in the self-review change.
 const scenarios = corpus.features.filter(f => f.tags.includes('desk-dsl')).flatMap(f => f.scenarios)
 assert.ok(scenarios.length > 0)
 const expectedKeys = scenarios.map(s => s.key).sort()
+assert.deepEqual(reviewedScenarios.map(s => s.key).sort(), expectedKeys, 'Review packages must cover the whole product corpus exactly once')
 assert.equal(new Set(expectedKeys).size, expectedKeys.length, 'Corpus runner keys must be unique')
 const expected = scenarios.reduce((n, s) => n + (s.examples.reduce((rows, e) => rows + e.rows.length, 0) || 1), 0)
 assert.equal((await call(app, 'POST', `/api/runner/${wt.id}/run`)).status, 202)
@@ -42,6 +46,8 @@ await runner.idle(wt.path)
 const state = (await call(app, 'GET', `/api/runner/${wt.id}`)).json.state
 assert.equal(state.execution, 'local')
 assert.equal(state.error, null)
+assert.equal(state.outcome, 'done')
+assert.equal(state.stale, false, 'The corpus result must match the final working tree')
 assert.deepEqual(Object.keys(state.result.scenarios).sort(), expectedKeys)
 assert.deepEqual(state.result.totals, { passed: expected, failed: 0, other: 0 })
 for (const scenario of scenarios) {

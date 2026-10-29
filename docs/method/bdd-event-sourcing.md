@@ -394,8 +394,10 @@ the events they produce, and a later slice's `Given` may use the events an earli
   marked, the owner decides.
 - **Specification line.** Each scenario card shows `Given events → When command → Then events`
   from the catalogs' Event / Command column; the Phrases tab shows the column.
-- **Catalog.** As before: every step is underlined by catalog status, a new phrase is approved by
-  the owner, an extended meaning is flagged.
+- **Catalog.** Technical step templates do not require separate owner approval. Expression
+  compilation, unknown steps and scenario-shape errors still block readiness. Owners approve the
+  readable scenario contracts. Catalog content remains part of the recorded package source;
+  historical phrase approvals stay in the review journal without granting or blocking readiness.
 
 ## 10. Moving an existing corpus
 

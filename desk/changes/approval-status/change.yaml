@@ -1,0 +1,3 @@
+version: 1
+kind: behavior-driven
+title: Согласованный пакет выходит из очереди согласования

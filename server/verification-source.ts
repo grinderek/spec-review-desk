@@ -9,7 +9,8 @@ import { git } from './git.ts'
 const Hash = z.string().regex(/^[0-9a-f]{64}$/)
 const File = z.object({ path: z.string(), hash: Hash.nullable(), mode: z.number().int().nullable() })
 const Contract = z.object({ key: z.string(), hash: z.string(), rows: z.number().int().positive() })
-const Source = z.object({ version: z.literal(1), head: z.string().regex(/^[0-9a-f]{40,64}$/), files: z.array(File), contracts: z.array(Contract), hash: Hash })
+const Component = z.object({ name: z.string().min(1), path: z.string().min(1), head: z.string().regex(/^[0-9a-f]{40,64}$/), files: z.array(File) })
+const Source = z.object({ version: z.literal(1), head: z.string().regex(/^[0-9a-f]{40,64}$/), files: z.array(File), contracts: z.array(Contract), components: z.array(Component).optional(), hash: Hash })
 const digest = (value: unknown): string => createHash('sha256').update(JSON.stringify(value)).digest('hex')
 export const VerificationSourceSchema = Source.superRefine((source, ctx) => {
   const { hash, ...body } = source
@@ -17,6 +18,9 @@ export const VerificationSourceSchema = Source.superRefine((source, ctx) => {
   if (new Set(source.files.map(f => f.path)).size !== source.files.length || new Set(source.contracts.map(c => c.key)).size !== source.contracts.length) {
     ctx.addIssue({ code: 'custom', message: 'Verification input identities are not unique' })
   }
+  const components = source.components ?? []
+  if (new Set(components.map(c => c.name)).size !== components.length || new Set(components.map(c => c.path)).size !== components.length
+    || components.some(c => new Set(c.files.map(f => f.path)).size !== c.files.length)) ctx.addIssue({ code: 'custom', message: 'Verification component identities are not unique' })
 })
 export type VerificationSource = z.infer<typeof VerificationSourceSchema>
 
@@ -45,10 +49,13 @@ async function inputFile(cwd: string, relative: string): Promise<z.infer<typeof 
 
 // The manifest identifies the actual working tree, including uncommitted sources. Operational
 // execution artifacts cannot change the input version merely by producing their own result.
-export async function captureVerificationSource(cwd: string): Promise<VerificationSource> {
+export async function captureVerificationSource(cwd: string, components: readonly { name: string; path: string }[] = []): Promise<VerificationSource> {
   const head = (await git(cwd, ['rev-parse', 'HEAD'])).trim()
   const listed = (await git(cwd, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])).split('\0').filter(Boolean)
-  const paths = [...new Set(listed)].filter(file => file !== '.spec-review' && !file.startsWith('.spec-review/')).sort()
+  // Git reports untracked nested checkouts as opaque directory entries ending in '/'.
+  // Linked worktrees are separate inputs, not files of this checkout. Tracked submodules
+  // still fail the regular-file check and must be declared explicitly as source roots.
+  const paths = [...new Set(listed)].filter(file => !file.endsWith('/') && file !== '.spec-review' && !file.startsWith('.spec-review/')).sort()
   if (paths.length > 100_000) throw new Error('Verification source manifest exceeds 100000 files')
   const files = []
   for (const relative of paths) files.push(await inputFile(cwd, relative))
@@ -59,6 +66,14 @@ export async function captureVerificationSource(cwd: string): Promise<Verificati
     rows: scenario.examples.reduce((count, example) => count + example.rows.length, 0) || 1,
   }))).sort((a, b) => a.key.localeCompare(b.key, 'en'))
   if (await git(cwd, ['rev-parse', 'HEAD']).then(value => value.trim()) !== head) throw new Error('HEAD changed while capturing verification inputs')
-  const body = { version: 1 as const, head, files, contracts }
+  const snapshots = []
+  for (const component of [...components].sort((a, b) => a.name.localeCompare(b.name, 'en'))) {
+    const root = await realpath(component.path)
+    if (root === await realpath(cwd)) throw new Error('Additional source duplicates the verification checkout')
+    if ((await realpath((await git(root, ['rev-parse', '--show-toplevel'])).trim())) !== root) throw new Error('Verification source must be a Git checkout root')
+    const captured = await captureVerificationSource(root)
+    snapshots.push({ name: component.name, path: root, head: captured.head, files: captured.files })
+  }
+  const body = { version: 1 as const, head, files, contracts, ...(snapshots.length ? { components: snapshots } : {}) }
   return VerificationSourceSchema.parse({ ...body, hash: digest(body) })
 }

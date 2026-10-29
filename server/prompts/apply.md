@@ -9,8 +9,13 @@ Rules:
   behavior or stable scenario IDs. If one is wrong or cannot be implemented, stop and raise a decision (see below).
 - Make each scenario RED for the right reason before implementing it; finish with the whole corpus
   and the existing suite green.
+- Follow the product's existing architecture. Executable rules can describe a CRUD application;
+  do not migrate application persistence to Event Sourcing unless the approved change requires it.
+  Prepare prior history through real public operations and observe actual persisted results.
+  Where the product has domain journals, compare their actual events. Never fabricate domain
+  events just to satisfy a Then step.
 - Step definitions follow the event-sourcing shape of the scenarios: a `Given` appends its event
-  through the same event store and projections production uses (never a direct row insert); the one
+  through the same event store and projections production uses, when such a journal exists (never a direct row insert); the one
   `When` runs the command through its public entry point (HTTP or the command dispatcher) and
   records the response or the rejection; a `Then` compares the events appended since the `When` —
   the same count, in order, by name and the listed fields, with `<placeholders>` bound to the first

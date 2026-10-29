@@ -22,6 +22,8 @@ import type { InitiativeRunService, RunTarget } from '../run-service.ts'
 import type { Sandbox } from '../sandbox.ts'
 import { publishInitiativeChanged, resolveInitiativeTarget } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
+import { captureImplementation, implementationUrl, readImplementation, sourceHtml } from '../existing-process.ts'
+import { ExistingProcessSchema } from '../initiative-model.ts'
 
 export interface InitiativeRouteDeps { runs: InitiativeRunService; sandbox: Sandbox }
 
@@ -104,8 +106,16 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
       if (typeof v !== 'string') throw new HttpError(422, 'invalid_body', 'fromRepo: one repo path per line, as text')
       return v.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
     })
+    const product = text(form, 'processProduct')
+    const existingProcess = product ? ExistingProcessSchema.parse({ product, process: text(form, 'processName'), boundary: text(form, 'processBoundary'), snapshot: 'implementation-snapshot.json' }) : undefined
+    const files = await uploads(form)
+    if (existingProcess) {
+      if (files.length || fromRepo.length) throw new HttpError(422, 'invalid_process_input', 'Описание процесса использует снимок выбранных репозиториев.')
+      const selected = all(form, 'processRepos').map(value => z.string().parse(value))
+      files.push(await captureImplementation(ctx.config, product!, fields.repo, selected))
+    }
     const created = await createInitiative(ctx.config, ctx.registry, {
-      name: fields.name, repo: fields.repo, where, title: fields.title, brief: fields.brief, files: await uploads(form), fromRepo, requestId: fields.requestId,
+      name: fields.name, repo: fields.repo, where, title: fields.title, brief: fields.brief, files, fromRepo, requestId: fields.requestId, existingProcess,
     }, nowIso())
     ctx.bus.publish('initiative', created)
     return c.json(created, 201)
@@ -133,6 +143,23 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
   app.get(base, async (c) => {
     const t = await target(c)
     return c.json(await loadInitiativeView(t.wt, t.ini))
+  })
+
+  app.get(`${base}/implementation`, async c => {
+    const t = await target(c), snapshot = await readImplementation(t.ini.dir, await readInitiative(t.ini.dir))
+    return c.json({ product: snapshot.product, sources: snapshot.sources.map(source => ({ ...source,
+      files: source.files.map(({ content, ...file }) => ({ ...file, url: implementationUrl(t.wt.id, t.ini.name, source.repo, file.path) })),
+    })) })
+  })
+  app.get(`${base}/implementation/source`, async c => {
+    const t = await target(c), snapshot = await readImplementation(t.ini.dir, await readInitiative(t.ini.dir))
+    const source = snapshot.sources.find(s => s.repo === c.req.query('repo'))
+    const file = source?.files.find(f => f.path === c.req.query('file'))
+    if (!source || !file) throw new HttpError(404, 'unknown_process_source', 'Файл не входит в снимок этого процесса.')
+    const line = z.coerce.number().int().positive().max(file.lines).parse(c.req.query('line') ?? 1)
+    c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'")
+    c.header('Cache-Control', 'private, no-store')
+    return c.html(sourceHtml(source, file, line))
   })
 
   app.post(`${base}/runs/reconcile`, async (c) => {
