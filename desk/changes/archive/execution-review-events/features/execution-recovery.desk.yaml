@@ -1,0 +1,128 @@
+version: 1
+feature: Recover recorded agent work without repeating an uncertain execution
+scenarios:
+  - id: recover-answer-once
+    scenario: Recover the completed question answer from its terminal receipt
+    given:
+      - ScenarioDiscovered: {}
+      - QuestionReceiptAwaitingRecovery: {}
+      - ReviewProjectionUnavailable: {}
+    when:
+      RecoverExecutions: {}
+    then:
+      events:
+        - ExecutionReceiptAccepted: { runId: $questionRun }
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { text: The durable answer is recovered once. }, status: answered }
+        - ExecutionSettled: { runId: $questionRun, outcome: done }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads: [{ id: $thread, messages: [{ role: owner }, { role: agent, text: The durable answer is recovered once. }] }]
+                executions: [{ outcome: done, attempts: [{ cause: initial }] }]
+  - id: keep-recovered-answer-once
+    scenario: Repeated recovery retains one answer and one execution attempt
+    given:
+      - ScenarioDiscovered: {}
+      - QuestionRecovered: {}
+    when:
+      RecoverExecutions: {}
+    then:
+      events: []
+      response: { status: 200 }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads: [{ messages: [{ role: owner }, { role: agent, text: The durable answer is recovered once. }] }]
+                executions: [{ outcome: done, attempts: [{ cause: initial }] }]
+  - id: show-uncertain-question
+    scenario: Show uncertainty when the previous execution outcome cannot be proved
+    given:
+      - ScenarioDiscovered: {}
+      - QuestionAttemptOutcomeUnknown: {}
+    when:
+      RecoverExecutions: {}
+    then:
+      events:
+        - ExecutionUncertain: { runId: $questionRun }
+      response: { status: 200 }
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { executions: [{ outcome: uncertain, attempts: [{ cause: initial }] }], threads: [{ messages: [{ role: owner }] }] }, readiness: { ready: false } } }
+  - id: block-apply-while-uncertain
+    scenario: Refuse implementation while a prior question requires recovery
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - QuestionOutcomeUncertain: {}
+    when:
+      StartApply: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: execution_pending } } }
+  - id: explicitly-resume-question
+    scenario: Resume a question explicitly with a new execution attempt
+    given:
+      - ScenarioDiscovered: {}
+      - QuestionOutcomeUncertain: {}
+    when:
+      ResumeQuestion: { run: $questionRun }
+    then:
+      events:
+        - ExecutionAttemptRequested: { runId: $questionRun, attempt: { cause: owner-resume } }
+        - ExecutionAttemptObserved: { runId: $questionRun }
+        - ExecutionReceiptAccepted: { runId: $questionRun }
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $thread, status: answered }
+        - ExecutionSettled: { runId: $questionRun, outcome: done }
+      response: { status: 202 }
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { executions: [{ outcome: done, attempts: [{ cause: initial }, { cause: owner-resume }] }] } } }
+  - id: stop-running-apply
+    scenario: Record the owner stop before accepting the stopped execution result
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ApplyReplyPrepared: {}
+      - ApplyRunning: {}
+    when:
+      StopApply: {}
+    then:
+      events:
+        - ExecutionStopRequested: { runId: $applyRun }
+        - ExecutionReceiptAccepted: { runId: $applyRun }
+        - ExecutionSettled: { runId: $applyRun, outcome: stopped }
+      response: { status: 202 }
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { apply_runs: [{ outcome: stopped }], executions: [{ outcome: stopped }] } } }
+  - id: resume-stopped-apply
+    scenario: Resume stopped implementation as a new attempt under current approval gates
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ApplyReplyPrepared: {}
+      - ApplyStopped: {}
+    when:
+      ResumeApply: { run: $applyRun }
+    then:
+      events:
+        - ExecutionAttemptRequested: { runId: $applyRun, attempt: { cause: owner-resume } }
+        - ExecutionAttemptObserved: { runId: $applyRun }
+        - ExecutionReceiptAccepted: { runId: $applyRun }
+        - ExecutionSettled: { runId: $applyRun, outcome: done }
+      response: { status: 202 }
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { apply_runs: [{ outcome: done }], executions: [{ outcome: done, attempts: [{ cause: initial }, { cause: owner-resume }] }] } } }

@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { api, type InitiativeId, type InitiativesResponse } from './api.ts'
 import { useAction } from './feedback.tsx'
 import { createPreview } from './initiative-view.ts'
@@ -16,8 +17,9 @@ export function NewFeature({ choices, onCreated }: { choices: InitiativesRespons
   const [worktree, setWorktree] = useState('')
   const [title, setTitle] = useState('')
   const [files, setFiles] = useState<File[]>([])
-  if (!choices) return <p className="empty">Loading repositories…</p>
-  const repoChoice = choices.repos.find((r) => r.name === repo) ?? choices.repos[0]
+  const repoChoice = choices?.repos.find((r) => r.name === repo) ?? choices?.repos[0]
+  const creations = useQuery({ queryKey: ['initiative-creations', repoChoice?.name], queryFn: () => api.initiativeCreations(repoChoice!.name), enabled: !!repoChoice, refetchInterval: 3000 })
+  if (!choices) return <p className="empty">Loading repositories...</p>
   const baseValue = base ?? choices.defaultBase
   const wt = repoChoice?.worktrees.find((w) => w.id === worktree) ?? null
   const preview = createPreview({ name: NAME.test(name) ? name : '', repoPath: repoChoice?.path ?? '', where, base: baseValue, worktreePath: wt?.path ?? null })
@@ -44,6 +46,19 @@ export function NewFeature({ choices, onCreated }: { choices: InitiativesRespons
   return (
     <form className="head newfeature" onSubmit={(e) => { e.preventDefault(); void create(e.currentTarget) }}>
       <h1>New feature</h1>
+      {creations.data?.creations.filter(creation => creation.status !== 'completed').map(creation => (
+        <section key={creation.id} className="box" aria-label={`Creation ${creation.name}`}>
+          <strong>{creation.name}: {creation.status}</strong>
+          {creation.reason ? <p>{creation.reason}</p> : null}
+          <div className="row">
+            <button type="button" className="btn" onClick={() => void act(async () => {
+              const result = await api.retryInitiativeCreation(repoChoice!.name, creation.id)
+              onCreated({ wt: result.worktreeId, name: result.name })
+            }, 'Initiative creation completed')}>Retry creation</button>
+            <button type="button" className="btn" onClick={() => void act(() => api.recoverInitiativeCreations(repoChoice!.name))}>Check status</button>
+          </div>
+        </section>
+      ))}
       <label htmlFor={`${uid}-name`}>Name</label>
       <input id={`${uid}-name`} value={name} placeholder="health-score" onChange={(e) => setName(e.target.value.trim())} />
       {name && !NAME.test(name) ? <small className="errtext">a-z, 0-9 and -, 2 to 41 characters</small> : null}

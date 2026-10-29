@@ -7,7 +7,7 @@ import { browserFilter, egressFilter } from './egress.ts'
 import { run } from './git.ts'
 import {
   AUTH_STORE, AUTH_VOLUME, agentRunArgs, browserName, browserNetworkCreateArgs, browserOutNetworkCreateArgs, browserProxyConnectArgs, browserProxyRunArgs, browserRunArgs,
-  cleanupArgs, containerName, egressRunArgs, networkConnectArgs, networkCreateArgs, outNetworkCreateArgs, teardownArgs,
+  cleanupArgs, containerName, browserProxyName, egressName, egressRunArgs, networkConnectArgs, networkCreateArgs, outNetworkCreateArgs, teardownArgs,
 } from './sandbox-args.ts'
 
 // Spec B §5: one docker container per agent attempt, behind a per-run egress proxy (ruling 1).
@@ -23,6 +23,8 @@ export interface SandboxRun {
   // The research read phase: a headless browser (Playwright MCP) next to the agent, behind its own
   // proxy (approved domains only), loaded as the agent's one MCP server.
   browser?: boolean
+  retain?: boolean
+  stopFile?: string
 }
 export interface SandboxOutcome { code: number | null; timedOut: boolean; stopped: boolean; error: string | null }
 export interface SandboxStatus {
@@ -41,6 +43,8 @@ export interface DockerSandboxOptions { browserReadyMs?: number; pollMs?: number
 export interface RunOptions { timeoutMs: number; onLine: (line: string) => void }
 
 export interface Sandbox {
+  durableProvider(): { module: string; config: unknown }
+  inspect(runId: string): Promise<'running' | 'exited' | 'missing' | 'unknown'>
   status(): Promise<SandboxStatus>
   token(): Promise<string | null>
   run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome>
@@ -91,6 +95,19 @@ export class DockerSandbox implements Sandbox {
   constructor(private readonly config: SandboxConfig, opts: DockerSandboxOptions = {}) {
     this.#browserReadyMs = opts.browserReadyMs ?? 30_000
     this.#pollMs = opts.pollMs ?? 250
+  }
+
+  durableProvider() { return { module: import.meta.url, config: this.config } }
+  async inspect(runId: string): Promise<'running' | 'exited' | 'missing' | 'unknown'> {
+    const states=await Promise.all([containerName(runId),browserName(runId),browserProxyName(runId),egressName(runId)].map(async name=>{
+      const result=await this.#docker(['inspect','--format','{{.State.Running}}',name],true).catch(()=>null)
+      if(!result)return 'unknown' as const
+      if(result.code===0)return result.stdout.trim()==='true'?'running' as const:result.stdout.trim()==='false'?'exited' as const:'unknown' as const
+      return /No such (?:object|container)/i.test(result.stderr)?'missing' as const:'unknown' as const
+    }))
+    if(states.includes('running'))return 'running'
+    if(states.includes('unknown'))return 'unknown'
+    return states[0]!
   }
 
   #docker(args: readonly string[], allowFailure = false) {
@@ -153,12 +170,12 @@ export class DockerSandbox implements Sandbox {
       }
       // A stop() during the setup above found no agent container to kill: honour it here instead
       // of starting the agent (it would otherwise run until it finished or timed out).
-      if (this.#stopped.delete(spec.runId)) return STOPPED
+      if (this.#stopped.delete(spec.runId) || (spec.stopFile && await exists(spec.stopFile))) return STOPPED
       if (spec.browser) {
         const problem = await this.#startBrowser(spec)
         if (problem) return { code: null, timedOut: false, stopped: false, error: `the research browser could not start: ${problem}` }
         // The same for a stop while the browser came up: the agent never starts.
-        if (this.#stopped.delete(spec.runId)) return STOPPED
+        if (this.#stopped.delete(spec.runId) || (spec.stopFile && await exists(spec.stopFile))) return STOPPED
       }
       const schemaFile = path.join(spec.runDir, 'reply-schema.json')
       if (spec.codex.jsonSchema) {
@@ -176,12 +193,15 @@ export class DockerSandbox implements Sandbox {
         sessions: spec.sessions,
         codexArgs: [...codexArgs({ ...spec.codex, schemaFile: '/work/reply-schema.json', toolsScript: '/opt/spec-review/desk-tools.mjs' }), ...(spec.extraArgs ?? [])],
         browser: spec.browser === true,
+        retain: spec.retain,
       })
       return await this.#attach(spec, args, opts)
     } finally {
       await rm(envFile, { force: true })
       if (chatgpt) await rm(path.join(spec.sessions, 'auth.json'), { force: true })
-      for (const args of teardownArgs(spec.runId)) await this.#ok(args)
+      // Keep only the agent container identity for receipt reconciliation. Browsers, egress
+      // proxies and networks must not remain active while the domain consumes a sealed result.
+      for (const args of teardownArgs(spec.runId).slice(spec.retain ? 1 : 0)) await this.#ok(args)
     }
   }
 
@@ -251,6 +271,7 @@ export class DockerSandbox implements Sandbox {
   async stop(runId: string): Promise<void> {
     this.#stopped.add(runId)
     await this.#ok(['kill', containerName(runId)])
+    for(const args of teardownArgs(runId).slice(1))await this.#ok(args)
   }
 
   async cleanup(runId: string, runDir: string): Promise<void> {
@@ -261,3 +282,5 @@ export class DockerSandbox implements Sandbox {
     await rm(runDir, { recursive: true, force: true }).catch((error: unknown) => console.error(error))
   }
 }
+
+export const createDurableSandbox = (config: SandboxConfig): Sandbox => new DockerSandbox(config)

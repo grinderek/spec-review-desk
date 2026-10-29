@@ -1,0 +1,86 @@
+version: 1
+feature: Retain a feature creation request through partial Git work and restart
+scenarios:
+  - id: observe-creation-without-running
+    scenario: Recovery observes a recorded creation without creating its initiative
+    cases:
+      - { name: new worktree, where: new, status: not_started }
+      - { name: existing worktree, where: existing, status: pending }
+    given:
+      - InitiativeCreationPrepared: { where: $where }
+    when:
+      RecoverInitiativeCreations: {}
+    then:
+      stream: worktree
+      events:
+        - InitiativeCreationObserved: { creationId: $creation, status: $status }
+      response: { status: 200 }
+      reads:
+        - path: /api/initiative-creations/api
+          response: { status: 200, body: { creations: [{ id: $creation, name: new-feature, status: $status, commit: null }] } }
+  - id: continue-recorded-creation
+    scenario: Explicitly continue creation with the original brief and captured inputs
+    given:
+      - InitiativeCreationPrepared: { fromRepo: [README.md] }
+      - CreationSourceChanged: {}
+    when:
+      RetryInitiativeCreation: { id: $creation }
+    then:
+      stream: worktree
+      events:
+        - InitiativeWorktreeConfirmed: { creationId: $creation }
+        - InitiativeCreationGitRequested: { creationId: $creation }
+        - InitiativeCreationCompleted: { creationId: $creation }
+      response: { status: 200, body: { worktreeId: $creationWorktree, name: new-feature } }
+      reads:
+        - path: /api/initiatives/$creationWorktree/new-feature
+          response: { status: 200, body: { brief: "Describe the intended behavior.\n", doc: { inputs: [{ file: README.md, draft: false }] } } }
+  - id: repeat-completed-creation
+    scenario: Repeating the same feature request returns its existing initiative
+    given:
+      - InitiativeCreationPrepared: { phase: completed }
+    when:
+      OpenInitiative: { name: new-feature, title: New feature, brief: Describe the intended behavior. }
+    then:
+      stream: worktree
+      events: []
+      response: { status: 201, body: { worktreeId: $creationWorktree, name: new-feature } }
+      reads:
+        - path: /api/initiative-creations/api
+          response: { status: 200, body: { creations: [{ id: $creation, status: completed }] } }
+  - id: retry-pending-initial-commit
+    scenario: Finish a rejected initial commit without creating a second initiative
+    given:
+      - InitiativeCreationPrepared: { phase: pending }
+    when:
+      RetryInitiativeCreation: { id: $creation }
+    then:
+      stream: worktree
+      events:
+        - InitiativeCreationCompleted: { creationId: $creation }
+      response: { status: 200, body: { worktreeId: $creationWorktree, name: new-feature } }
+  - id: recover-initial-commit-receipt
+    scenario: Recover an initial initiative commit that completed before acknowledgment
+    given:
+      - InitiativeCreationPrepared: { phase: receipt }
+    when:
+      RecoverInitiativeCreations: {}
+    then:
+      stream: worktree
+      events:
+        - InitiativeCreationCompleted: { creationId: $creation }
+      response: { status: 200 }
+  - id: refuse-foreign-branch
+    scenario: Keep creation uncertain when another branch has no ownership proof
+    given:
+      - InitiativeCreationPrepared: { phase: foreign }
+    when:
+      RecoverInitiativeCreations: {}
+    then:
+      stream: worktree
+      events:
+        - InitiativeCreationObserved: { creationId: $creation, status: uncertain }
+      response: { status: 200 }
+      reads:
+        - path: /api/initiative-creations/api
+          response: { status: 200, body: { creations: [{ id: $creation, status: uncertain, commit: null }] } }

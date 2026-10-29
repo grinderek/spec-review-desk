@@ -1,12 +1,7 @@
-import { cp, lstat, mkdtemp, readdir, readFile, rm } from 'node:fs/promises'
-import os from 'node:os'
+import { lstat, readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { deskFeature } from './desk-dsl.ts'
-import { parse, YAMLParseError } from 'yaml'
-import { type Catalog, emptyCatalog, makeClassifier, parseCatalog } from './catalog.ts'
-import { FeatureParseError, parseFeature } from './gherkin.ts'
-import { run } from './git.ts'
-import { checkJoinKey, specTitles } from './joinkey.ts'
+import { type Catalog, emptyCatalog, parseCatalog } from './catalog.ts'
+import { CHANGE_ROOT, archiveChangeDir, changeDir, validateChangePackageSources } from './change-package.ts'
 import { findSecrets, maskSecrets } from './secret-scan.ts'
 
 // Spec B §6: nothing the author wrote touches the worktree before every rule here holds.
@@ -16,7 +11,7 @@ const EXTENSIONS = ['.md', '.feature', '.yaml']
 // The Desk writes these itself (review state, owner decisions); an author never may.
 const DESK_FILES = ['review.yaml', 'review.events.jsonl', 'decisions.md']
 
-export interface VetInput { out: string; change: string; worktree: string; openspecBin: string; token: string | null }
+export interface VetInput { out: string; change: string; worktree: string; token: string | null }
 export interface VetResult { problems: string[]; files: string[]; scenarioKeys: string[] }
 interface Entry { rel: string; kind: 'file' | 'symlink' | 'other'; bytes: number }
 
@@ -33,7 +28,7 @@ async function entries(dir: string, prefix = ''): Promise<Entry[]> {
 }
 
 async function layoutProblems(out: string, change: string): Promise<string[]> {
-  const expected = ['openspec', 'openspec/changes', `openspec/changes/${change}`]
+  const expected = ['desk', CHANGE_ROOT, `${CHANGE_ROOT}/${change}`]
   const problems: string[] = []
   for (const [i, dir] of ['', ...expected.slice(0, 2)].entries()) {
     if (dir) {
@@ -43,27 +38,27 @@ async function layoutProblems(out: string, change: string): Promise<string[]> {
     const names = (await readdir(path.join(out, dir)).catch(() => [] as string[])).sort()
     for (const name of names) {
       const rel = dir ? `${dir}/${name}` : name
-      if (rel !== expected[i]) problems.push(`the output must contain only openspec/changes/${change}/ — found ${rel}`)
+      if (rel !== expected[i]) problems.push(`the output must contain only ${CHANGE_ROOT}/${change}/ - found ${rel}`)
     }
   }
   if (problems.length) return problems
   const top = await lstat(path.join(out, expected[2]!)).catch(() => null)
-  return top?.isDirectory() && !top.isSymbolicLink() ? [] : [`the output must contain openspec/changes/${change}/`]
+  return top?.isDirectory() && !top.isSymbolicLink() ? [] : [`the output must contain ${CHANGE_ROOT}/${change}/`]
 }
 
 function fileProblems(list: readonly Entry[]): string[] {
   const problems = list.flatMap((e) => {
     if (e.kind === 'symlink') return [`${e.rel}: symlinks are not allowed`]
     if (e.kind === 'other') return [`${e.rel}: not a regular file`]
-    if (e.rel !== '.openspec.yaml' && e.rel.split('/').some((s) => s.startsWith('.'))) return [`${e.rel}: hidden files are not allowed`]
+    if (e.rel.split('/').some((s) => s.startsWith('.'))) return [`${e.rel}: hidden files are not allowed`]
     if (DESK_FILES.includes(e.rel)) return [`${e.rel}: written by the Desk, never by the author`]
     return EXTENSIONS.includes(path.extname(e.rel)) ? [] : [`${e.rel}: only .md, .feature and .yaml files are allowed`]
   })
   const bytes = list.reduce((n, e) => n + e.bytes, 0)
   return [
     ...problems,
-    ...(list.length > MAX_FILES ? [`${list.length} files — at most ${MAX_FILES}`] : []),
-    ...(bytes > MAX_BYTES ? [`total size ${bytes} bytes — at most ${MAX_BYTES}`] : []),
+    ...(list.length > MAX_FILES ? [`${list.length} files - at most ${MAX_FILES}`] : []),
+    ...(bytes > MAX_BYTES ? [`total size ${bytes} bytes - at most ${MAX_BYTES}`] : []),
   ]
 }
 
@@ -79,19 +74,8 @@ async function catalogAt(file: string): Promise<Catalog> {
   }
 }
 
-async function schemaProblem(dir: string, files: readonly string[]): Promise<string | null> {
-  if (!files.includes('.openspec.yaml')) return '.openspec.yaml must say schema: behavior-driven'
-  try {
-    const meta = parse(await readFile(path.join(dir, '.openspec.yaml'), 'utf8')) as { schema?: unknown } | null
-    return meta?.schema === 'behavior-driven' ? null : '.openspec.yaml must say schema: behavior-driven'
-  } catch (error) {
-    if (!(error instanceof YAMLParseError)) throw error
-    return `.openspec.yaml: ${error.message.split('\n')[0]}`
-  }
-}
-
 // The same >= 8-character piece rule as every other committed surface (final review I3): per file,
-// and over all files joined in order, so pieces spread across files — or across a file boundary —
+// and over all files joined in order, so pieces spread across files - or across a file boundary -
 // are caught too.
 function secretKinds(text: string, token: string | null): string[] {
   const whole = findSecrets(text, token)
@@ -100,7 +84,7 @@ function secretKinds(text: string, token: string | null): string[] {
 }
 
 async function secretProblems(dir: string, files: readonly string[], token: string | null): Promise<string[]> {
-  const texts = await Promise.all(files.map((rel) => readFile(path.join(dir, rel), 'utf8')))
+  const texts = await Promise.all(files.map((rel) => readText(path.join(dir, rel))))
   const perFile = files.flatMap((rel, i) => {
     const kinds = secretKinds(texts[i]!, token)
     return kinds.length ? [`${rel}: contains a secret (${kinds.join(', ')})`] : []
@@ -110,73 +94,31 @@ async function secretProblems(dir: string, files: readonly string[], token: stri
   return joined.length ? [`the files together contain a secret split across them (${joined.join(', ')})`] : []
 }
 
-async function contentProblems(dir: string, files: readonly string[], input: VetInput): Promise<{ problems: string[]; keys: string[] }> {
-  const problems: string[] = []
-  const schema = await schemaProblem(dir, files)
-  if (schema) problems.push(schema)
-  if (await exists(path.join(input.worktree, 'openspec', 'changes', input.change))) problems.push(`${input.change} already exists in the worktree`)
-  problems.push(...(await secretProblems(dir, files, input.token)))
-  const keys: string[] = []
-  const titles: string[] = []
-  // The author writes against the worktree's STEPS.md and its own NEW_STEPS.md: the shape check
-  // (one When, Given before it, Then after it, phrases under their catalog keyword) needs both.
-  const approved = await catalogAt(path.join(input.worktree, 'features', 'STEPS.md'))
-  const proposed = files.includes('features/NEW_STEPS.md') ? await catalogAt(path.join(dir, 'features', 'NEW_STEPS.md')) : emptyCatalog()
-  const classify = makeClassifier(approved, proposed)
-  for (const rel of files.filter((f) => f.startsWith('features/') && (f.endsWith('.feature') || f.endsWith('.desk.yaml')))) {
-    try {
-      const source = await readFile(path.join(dir, rel), 'utf8')
-      const feature = rel.endsWith('.desk.yaml') ? deskFeature(source, rel) : parseFeature(source, rel, classify)
-      keys.push(...feature.scenarios.map((s) => s.key))
-      titles.push(...feature.scenarios.map((s) => s.title))
-      for (const s of feature.scenarios) problems.push(...s.shape.warnings.map((w) => `${rel}: ${s.title}: ${w}`))
-    } catch (error) {
-      if (!(error instanceof FeatureParseError)) throw error
-      problems.push(`${rel}: ${error.message}`)
-    }
-  }
-  const specs = (await Promise.all(files.filter((f) => f.startsWith('specs/') && f.endsWith('.md')).map(async (f) => specTitles(await readFile(path.join(dir, f), 'utf8'))))).flat()
-  const join = checkJoinKey(specs, titles)
-  if (!join.ok) {
-    const count = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`
-    problems.push(
-      `join key: ${count(join.missingInFeatures.length, 'spec title', 'spec titles')} without a scenario, ` +
-        `${count(join.missingInSpecs.length, 'scenario', 'scenarios')} without a spec line, ${count(join.duplicateTitles.length, 'duplicate title', 'duplicate titles')}`,
-    )
-  }
-  return { problems, keys }
+async function readText(file:string):Promise<string> {
+  return new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(await readFile(file))
 }
-
-// `openspec validate --strict` runs in a scratch copy of the worktree's openspec/ — never the real one.
-async function validateProblems(dir: string, input: VetInput): Promise<string[]> {
-  const scratch = await mkdtemp(path.join(os.tmpdir(), 'sr-validate-'))
-  try {
-    const source = path.join(input.worktree, 'openspec')
-    if (await exists(source)) await cp(source, path.join(scratch, 'openspec'), { recursive: true, verbatimSymlinks: true })
-    await cp(dir, path.join(scratch, 'openspec', 'changes', input.change), { recursive: true })
-    const result = await run(input.openspecBin, ['validate', input.change, '--strict'], { cwd: scratch, timeoutMs: 120_000, allowFailure: true })
-    if (result.code === 0) return []
-    return [`openspec validate --strict failed: ${`${result.stdout}\n${result.stderr}`.trim().slice(0, 1500)}`]
-  } finally {
-    await rm(scratch, { recursive: true, force: true })
-  }
+async function contentProblems(dir:string,files:readonly string[],input:VetInput):Promise<{problems:string[];keys:string[]}> {
+  const problems:string[]=[]
+  if(await exists(changeDir(input.worktree,input.change))||await exists(archiveChangeDir(input.worktree,input.change)))problems.push(`${input.change} already exists in the worktree`)
+  problems.push(...await secretProblems(dir,files,input.token))
+  const approvedCatalog=await catalogAt(path.join(input.worktree,'features/STEPS.md'))
+  const sources=await Promise.all(files.map(async file=>({file,source:await readText(path.join(dir,file))})))
+  const parsed=validateChangePackageSources(sources,{approvedCatalog})
+  problems.push(...parsed.problems.map(problem=>`${problem.file}: ${problem.message}`))
+  return {problems,keys:parsed.contracts.map(contract=>contract.key)}
 }
 
 export async function vetAuthorOutput(input: VetInput): Promise<VetResult> {
+  try { changeDir(input.out,input.change) }catch(error){return {problems:[(error as Error).message],files:[],scenarioKeys:[]}}
   const layout = await layoutProblems(input.out, input.change)
   if (layout.length) return { problems: layout, files: [], scenarioKeys: [] }
-  const dir = path.join(input.out, 'openspec', 'changes', input.change)
+  const dir = changeDir(input.out,input.change)
   const list = await entries(dir)
   const files = list.filter((e) => e.kind === 'file').map((e) => e.rel)
   const structural = fileProblems(list)
   if (structural.length) return { problems: structural, files, scenarioKeys: [] }
-  const content = await contentProblems(dir, files, input)
-  if (content.problems.length) return { problems: content.problems, files, scenarioKeys: content.keys }
-  return { problems: await validateProblems(dir, input), files, scenarioKeys: content.keys }
-}
-
-export async function moveChange(out: string, change: string, worktree: string): Promise<string> {
-  const target = path.join(worktree, 'openspec', 'changes', change)
-  await cp(path.join(out, 'openspec', 'changes', change), target, { recursive: true, errorOnExist: true, force: false })
-  return target
+  try {
+    const content=await contentProblems(dir,files,input)
+    return {problems:content.problems,files,scenarioKeys:content.keys}
+  }catch(error){return {problems:[(error as Error).message],files,scenarioKeys:[]}}
 }

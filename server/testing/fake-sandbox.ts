@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
-import { rm } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
 import { codexArgs, prepareCodex } from '../codex.ts'
 import type { RunOptions, Sandbox, SandboxOutcome, SandboxRun, SandboxStatus } from '../sandbox.ts'
 import { FAKE_CODEX } from './fake-codex-path.ts'
@@ -17,6 +17,8 @@ export class FakeSandbox implements Sandbox {
   #stopped = new Set<string>()
 
   constructor(private readonly codexBin: string = FAKE_CODEX) {}
+  durableProvider() { return { module: import.meta.url, config: { codexBin: this.codexBin } } }
+  async inspect(): Promise<'missing'> { return 'missing' }
 
   async status(): Promise<SandboxStatus> {
     return this.statusValue
@@ -26,7 +28,8 @@ export class FakeSandbox implements Sandbox {
     return this.tokenValue
   }
 
-  run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
+  async run(spec: SandboxRun, opts: RunOptions): Promise<SandboxOutcome> {
+    if (spec.stopFile && await stat(spec.stopFile).then(()=>true,()=>false)) return {code:null,timedOut:false,stopped:true,error:null}
     // A stop() between two attempts of the same run id (a validation retry, an owner resume) must
     // not mark THIS attempt stopped: clear any stale mark before the attempt begins.
     this.#stopped.delete(spec.runId)
@@ -79,3 +82,5 @@ export class FakeSandbox implements Sandbox {
     await rm(runDir, { recursive: true, force: true })
   }
 }
+
+export const createDurableSandbox = (config: { codexBin: string }): Sandbox => new FakeSandbox(config.codexBin)

@@ -25,6 +25,8 @@ export interface CodexRunSpec {
   schemaFile?: string
   toolsScript?: string
   writeRoot?: string
+  workspaceRoots?: { name: string; path: string; git: boolean }[]
+  checks?: { name: string; cwd: string; argv: string[]; timeoutMs: number }[]
   search?: boolean
   readDomains?: readonly string[]
 }
@@ -57,9 +59,10 @@ export function codexArgs(spec: CodexRunSpec): string[] {
   const commands = spec.allowedTools.flatMap((t) => /^Bash\((.+):\*\)$/.exec(t)?.[1] ?? []).filter((command) => !denied.some((prefix) => command === prefix || command.startsWith(prefix + ' ')))
   const desk = {
     command: 'node',
-    args: [spec.toolsScript ?? TOOLS_SCRIPT, JSON.stringify({ root: spec.cwd, writeRoot: write ? (spec.writeRoot ?? spec.cwd) : null, commands, deniedCommands: denied, search: spec.search === true, readDomains: spec.readDomains ?? [] })],
+    args: [spec.toolsScript ?? TOOLS_SCRIPT, JSON.stringify({ root: spec.cwd, writeRoot: write ? (spec.writeRoot ?? spec.cwd) : null,
+      workspaceRoots: spec.workspaceRoots ?? [], checks: spec.checks ?? [], commands, deniedCommands: denied, search: spec.search === true, readDomains: spec.readDomains ?? [] })],
     required: true,
-    tool_timeout_sec: 180,
+    tool_timeout_sec: Math.max(180, ...((spec.checks ?? []).map(check => Math.ceil(check.timeoutMs / 1000) + 30))),
     // The bridge enforces Desk scopes; unattended exec cannot answer MCP prompts.
     default_tools_approval_mode: 'approve',
   }

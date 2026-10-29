@@ -1,18 +1,18 @@
-import { rmSync } from 'node:fs'
-import { mkdtemp, readFile, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { git } from '../server/git.ts'
+import { requireAttemptInactive, stopLocalAttempt } from '../server/execution-receipts.ts'
 import { startServer } from '../server/main.ts'
-import { FAKE_CODEX, FAKE_OPENSPEC } from '../server/testing/fake-codex-path.ts'
+import { FAKE_CODEX } from '../server/testing/fake-codex-path.ts'
 import { FakeSandbox } from '../server/testing/fake-sandbox.ts'
-import { FEATURE as FEATURE_TEXT, NEW_STEPS_MD, SPEC_MD } from '../server/testing/fixtures.ts'
+import { FEATURE as FEATURE_TEXT, NEW_STEPS_MD } from '../server/testing/fixtures.ts'
 import { changeFiles, makeRepo, sh, writeFiles } from '../server/testing/repo.ts'
 
-const FEATURE = 'openspec/changes/add-thread-state/features/thread_state.feature'
-const DECISION_FEATURE = 'openspec/changes/add-decision-flow/features/thread_state.feature'
-const FIRST = "features/thread_state.feature::The founder's reply resolves a waiting thread"
-const ENGINE = 'openspec/changes/add-health-score-engine'
+const FEATURE = 'desk/changes/add-thread-state/features/thread_state.feature'
+const DECISION_FEATURE = 'desk/changes/add-decision-flow/features/thread_state.feature'
+const FIRST = "thread_state.feature::founder-reply-resolves"
+const ENGINE = 'desk/changes/add-health-score-engine'
 
 async function diffOf(repo: string, rel: string, before: string, insert: string): Promise<string> {
   const file = path.join(repo, rel)
@@ -25,35 +25,62 @@ async function diffOf(repo: string, rel: string, before: string, insert: string)
 
 const reply = (over: Record<string, unknown>) => ({ answer: '', patch: null, decisions: [], resolves: [], status: 'answered', ...over })
 
-// Every fixture temp dir this process creates (makeRepo's `hub`, and the `tmp` below) is removed on
-// exit — the suite previously leaked ~17k /tmp/sr-* dirs across runs. By default Playwright SIGKILLs
-// the whole webServer process group on teardown, which no listener can catch, so this only fires
-// because playwright.config.ts's `webServer.gracefulShutdown` makes it send SIGTERM first — that
-// reaches this process (same process group), our SIGTERM handler below calls process.exit(), and the
-// 'exit' listener runs its (synchronous) rmSync cleanup before the process actually terminates.
+// Detached workers deliberately survive a production server exit. The fixture owns its temporary
+// repositories, so it must prove those workers stopped before deleting their durable artifacts.
 const cleanupDirs: string[] = []
-process.on('exit', () => {
-  for (const dir of cleanupDirs) {
-    try {
-      rmSync(dir, { recursive: true, force: true })
-    } catch {
-      // best-effort: never let cleanup crash the shutdown path
+let closeFixture: (() => Promise<void>) | undefined
+async function fixtureAttempts(dir: string): Promise<{ cwd: string; id: string }[]> {
+  const attempts: { cwd: string; id: string }[] = []
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.isSymbolicLink() || ['.git', 'node_modules'].includes(entry.name)) continue
+    const child = path.join(dir, entry.name)
+    if (entry.name === 'executions' && path.basename(dir) === '.spec-review') {
+      for (const attempt of await readdir(child, { withFileTypes: true })) {
+        if (attempt.isDirectory() && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(attempt.name)) {
+          attempts.push({ cwd: path.dirname(dir), id: attempt.name })
+        }
+      }
+    } else {
+      attempts.push(...await fixtureAttempts(child))
     }
   }
-})
-// Explicit handlers so the signal reaches process.exit() (and so the 'exit' cleanup above runs) even
-// if some dependency (e.g. the HTTP server) has already registered its own SIGINT/SIGTERM listener,
-// which would otherwise override Node's default terminate-on-signal disposition.
-for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => process.exit(0))
+  return attempts
+}
+let shutdown: Promise<void> | undefined
+function teardown(code: number): Promise<void> {
+  return shutdown ??= (async () => {
+    const deadline = Date.now() + 4_000
+    const timeout = setTimeout(() => {
+      console.error('Fixture cleanup timed out; retaining temporary artifacts')
+      process.exit(code)
+    }, 4_000)
+    try {
+      await closeFixture?.()
+      const attempts = (await Promise.all(cleanupDirs.map(fixtureAttempts))).flat()
+      await Promise.all(attempts.map(({ cwd, id }) => stopLocalAttempt(cwd, id)))
+      for (;;) {
+        const observations = await Promise.allSettled(attempts.map(({ cwd, id }) => requireAttemptInactive(cwd, id)))
+        if (observations.every(result => result.status === 'fulfilled')) break
+        if (Date.now() >= deadline) throw new Error('Fixture workers did not prove inactivity; retaining their temporary artifacts')
+        await new Promise(resolve => setTimeout(resolve, 50))
+      }
+      await Promise.all(cleanupDirs.map(dir => rm(dir, { recursive: true, force: true })))
+    } catch (error) {
+      console.error('Fixture cleanup retained temporary artifacts:', error)
+    }
+    clearTimeout(timeout)
+    process.exit(code)
+  })()
+}
+for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => { void teardown(0) })
 
 async function main(): Promise<void> {
   const { hub, repo } = await makeRepo()
   cleanupDirs.push(hub)
   await writeFiles(repo, changeFiles('add-decision-flow'))
   await writeFiles(repo, {
-    'openspec/changes/add-dsl-review/.openspec.yaml': 'schema: behavior-driven\n',
-    'openspec/changes/add-dsl-review/specs/review/spec.md': '#### Scenario: Review a YAML contract\n',
-    'openspec/changes/add-dsl-review/features/review.desk.yaml': `version: 1
+    'desk/changes/add-dsl-review/change.yaml': 'version: 1\nkind: behavior-driven\n',
+    'desk/changes/add-dsl-review/features/review.desk.yaml': `version: 1
 feature: DSL browser review
 scenarios:
   - id: review-yaml
@@ -73,10 +100,17 @@ scenarios:
   // The initiative flow branches its worktree from a base without the review fixtures' changes, so
   // the sidebar never lists add-thread-state twice.
   sh(repo, 'git', ['checkout', '-q', '-b', 'initiative-base'])
-  sh(repo, 'git', ['rm', '-q', '-r', 'openspec/changes'])
+  sh(repo, 'git', ['rm', '-q', '-r', 'desk/changes'])
   sh(repo, 'git', ['commit', '-q', '-m', 'a base for the initiative flow'])
   sh(repo, 'git', ['checkout', '-q', 'main'])
   const ageDiff = await diffOf(repo, FEATURE, '  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by business-hour age.\n')
+  // Another accepted edit changes the patch context before the question is answered.
+  // Regenerating must use this current file rather than retrying the earlier diff.
+  const ageFile = path.join(repo, FEATURE)
+  await writeFile(ageFile, (await readFile(ageFile, 'utf8')).replace('  Scenario Outline:', '  Scenario Outline: '))
+  sh(repo, 'git', ['add', '--', FEATURE])
+  sh(repo, 'git', ['commit', '-q', '-m', 'Independent formatting revision'])
+  const refreshedAgeDiff = await diffOf(repo, FEATURE, '  Scenario Outline:', '  # Owner decision 2026-09-23: rows weigh by business-hour age.\n')
   const partialDiff = await diffOf(repo, DECISION_FEATURE, "  Scenario: The founder's reply", '  # Owner decision 2026-09-24: partial days count as business days only.\n')
   const plannerReply = reply({
     answer: 'Two slices: the engine, then delivery.',
@@ -85,6 +119,8 @@ scenarios:
   })
   // First match wins, so the most specific prompt text comes first: a thread replays its history.
   const replies = [
+    { match: 'Explain the founder reply.', reply: reply({ answer: 'The founder reply is a separate discussion.' }) },
+    { match: 'Обнови устаревший патч из сообщения', reply: reply({ answer: 'The correction has been rebuilt against the current files.', patch: refreshedAgeDiff }) },
     { match: 'Owner decided', reply: reply({ answer: 'Recorded the decision above the scenario.', patch: partialDiff, resolves: ['$DECISION_ID'] }) },
     {
       match: 'Partial counts?',
@@ -124,9 +160,8 @@ scenarios:
   const writes = [{
     match: 'Slice s1',
     files: {
-      [`${ENGINE}/.openspec.yaml`]: 'schema: behavior-driven\n',
+      [`${ENGINE}/change.yaml`]: 'version: 1\nkind: behavior-driven\n',
       [`${ENGINE}/proposal.md`]: '## Why\n\nThe engine.\n',
-      [`${ENGINE}/specs/thread-state/spec.md`]: SPEC_MD,
       [`${ENGINE}/features/thread_state.feature`]: FEATURE_TEXT,
       [`${ENGINE}/features/NEW_STEPS.md`]: NEW_STEPS_MD,
     },
@@ -153,16 +188,16 @@ scenarios:
     'repos: [{ name: api, path: api }]',
     'port: 4620',
     `codexBin: ${FAKE_CODEX}`,
-    `openspecBin: ${FAKE_OPENSPEC}`,
     'initiativeBase: initiative-base',
     'commitTrailer: "Co-Authored-By: E2E <e2e@example.com>"',
     '',
   ].join('\n'))
-  await startServer({ configPath: config, token: 'e2e', sandbox: new FakeSandbox() })
+  const server = await startServer({ configPath: config, token: 'e2e', sandbox: new FakeSandbox() })
+  closeFixture = server.close
   console.log(`e2e fixture repo: ${repo}`)
 }
 
 main().catch((error: unknown) => {
   console.error(error)
-  process.exit(1)
+  void teardown(1)
 })

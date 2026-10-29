@@ -5,7 +5,7 @@ scenarios:
     scenario: Keep unreported token usage and actual billing unknown
     given:
       - ScenarioDiscovered: {}
-      - DiscussionAnswered: { text: Explain this contract., answer: The contract is clear. }
+      - DiscussionAnswered: { text: Explain this contract., answer: The contract is clear., usageReported: false }
     when:
       HttpRequest: { method: GET, path: /api/usage }
     then:

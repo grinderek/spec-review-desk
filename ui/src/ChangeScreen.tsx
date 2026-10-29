@@ -9,8 +9,10 @@ import { DocTab } from './DocTab.tsx'
 import { PhrasesTab } from './PhrasesTab.tsx'
 import { ScenariosTab } from './ScenariosTab.tsx'
 import { KitchenTab, VerificationTab } from './VerificationTab.tsx'
+import { ContractDetails, ContractReading } from './ContractReading.tsx'
+import { processReading } from '../../server/contract-reading.ts'
 
-export type TabId = 'scenarios' | 'phrases' | 'decisions' | 'proposal' | 'verification' | 'kitchen'
+export type TabId = 'scenarios' | 'contracts' | 'phrases' | 'decisions' | 'proposal' | 'verification' | 'kitchen'
 
 export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; capabilities: Capabilities | undefined; setPanel: (t: PanelTarget) => void }) {
   const change = useQuery({ queryKey: ['change', id.wt, id.name], queryFn: () => api.change(id) })
@@ -29,7 +31,8 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
   const runnerState = runner.data?.state ?? null
   const tabs: [TabId, string, number | null][] = [
     ['scenarios', 'Scenarios', view.features.reduce((n, f) => n + f.scenarios.length, 0)],
-    ['phrases', 'New phrases', view.phrases.length],
+    ['contracts', 'Contract docs', view.contracts.length],
+    ['phrases', 'Шаблоны шагов', view.phrases.length],
     ['decisions', 'Decisions', view.decisions.filter(isActive).length],
     ['proposal', 'Proposal', null],
     ['verification', 'Verification', view.review.apply_runs.length || null],
@@ -37,7 +40,8 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
   ]
   return (
     <>
-      <ChangeHeader id={id} view={view} corpus={corpus.data} runner={runnerState} capabilities={capabilities} />
+      {view.archived ? <div className="history-notice">История изменения. Этот пакет сохранен для справки. <a href={`#/rules/${id.wt}`}>Открыть действующие правила</a></div> : null}
+      <ChangeHeader id={id} view={view} corpus={corpus.data} runner={runnerState} capabilities={capabilities} onVerification={() => setTab('verification')} />
       <div className="tabs" role="tablist">
         {tabs.map(([key, label, count]) => (
           <button key={key} className="tab" role="tab" aria-selected={tab === key} onClick={() => setTab(key)}>
@@ -52,6 +56,14 @@ export function ChangeScreen({ id, capabilities, setPanel }: { id: ChangeId; cap
           <DecisionsTab id={id} view={view} focusDecision={focusDecision} setPanel={setPanel} onGoto={(key) => { setTab('scenarios'); setFocusKey(key) }} />
         ) : null}
         {tab === 'proposal' ? <DocTab title="proposal.md" text={view.docs.proposal} /> : null}
+        {tab === 'contracts' ? view.features.map(feature => <section key={feature.file} className="feature">
+          <h3>{processReading(feature.file)?.title ?? feature.name}</h3>
+          {feature.scenarios.map(s => <article key={s.key} className="rule-card">
+            <h2>{s.reading?.title ?? s.title}</h2>
+            {s.reading ? <ContractReading reading={s.reading} /> : <p className="rules-meta">Полное правило доступно в подробностях.</p>}
+            <ContractDetails scenario={s} />
+          </article>)}
+        </section>) : null}
         {tab === 'verification' ? <VerificationTab id={id} view={view} runner={runnerState} setPanel={setPanel} /> : null}
         {tab === 'kitchen' ? <KitchenTab view={view} /> : null}
       </div>

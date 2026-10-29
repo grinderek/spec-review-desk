@@ -1,0 +1,37 @@
+version: 1
+feature: Technical templates are validated without separate owner approval
+scenarios:
+  - id: phrase-gate
+    scenario: Technical step templates do not require separate owner approval
+    given:
+      - ScenarioDiscovered: { format: gherkin }
+      - ScenarioApproved: { key: $key, hash: $hash, at: $at }
+      - PhraseProposed: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response: { status: 200, body: { readiness: { ready: true, reasons: [] } } }
+
+  - id: technical-catalog-validity
+    scenario: Invalid or unknown technical steps still block recording the change
+    cases:
+      - { name: invalid expression, phraseText: 'the owner reviews {', catalogValid: false }
+      - { name: unknown step, phraseText: another command, catalogValid: true }
+    given:
+      - ScenarioDiscovered: { format: gherkin }
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+      - PhraseProposed: { phrase: $phraseText }
+    when:
+      RecordChangeApproval: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: not_ready } } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              validation: { valid: $catalogValid }
+              readiness: { ready: false }
+              features: [{ scenarios: [{ effective: { status: approved } }] }]

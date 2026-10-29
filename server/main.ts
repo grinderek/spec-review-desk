@@ -1,3 +1,4 @@
+import { reconcileInitiativeOwnerEffects } from './initiative-owner-effects.ts'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -5,6 +6,8 @@ import { serve } from '@hono/node-server'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { startRouter } from './router-runtime.ts'
 import { ApplyService } from './apply.ts'
+import { recoverChangeApproval } from './approval-effects.ts'
+import { recoverInitiativeCreations } from './initiative-create.ts'
 import { createBaseApp } from './app.ts'
 import { configPathFromArgs, loadConfig } from './config.ts'
 import { type ChangeRef, discover, listChanges, listWorktrees, Registry, type WorktreeInfo } from './discovery.ts'
@@ -27,7 +30,7 @@ import { RunnerService } from './runner.ts'
 import { DockerSandbox, type Sandbox } from './sandbox.ts'
 import { watchChanges } from './watch.ts'
 
-export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number; sandbox?: Sandbox }
+export interface StartOptions { configPath: string; dev?: boolean; token?: string; port?: number; sandbox?: Sandbox; autoRun?: boolean }
 
 async function available(cmd: string, args: string[]): Promise<boolean> {
   try {
@@ -55,11 +58,7 @@ export async function startServer(opts: StartOptions) {
   registerReadRoutes(app, ctx, capabilities)
   const questions = new QuestionService({ config, bus })
   const apply = new ApplyService({ config, bus })
-  const resumeApply = (wt: WorktreeInfo, ref: ChangeRef, id: string) =>
-    apply.resume(wt, ref, id).catch((error: unknown) => {
-      console.error(error)
-      bus.publish(`thread:${id}`, { type: 'done', ok: false })
-    })
+  const resumeApply = (wt: WorktreeInfo, ref: ChangeRef, id: string, text?: string) => apply.resume(wt, ref, id, text)
   const threadDeps = { questions, applyActive: (p: string) => apply.active(p), resumeApply }
   registerThreadRoutes(app, ctx, threadDeps)
   registerReviewRoutes(app, ctx, { questions })
@@ -67,12 +66,16 @@ export async function startServer(opts: StartOptions) {
   const runner = new RunnerService({ profiles: config.runners, bus })
   await Promise.all(config.runners.map((p) => runner.loadLast(p.worktreePath)))
   await Promise.all(config.runners.filter((p) => capabilities.docker || p.execution === 'local').map((p) => runner.refreshUp(p.worktreePath).catch(() => false)))
-  const stopRunner = capabilities.docker || config.runners.some((p) => p.execution === 'local') ? runner.watch() : async () => undefined
+  const stopRunner = opts.autoRun !== false && (capabilities.docker || config.runners.some((p) => p.execution === 'local')) ? runner.watch() : async () => undefined
   registerRunnerRoutes(app, ctx, runner)
   registerCorpusRoutes(app, ctx)
   registerApplyRoutes(app, ctx, { apply })
   for (const wt of registry.all()) {
-    for (const ref of await listChanges(wt)) await apply.reattach(wt, ref).catch((error: unknown) => console.error(error))
+    for (const ref of await listChanges(wt)) {
+      await recoverChangeApproval(wt, ref).catch((error: unknown) => console.error(error))
+      await apply.reattach(wt, ref).catch((error: unknown) => console.error(error))
+      await questions.recover(wt, ref).catch((error: unknown) => console.error(error))
+    }
   }
   // Spec B: initiatives and their sandboxed research/planner/author runs.
   const sandbox = opts.sandbox ?? new DockerSandbox(config.sandbox)
@@ -80,8 +83,12 @@ export async function startServer(opts: StartOptions) {
   registerInitiativeRoutes(app, ctx, { runs, sandbox })
   registerInitiativeDecisionRoutes(app, ctx)
   for (const repo of config.repos) {
+    await recoverInitiativeCreations(config, repo.name).catch((error: unknown) => console.error(error))
     for (const wt of await listWorktrees(repo)) {
-      for (const ini of await listInitiatives(wt)) await runs.failStale({ wt, ini }).catch((error: unknown) => console.error(error))
+      for (const ini of await listInitiatives(wt)) {
+        await reconcileInitiativeOwnerEffects({wt,ini}).catch((error:unknown)=>console.error(error))
+        await runs.failStale({wt,ini}).catch((error:unknown)=>console.error(error))
+      }
     }
   }
   // SERVICES: later tasks create their services and register their routes here.
@@ -93,8 +100,15 @@ export async function startServer(opts: StartOptions) {
   }
   const stopWatching = watchChanges(registry.all(), bus)
   const server = serve({ fetch: app.fetch, hostname: '127.0.0.1', port: config.port })
+  await new Promise<void>((resolve, reject) => {
+    const listening = () => { server.off('error', failed); resolve() }
+    const failed = (error: Error) => { server.off('listening', listening); reject(error) }
+    server.once('listening', listening)
+    server.once('error', failed)
+  })
   const base = opts.dev ? config.devUiOrigin : `http://127.0.0.1:${config.port}`
   console.log(`Spec Review Desk: ${base}/?t=${token}`)
+  if (opts.autoRun === false) console.log('Automatic corpus runs are disabled for this session')
   if (!capabilities.codex) console.warn(`${config.codexBin} not found on PATH - threads and Apply are disabled`)
   if (!capabilities.docker) console.warn('docker not found - Compose runners and initiative agents are unavailable; local runners remain available')
   return {
@@ -111,7 +125,7 @@ export async function startServer(opts: StartOptions) {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
   const args = process.argv.slice(2)
-  Promise.resolve().then(() => startServer({ configPath: configPathFromArgs(args), dev: args.includes('--dev'), token: process.env.SPEC_REVIEW_TOKEN })).catch((error: unknown) => {
+  Promise.resolve().then(() => startServer({ configPath: configPathFromArgs(args), dev: args.includes('--dev'), autoRun: !args.includes('--no-auto-run'), token: process.env.SPEC_REVIEW_TOKEN })).catch((error: unknown) => {
     console.error(error)
     process.exit(1)
   })

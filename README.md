@@ -1,6 +1,6 @@
 # Spec Review Desk
 
-A local review app for behavior-driven OpenSpec changes across the git worktrees of configured
+A local review app for executable behavior contracts across the Git worktrees of configured
 repositories. Codex researches a feature, proposes a slice plan, writes specifications, answers
 review questions and implements approved changes. The owner approves behavior and records product
 decisions before implementation starts.
@@ -53,10 +53,17 @@ configuration's directory. Paths may also be absolute. No particular repository 
 directory layout or branch name is required. `initiativeBase` defaults to `HEAD`; set an explicit
 Git ref when initiatives should branch from a fixed integration branch.
 
-Desk discovers `schema: behavior-driven` changes under each Git worktree's `openspec/changes`.
-Supported contracts are Gherkin with phrase catalogs and Desk DSL. `runners` is optional; configure
-local or Compose verification for the project's toolchain. Results must use Desk or Cucumber message
-envelopes in `.spec-review/last-run.ndjson`. The example config documents both runner modes.
+Desk discovers native packages under each Git worktree's `desk/changes/<name>/`. Each package has
+`change.yaml` with `version: 1` and `kind: behavior-driven`, plus executable contracts under
+`features/`. Gherkin scenarios require `@id:<stable-id>`; Desk DSL scenarios require `id`.
+The complete relative contract path and stable id form the key, such as `billing/approve.desk.yaml::approve`.
+Titles are display text. Proposal, design and task documents are optional; the Contract docs tab
+renders documentation from the executable contracts.
+
+`runners` is optional; configure local or Compose verification for the project's toolchain.
+Each attempt writes Desk or Cucumber message envelopes to its supplied `DESK_RESULT_FILE` or
+`{resultFile}` argument. Desk captures the complete result in an immutable receipt, bound to the
+attempt and exact source manifest. The example config documents both runner modes.
 
 Workspace usage logs live in `.spec-review/usage` next to the selected config. Credentials default
 to `.env` next to it, while container subscription credentials use `sandbox.authVolume`. Configure
@@ -75,18 +82,20 @@ an already running agent keeps its existing model and effort.
 
 ## Review and implementation
 
-- Renders `openspec/changes/*` with `schema: behavior-driven`: Gherkin scenarios, author notes,
+- Renders native `desk/changes/*` packages: executable contracts, generated documentation, author notes,
   owner decisions, tables and Examples. Step phrases are matched against `STEPS.md` and `NEW_STEPS.md`.
-- Approvals are bound to text hashes. Editing an approved scenario or phrase makes it pending and
-  shows a diff. Uncatalogued steps, unresolved threads and blocking decisions prevent readiness.
+- Scenario approvals are bound to semantic hashes. YAML formatting preserves approval; changed
+  expectations require approval again. Uncatalogued steps, invalid packages, unresolved threads
+  and blocking decisions prevent readiness. Whole-change approval also requires a confirmed Git
+  receipt for the current exact contract sources before Apply can start.
 - Questions use one Codex thread per change. The reviewer has read-only file tools and proposes
   patches in its JSON reply. **Apply & commit** validates and commits a proposed specification patch.
 - Decisions requiring the owner appear in the Decisions inbox. Scenario decisions are recorded in
-  the agent's patch; change-wide decisions are written to `decisions.md` by the Desk.
-- **Record approval**, then **Apply**, starts Codex detached. It reads the approved OpenSpec change,
+  the agent's patch; change-wide decisions project into `decisions.md` from confirmed journal facts.
+- **Record approval**, then **Apply**, starts Codex detached. It reads the approved native package,
   implements its scenarios, runs the permitted checks and commits. It can stop for owner decisions
   and resume after they are recorded or dismissed. Stop and re-apply remain available.
-- The configured corpus runs locally or in its warm Docker container on file changes.
+- The configured corpus runs locally or in a managed Compose container on file changes.
 
 Every agent runs through `codex exec --json --output-schema <file>`. Replies are validated again on
 the server, including rules that JSON Schema cannot express. An invalid reply is retried once in
@@ -96,11 +105,11 @@ messages and tool events arrive. A turn is successful only after `turn.completed
 
 ## New features and research
 
-**+ New feature** creates `openspec/initiatives/<name>/` with a brief, inputs, decisions and a plan,
+**+ New feature** creates `desk/initiatives/<name>/` with a brief, inputs, decisions and a plan,
 in an existing worktree or a new `.codex/worktrees/<name>` on branch `plan/<name>`.
 
 1. Add a brief and inputs (Markdown, PDF or images).
-2. The planner proposes 1–12 slices in dependency order. Edit or re-plan, then approve.
+2. The planner proposes 1-12 slices in dependency order. Edit or re-plan, then approve.
 3. **Propose sN** runs an author against a clean room. The Desk vets the output, moves the resulting
    behavior-driven change into the worktree and commits it.
 4. Review the change's scenarios and phrases, approve, and run Apply.
@@ -165,33 +174,30 @@ The browser image is required only for a read phase. Without it research can sea
 for the owner to build the image. In a proxy environment, builds accept an optional BuildKit
 `proxy_ca` secret; `NODE_IMAGE` can select a trusted mirror of `node:24-slim`.
 
-## Migration from Claude
+## Durable state and recovery
 
-Existing specifications, reviews, decisions and git worktrees remain readable. Old Apply logs are
-still decoded. Claude conversations cannot become Codex threads; missing threads are rebuilt from
-files for questions. Finish or stop running Claude agents before switching runtimes. Retained
-initiative runs waiting for their owner should be restarted under Codex rather than resumed with
-an old Claude session ID.
+Review business facts live in `review.events.jsonl`; initiative facts live in
+`initiative.events.jsonl`. YAML, brief/input views and `decisions.md` are derived projections.
+Verification and initiative creation use worktree journals under `.spec-review/`. Every stream is
+strictly validated. Unsupported history and snapshot-only state are refused; no compatibility
+import runs implicitly.
 
-Set `codexBin: codex`, an available Codex `model`, rebuild the agent image and run `npm run agent:login`. Existing
-worktree paths in configuration need not move. New worktrees use `.codex/worktrees`. Room assembly
-prefers `AGENTS.md` and `.agents/rules/testing.md`, with legacy `CLAUDE.md` and
-`.claude/rules/testing.md` accepted as migration inputs.
-
-State lives in `review.yaml`, `initiative.yaml` and `decisions.md`, next to the specifications.
-Run logs and temporary files live under gitignored `.spec-review/`. A patch commit SHA is written
-back to `review.yaml` after that commit, so it can remain modified until the next decision commits it.
+Commands record intent before starting an agent or Git effect. Runtime receipts record process
+identity and captured results; the scope journal records their acceptance. Restart recovery
+observes existing work and never blindly runs it again. Unknown outcomes block conflicting work
+until the owner acts explicitly and prior processes or containers are proven inactive. New
+worktrees use `.codex/worktrees`; logs, receipts and private content artifacts use `.spec-review/`.
 
 ## Developing the Desk with Desk DSL
 
-The experimental YAML contract corpus in [features/](features/) runs through real HTTP handlers
+The YAML contract corpus in [features/](features/) runs through real HTTP handlers
 and review approval event history. `npm run test:spec` executes it without an LLM; `npm run desk`
 opens this repository in the Desk using `config.desk.yaml` and its local runner. Proposed contracts
-are in `openspec/changes/try-desk-dsl` for owner review. The UI shows YAML, event/command summaries,
+are in `desk/changes/` for owner review. The UI shows YAML, event/command summaries,
 hash-bound approvals and verification results. Gherkin projects remain supported.
 
 See [the language and migration boundary](docs/method/desk-dsl.md). Scenario, phrase and whole-change approvals are
-replayed from `review.events.jsonl`; discussion, decision and agent-run state keeps its existing storage. `npm test` runs
+replayed from `review.events.jsonl` together with discussions, decisions, patches and reviewer/Apply runs. `npm test` runs
 the product DSL corpus and any owner-requested Vitest tests. The old tests remain deleted;
 AGENTS.md permits writing or restoring tests only at the owner’s explicit request. The owner corpus covers review, discussions, decisions, initiatives, research,
 implementation and verification. See [the testing boundary](docs/method/testing.md).
@@ -210,7 +216,7 @@ npm run smoke:codex
 npm run smoke:agent-auth # offline Docker credential/locking check; build the image first
 ```
 
-The contract runner and Playwright use a fake Codex emitting native thread/item/turn JSONL, fake OpenSpec and
+The contract runner and Playwright use a fake Codex emitting native thread/item/turn JSONL and
 FakeSandbox. Browser tests cover review, decisions, planning, authoring and live updates; the
 research search/domain-approval lifecycle is covered by the product contracts.
 `smoke:codex` runs the real CLI against a local Responses API fixture, checks an actual scoped MCP
@@ -225,7 +231,6 @@ Known high-impact tasks or descriptions over 12,000 characters choose Sol/high. 
 permitted only above `routing.minLunaProbability` (pilot default 0.55, not an accuracy claim).
 Ambiguous Luna answers fall back to Sol/medium; missing, invalid or timed-out router replies
 to Sol/high. The choice is persisted with the run and reused across retries and resumes.
-Legacy resumed runs adopt their configured role profile instead of being rerouted.
 
 The endpoint defaults to http://127.0.0.1:8009. Optional `routing.startCommand` is an argv
 array for a local launcher. Desk starts it if unavailable and logs runtime output next to

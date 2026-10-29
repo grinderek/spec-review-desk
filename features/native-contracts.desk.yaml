@@ -1,0 +1,53 @@
+version: 1
+feature: Native changes use executable contracts and stable identities
+scenarios:
+  - id: require-native-change-metadata
+    scenario: Refuse whole-change approval when its native package declaration is unavailable
+    cases:
+      - { name: declaration lost, mode: missing }
+      - { name: unsupported package kind, mode: unsupported }
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeMetadataChanged: { mode: $mode }
+    when:
+      RecordChangeApproval: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: not_ready } } }
+      reads:
+        - path: $change
+          response: { status: 200, body: { validation: { valid: false }, readiness: { ready: false } } }
+  - id: retain-identity-after-title-change
+    scenario: Renaming a contract preserves its owner discussion and requires review of the new meaning
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ReviewThreadOpened: { id: t_owner, anchor: scenario, ref: $key }
+      - ScenarioRetitled: { title: A clearer contract title }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          features: [{ scenarios: [{ key: $key, title: A clearer contract title, effective: { status: pending } }] }]
+          review: { threads: [{ id: t_owner, anchor: scenario, ref: $key }] }
+          validation: { valid: true }
+  - id: distinguish-nested-contract-paths
+    scenario: Contracts with the same filename and scenario ID remain distinct in different folders
+    given:
+      - ScenarioDiscovered: { file: features/billing/subject.desk.yaml }
+      - ScenarioDiscovered: { file: features/shipping/subject.desk.yaml }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          validation: { valid: true }
+          features:
+            - { scenarios: [{ key: 'billing/subject.desk.yaml::subject' }] }
+            - { scenarios: [{ key: 'shipping/subject.desk.yaml::subject' }] }

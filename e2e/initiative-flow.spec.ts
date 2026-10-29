@@ -6,7 +6,8 @@ test('New feature → plan → approve → propose s1 → the change appears', a
   await page.getByLabel('Name', { exact: true }).fill('health-score')
   await page.getByLabel('Title', { exact: true }).fill('Business health score')
   await page.getByLabel('Brief', { exact: true }).fill('Score the founder day.')
-  await expect(page.getByLabel('Create will run')).toContainText('worktree add .codex/worktrees/health-score -b plan/health-score initiative-base')
+  await expect(page.getByLabel('Create will run')).toContainText('create the owned branch plan/health-score at initiative-base')
+  await expect(page.getByLabel('Create will run')).toContainText('worktree add .codex/worktrees/health-score plan/health-score')
   await page.getByRole('button', { name: 'Create' }).click()
   await expect(page.getByRole('heading', { name: /health-score/ })).toBeVisible({ timeout: 20_000 })
 
@@ -27,6 +28,7 @@ test('New feature → plan → approve → propose s1 → the change appears', a
   await s1.getByRole('button', { name: 'Propose s1' }).click()
   await expect(s1.locator('.pill')).toHaveText('proposing', { timeout: 20_000 })
   await expect(s1.getByRole('button', { name: 'Stop' })).toBeVisible()
+  await expect(s1.locator('[aria-live="polite"]')).toContainText('Waiting for owner stop.', { timeout: 20_000 })
   await s1.getByRole('button', { name: 'Stop' }).click()
   await expect(s1.locator('.pill')).toHaveText('planned', { timeout: 20_000 })
   await expect(s1.getByRole('button', { name: 'Propose s1' })).toBeVisible()

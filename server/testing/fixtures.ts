@@ -11,6 +11,7 @@ Feature: Threads are weighed for the inbox pillar
   # The replied thread is not a candidate, so no verdict is asked for.
   # Owner decision 2026-09-23: ONE reason, \`resolved\`, for "the ball is not in the
   # founder's court"; outbound_latest is retired.
+  @id:founder-reply-resolves
   Scenario: The founder's reply resolves a waiting thread
     Given the founder's mailbox holds these threads:
       | from           | arrived          |
@@ -19,6 +20,7 @@ Feature: Threads are weighed for the inbox pillar
     Then the response includes:
       | components.inbox.display_score | 100 |
 
+  @id:waiting-thread-age
   Scenario Outline: A waiting thread is weighted by its age
     Given the founder's mailbox holds these threads:
       | from           | arrived   |
@@ -81,18 +83,4 @@ Two new phrases.
 | Phrase | Meaning | Event |
 |---|---|---|
 | \`the founder's inbox read lists {int} message(s)\` | GET /api/gmail/messages returns exactly that many items. | \`InboxRead\` |
-`
-
-export const SPEC_MD = `## ADDED Requirements
-
-### Requirement: Replies resolve threads
-The system SHALL treat a thread whose latest message is the founder's as resolved.
-
-#### Scenario: The founder's reply resolves a waiting thread
-- **WHEN** the founder's reply is the latest message
-- **THEN** the thread is excluded as resolved
-
-#### Scenario: A waiting thread is weighted by its age
-- **WHEN** a thread waits
-- **THEN** its weight follows its business-hour age
 `

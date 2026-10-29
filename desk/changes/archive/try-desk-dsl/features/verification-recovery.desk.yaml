@@ -1,0 +1,164 @@
+version: 1
+feature: Verification results belong to one execution and its source version
+scenarios:
+  - id: block-writes-during-uncertain-verification
+    scenario: An uncertain verification blocks implementation in its worktree
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationOutcomeUncertain: {}
+    when:
+      StartApply: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: execution_pending } } }
+  - id: block-approval-during-uncertain-verification
+    scenario: An uncertain verification blocks a new Git approval commit in its worktree
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - VerificationPrepared: { status: passed }
+      - VerificationOutcomeUncertain: {}
+    when:
+      RecordChangeApproval: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: execution_pending } } }
+  - id: block-verification-during-implementation
+    scenario: Verification waits while implementation is running in the same worktree
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - VerificationPrepared: { status: passed }
+      - ApplyRunning: {}
+    when:
+      RunVerification: {}
+    then:
+      stream: verification
+      events: []
+      response: { status: 409, body: { error: { code: apply_running } } }
+  - id: reject-incomplete-verification
+    scenario: A partial or foreign report cannot replace the previous successful run
+    cases:
+      - { name: missing terminal record, mode: incomplete }
+      - { name: another source version, mode: foreign }
+      - { name: repeated case result, mode: duplicate }
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationCompleted: {}
+      - VerificationPrepared: { status: passed, mode: $mode }
+    when:
+      RunVerification: {}
+    then:
+      stream: verification
+      bind: { run: response.body.state.runId }
+      events:
+        - VerificationSourceCaptured: { runId: $run }
+        - ExecutionQueued: { request: { id: $run, role: verification } }
+        - ExecutionAttemptRequested: { runId: $run }
+        - ExecutionAttemptObserved: { runId: $run }
+        - ExecutionReceiptAccepted: { runId: $run }
+        - VerificationReportRejected: { runId: $run }
+        - ExecutionSettled: { runId: $run, outcome: failed }
+      response: { status: 202 }
+      reads:
+        - path: $runner
+          response: { status: 200, body: { state: { outcome: failed, running: false, result: null } } }
+  - id: recover-verification-receipt
+    scenario: Restart accepts an already completed verification without running it again
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationReceiptAvailable: {}
+    when:
+      RestartVerification: {}
+    then:
+      stream: verification
+      bind: { run: response.body.state.runId }
+      events:
+        - ExecutionReceiptAccepted: { runId: $run }
+        - VerificationReportAccepted: { runId: $run, sourceUnchanged: true }
+        - ExecutionSettled: { runId: $run, outcome: done }
+      response:
+        status: 200
+        body: { state: { outcome: done, running: false, stale: false, result: { totals: { passed: 1, failed: 0, other: 0 } } } }
+  - id: rebuild-verification-projection
+    scenario: Rebuilding a lost verification view preserves the recorded result and history
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationCompleted: {}
+      - VerificationProjectionLost: {}
+    when:
+      RestartVerification: {}
+    then:
+      stream: verification
+      events: []
+      response:
+        status: 200
+        body: { state: { outcome: done, running: false, stale: false, result: { totals: { passed: 1, failed: 0, other: 0 } } } }
+  - id: mark-verification-source-drift
+    scenario: A successful verification becomes stale after its source inputs change
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationCompleted: {}
+      - VerificationSourceChanged: {}
+    when:
+      InspectVerification: {}
+    then:
+      stream: verification
+      events: []
+      response:
+        status: 200
+        body: { state: { outcome: done, running: false, stale: true } }
+  - id: recover-queued-verification
+    scenario: Restart preserves a requested rerun after accepting the previous result
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationReceiptAvailable: {}
+      - VerificationRerunPending: {}
+    when:
+      RestartVerification: {}
+    then:
+      stream: verification
+      bind: { run: response.body.state.runId }
+      events:
+        - ExecutionReceiptAccepted: { runId: $previousVerification }
+        - VerificationReportAccepted: { runId: $previousVerification, sourceUnchanged: true }
+        - ExecutionSettled: { runId: $previousVerification, outcome: done }
+        - VerificationSourceCaptured: { runId: $run }
+        - ExecutionQueued: { request: { id: $run, role: verification } }
+        - ExecutionAttemptRequested: { runId: $run }
+        - VerificationRerunStarted: { requestId: $verificationRerun, runId: $run }
+        - ExecutionAttemptObserved: { runId: $run }
+        - ExecutionReceiptAccepted: { runId: $run }
+        - VerificationReportAccepted: { runId: $run, sourceUnchanged: true }
+        - ExecutionSettled: { runId: $run, outcome: done }
+      response: { status: 200, body: { state: { outcome: done, running: false, queued: false, stale: false } } }
+  - id: cancel-queued-verification
+    scenario: Stop cancels the saved rerun together with the active verification
+    given:
+      - ScenarioDiscovered: {}
+      - VerificationPrepared: { status: passed }
+      - VerificationReceiptAvailable: {}
+      - VerificationRerunPending: {}
+    when:
+      StopVerification: {}
+    then:
+      stream: verification
+      events:
+        - VerificationRerunCancelled: { requestId: $verificationRerun }
+        - ExecutionStopRequested: { runId: $previousVerification }
+        - ExecutionReceiptAccepted: { runId: $previousVerification }
+        - VerificationReportAccepted: { runId: $previousVerification, commandError: Stopped by the owner }
+        - ExecutionSettled: { runId: $previousVerification, outcome: stopped }
+      response: { status: 202 }
+      reads:
+        - path: $runner
+          response: { status: 200, body: { state: { outcome: stopped, running: false, queued: false } } }

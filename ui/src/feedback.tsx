@@ -36,7 +36,7 @@ export const useToast = () => useContext(ToastContext).show
 // Runs a mutation, then refreshes the screen, and only then reports success: the toast never
 // appears over stale data (Desk fixes item 1). A failure is reported at once; the screen is still
 // refreshed, since a failed action may have changed something before it failed.
-export function useAction() {
+export function useAction(refresh: 'screen' | 'runner' = 'screen') {
   const client = useQueryClient()
   const { show, busy } = useContext(ToastContext)
   return useCallback(
@@ -44,17 +44,17 @@ export function useAction() {
       busy(1)
       try {
         await fn()
-        await refreshAfterAction(client)
+        await refreshAfterAction(client, undefined, refresh === 'runner')
         if (success) show(success, 'ok')
         return true
       } catch (error) {
         show(error instanceof Error ? error.message : String(error), 'bad')
-        void refreshAfterAction(client)
+        void refreshAfterAction(client, undefined, refresh === 'runner')
         return false
       } finally {
         busy(-1)
       }
     },
-    [client, show, busy],
+    [client, show, busy, refresh],
   )
 }

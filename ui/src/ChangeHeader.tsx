@@ -1,4 +1,5 @@
 import { type ReactNode, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import type { ChangeView } from '../../server/change-view.ts'
 import type { CorpusReport } from '../../server/corpus.ts'
 import type { RunnerState } from '../../server/runner.ts'
@@ -7,19 +8,23 @@ import { gateCounts } from './decision-view.ts'
 import { useAction } from './feedback.tsx'
 
 function RunnerStat({ id, runner, docker }: { id: ChangeId; runner: RunnerState | null; docker: boolean }) {
-  const act = useAction()
+  const act = useAction('runner')
   let value: ReactNode
   if (!runner) value = <span className="pill">no runner profile</span>
-  else if (runner.running) value = <span className="pill p-thread">running…</span>
+  else if (runner.running || runner.queued) value = <><span className="pill p-thread">{runner.running ? runner.queued ? 'running; rerun queued' : 'running' : 'rerun queued'}</span><button className="btn" onClick={() => void act(() => api.stopCorpus(id.wt))}>Stop</button></>
   else if (runner.up === false) value = (
     <>
       <span className="pill r-failed">runner off</span>
       <button className="btn" disabled={!docker && runner?.execution !== 'local'} onClick={() => void act(() => api.startRunner(id.wt), 'Starting the container…')}>Start</button>
     </>
   )
+  else if (runner.outcome === 'stopped') value = <><span className="pill">Проверка остановлена</span><button className="btn" onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button></>
+  else if (runner.outcome === 'uncertain' || runner.stale) value = (
+    <><span className="pill r-failed">{runner.stale ? 'sources changed' : 'outcome unknown'}</span><button className="btn" onClick={() => void act(() => api.runCorpus(id.wt))}>Run again</button></>
+  )
   else if (runner.result) value = (
     <>
-      <span className={`dot ${runner.result.totals.failed ? 'bad' : 'ok'}`} />
+      <span className={`dot ${runner.outcome === 'done' ? 'ok' : 'bad'}`} />
       {runner.result.totals.passed} green · {runner.result.totals.failed} red{runner.result.totals.other ? ` · ${runner.result.totals.other} other` : ''}
       <button className="btn" disabled={!docker && runner?.execution !== 'local'} onClick={() => void act(() => api.runCorpus(id.wt))}>Run now</button>
     </>
@@ -29,7 +34,7 @@ function RunnerStat({ id, runner, docker }: { id: ChangeId; runner: RunnerState 
     <div>
       <div className="k">Corpus run{runner?.lastRunAt ? ` · ${new Date(runner.lastRunAt).toLocaleTimeString()}` : ''}</div>
       <div className="v">{value}</div>
-      {runner?.error ? <div className="hash">{runner.error}</div> : null}
+      {runner?.error ? <details className="contract-details"><summary>Подробности проверки</summary><p className="hash">{runner.error}</p></details> : null}
     </div>
   )
 }
@@ -61,57 +66,61 @@ export interface ChangeHeaderProps {
   corpus: CorpusReport | undefined
   runner: RunnerState | null
   capabilities: Capabilities | undefined
+  onVerification: () => void
 }
 
-export function ChangeHeader({ id, view, corpus, runner, capabilities }: ChangeHeaderProps) {
+export function ChangeHeader({ id, view, corpus, runner, capabilities, onVerification }: ChangeHeaderProps) {
   const act = useAction()
+  const workspace = useQuery({ queryKey: ['apply-workspace', id.wt, id.name], queryFn: () => api.applyWorkspace(id), enabled: !view.archived })
   const scenarios = view.features.flatMap((f) => f.scenarios)
   const approved = scenarios.filter((s) => s.effective.status === 'approved').length
-  const phrasesApproved = view.phrases.filter((p) => p.effective.status === 'approved').length
   const openThreads = view.review.threads.filter((t) => t.status !== 'resolved' && t.anchor !== 'apply').length
   const decisionCounts = gateCounts(view.decisions)
-  const running = view.review.apply_runs.some((r) => r.outcome === 'running')
+  const running = view.review.apply_runs.some((r) => r.outcome === 'running' || r.outcome === 'uncertain')
   const drift = corpus?.drift ?? []
   const recorded = view.review.approved_at !== null
-  const jk = view.joinKey
+  const latestApply = view.review.apply_runs.at(-1)
+  const applyLabels = { running: 'Выполняется', done: 'Завершен', failed: 'Ошибка', needs_owner: 'Нужно решение владельца', stopped: 'Остановлен', uncertain: 'Результат неизвестен' }
   return (
     <div className="head">
       <div className="crumbs">{view.repo} · {view.branch ?? 'detached'} · {view.relDir}</div>
-      <h1>{view.name}{view.archived ? <span className="pill">archived</span> : null}</h1>
+      <h1>{view.metadata?.title ?? view.name}{view.archived ? <span className="pill">archived</span> : null}</h1>
       <div className="gate">
         <div><div className="k">Scenarios approved</div><div className="v">{approved} / {scenarios.length}</div></div>
-        <div><div className="k">New phrases approved</div><div className="v">{phrasesApproved} / {view.phrases.length}</div></div>
+        <div><div className="k">Шаблоны шагов</div><div className="v">{view.phrases.length}</div></div>
         <div><div className="k">Open threads</div><div className="v">{openThreads}</div></div>
         <div><div className="k">Open decisions</div><div className="v">{decisionCounts.open} · {decisionCounts.blocking} blocking</div></div>
         <RunnerStat id={id} runner={runner} docker={capabilities?.docker ?? false} />
+        {latestApply ? <div role="status"><div className="k">Последний Apply</div><div className="v"><span className={`pill ${latestApply.outcome === 'done' ? 'r-passed' : latestApply.outcome === 'running' ? 'p-thread' : 'r-failed'}`}>{applyLabels[latestApply.outcome]}</span><button className="btn" onClick={onVerification}>Открыть отчет Apply</button></div></div> : null}
       </div>
       <div className="gatebar">
-        <span className={`ready${view.readiness.ready ? ' on' : ''}`}>{recorded ? `approved ${view.review.approved_at!.slice(0, 10)}` : 'ready for Codex Apply'}</span>
+        <span className={`ready${view.readiness.ready ? ' on' : ''}`}>{recorded ? view.approvalCommitted ? `approved ${view.review.approved_at!.slice(0, 10)}` : 'approval requires a commit for current contracts' : 'ready for Codex Apply'}</span>
         {view.readiness.ready ? null : <small>Blocked: {view.readiness.reasons.join(' · ')}</small>}
-        {view.readiness.ready && !view.archived && (!recorded || view.uncommittedReview) ? (
+        {view.readiness.ready && !view.archived && (!view.approvalCommitted || view.uncommittedReview) ? (
           <button className="btn ok" onClick={() => void act(() => api.recordApproval(id), 'Approval recorded and committed')}>Record approval</button>
         ) : null}
         {recorded && !view.archived ? (
-          <button className="btn pri" disabled={!view.readiness.ready || running || !capabilities?.codex} onClick={() => void act(() => api.startApply(id), 'Apply started')}>Apply</button>
+          <button className="btn pri" disabled={!view.readiness.ready || !view.approvalCommitted || running || !capabilities?.codex} onClick={() => void act(() => api.startApply(id), 'Apply started').then(ok => { if (ok) onVerification() })}>Apply</button>
         ) : null}
         {running && !view.archived ? <button className="btn bad" onClick={() => void act(() => api.stopApply(id), 'Stopping the Apply run…')}>Stop</button> : null}
         {drift.length && !view.archived ? (
-          <button className="btn" disabled={running || !capabilities?.codex} onClick={() => void act(() => api.reapply(id), 'Re-apply started')}>Re-apply {drift.length} changed scenario{drift.length > 1 ? 's' : ''}</button>
+          <button className="btn" disabled={!view.readiness.ready || !view.approvalCommitted || running || !capabilities?.codex} onClick={() => void act(() => api.reapply(id), 'Re-apply started').then(ok => { if (ok) onVerification() })}>Re-apply {drift.length} changed scenario{drift.length > 1 ? 's' : ''}</button>
         ) : null}
       </div>
       <div className="warnings">
-        {view.errors.map((e) => <div key={e.file} className="err">{e.message}</div>)}
-        {view.reviewErrors ? <div className="err">review.yaml is invalid and will not be written: {view.reviewErrors.join('; ')}</div> : null}
-        {jk.ok ? null : (
-          <div>
-            Join key: {jk.missingInFeatures.length ? `spec.md titles without a scenario: ${jk.missingInFeatures.join(', ')}. ` : ''}
-            {jk.missingInSpecs.length ? `scenarios without a spec.md line: ${jk.missingInSpecs.join(', ')}. ` : ''}
-            {jk.duplicateTitles.length ? `duplicate titles: ${jk.duplicateTitles.join(', ')}.` : ''}
-          </div>
-        )}
+        {!view.archived ? <details className="contract-details"><summary>Доступ Apply к продукту</summary>
+          {workspace.isPending ? <p>Загружается состав продукта...</p> : workspace.error ? <p className="err">{workspace.error.message}</p> : <>
+            <p>Apply может читать и изменять файлы этих компонентов:</p>
+            <ul>{workspace.data.roots.map(root => <li key={root.name}><strong>{root.name}</strong>: <code>{root.path}</code>{root.git ? '' : ' (папка без Git)'}</li>)}</ul>
+            <p>Команды проверки и подготовки окружения:</p>
+            <ul>{workspace.data.checks.map(check => <li key={check.name}><strong>{check.name}</strong>: <code>{check.argv.join(' ')}</code> (до {Math.ceil(check.timeoutMs / 60_000)} мин.)</li>)}</ul>
+            <p>Локальные коммиты реализации разрешены. Push и выкладка требуют отдельного действия.</p>
+          </>}
+        </details> : null}
+        {view.validation.problems.map((problem, index) => <div key={`${problem.file}:${problem.code}:${index}`} className="err">{problem.file}{problem.line ? `:${problem.line}` : ''}{problem.scenarioId ? ` (${problem.scenarioId})` : ''}: {problem.message}</div>)}
+        {view.reviewErrors ? <div className="err">Review history is invalid and cannot accept commands: {view.reviewErrors.join('; ')}</div> : null}
         {view.orphans.scenarios.map((k) => <OrphanRow key={k} id={id} view={view} section="scenarios" entryKey={k} />)}
-        {view.orphans.phrases.map((k) => <OrphanRow key={k} id={id} view={view} section="phrases" entryKey={k} />)}
-        {view.uncommittedReview ? <div>Review state uncommitted — it is committed with the next decision or with "Record approval".</div> : null}
+        {view.uncommittedReview ? <div>Review history is uncommitted - it is committed with the next decision or with "Record approval".</div> : null}
       </div>
     </div>
   )

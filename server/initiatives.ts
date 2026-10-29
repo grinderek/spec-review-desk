@@ -1,17 +1,21 @@
-import { readdir, readFile, stat } from 'node:fs/promises'
+import { INITIATIVE_ROOT } from './change-package.ts'
+import { lstat, readFile, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { isDeepStrictEqual } from 'node:util'
 import type { DecisionView } from './change-view.ts'
 import { loadChangeView } from './change-view.ts'
 import { corpusReport } from './corpus.ts'
 import { isActive } from './decision-model.ts'
-import { DECISIONS_FILE, type DecisionLogEntry, parseDecisionLog } from './decisions-md.ts'
+import { type DecisionLogEntry, parseDecisionLog, renderDecisionLog } from './decisions-md.ts'
 import { type ChangeRef, listChanges, type WorktreeInfo } from './discovery.ts'
 import { HttpError } from './errors.ts'
 import { BRIEF_FILE } from './initiative-brief.ts'
-import { isDirty } from './git.ts'
+import { showFile } from './git.ts'
 import { INITIATIVE_FILE, type InitiativeDoc, type InputEntry, isInitiativeName, readInitiative, type Slice } from './initiative-store.ts'
 import { readReview } from './review-store.ts'
+import { INITIATIVE_EVENTS_FILE, projectInitiative, readInitiativeStream, type InitiativeEvent } from './initiative-events.ts'
 import { deriveStatus, proposeBlocker, type SliceStatus } from './slice-plan.ts'
+import { nativeScopeDirectories } from './native-path.ts'
 
 // Spec B §3: an initiative is found in any worktree of a configured repo; slice statuses are
 // derived from the changes, their review.yaml, their Apply runs and the author runs.
@@ -49,7 +53,7 @@ export interface InitiativeSummary {
   running: number
 }
 
-const INITIATIVES = path.join('openspec', 'initiatives')
+const INITIATIVES = INITIATIVE_ROOT
 
 async function readOptional(file: string): Promise<string | null> {
   try {
@@ -60,16 +64,14 @@ async function readOptional(file: string): Promise<string | null> {
 }
 
 export async function listInitiatives(wt: WorktreeInfo): Promise<InitiativeRef[]> {
-  let names: string[]
-  try {
-    names = (await readdir(path.join(wt.path, INITIATIVES), { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name).sort()
-  } catch {
-    return []
-  }
-  const found = await Promise.all(names.filter(isInitiativeName).map(async (name): Promise<InitiativeRef[]> => {
+  const names=await nativeScopeDirectories(path.join(wt.path,INITIATIVES),isInitiativeName)
+  const found = await Promise.all(names.map(async (name): Promise<InitiativeRef[]> => {
     const dir = path.join(wt.path, INITIATIVES, name)
-    const present = await stat(path.join(dir, INITIATIVE_FILE)).then(() => true, () => false)
-    return present ? [{ worktreeId: wt.id, name, dir, relDir: `openspec/initiatives/${name}` }] : []
+    let journal
+    try { journal=await lstat(path.join(dir,INITIATIVE_EVENTS_FILE)) }
+    catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return [];throw error}
+    if(!journal.isFile()||journal.isSymbolicLink())throw new Error(`Native initiative journal is not a regular file: ${path.join(dir,INITIATIVE_EVENTS_FILE)}`)
+    return [{ worktreeId: wt.id, name, dir, relDir: `${INITIATIVE_ROOT}/${name}` }]
   }))
   return found.flat()
 }
@@ -92,10 +94,10 @@ async function appliedChange(wt: WorktreeInfo, ref: ChangeRef): Promise<boolean>
 async function sliceFacts(wt: WorktreeInfo, doc: InitiativeDoc, changes: readonly ChangeRef[], slice: Slice) {
   // An author waiting for the owner still holds its slice (final review I2): the slice stays
   // proposing, so it cannot be proposed, edited or removed again until the run ends or is stopped.
-  const authorRunning = doc.runs.some((r) => r.kind === 'author' && r.slice === slice.id && (r.outcome === 'running' || r.outcome === 'needs_owner'))
+  const authorRunning = doc.runs.some((r) => r.kind === 'author' && r.slice === slice.id && ['running','queued','uncertain','needs_owner'].includes(r.outcome))
   const active = slice.change ? changes.find((c) => !c.archived && c.name === slice.change) : undefined
   // An archived change was applied before it was archived.
-  const archived = slice.change ? changes.some((c) => c.archived && c.name.endsWith(`-${slice.change}`)) : false
+  const archived = slice.change ? changes.some((c) => c.archived && c.name === slice.change) : false
   if (!active) return { authorRunning, changeExists: archived, approved: archived, applied: archived }
   const approved = (await readReview(active.dir)).approved_at !== null
   return { authorRunning, changeExists: true, approved, applied: approved && (await appliedChange(wt, active)) }
@@ -107,11 +109,27 @@ export async function sliceStatuses(wt: WorktreeInfo, doc: InitiativeDoc): Promi
   return Object.fromEntries(entries)
 }
 
+function businessState(events:readonly InitiativeEvent[]):unknown {
+  const {name,title,repo,created_at,inputs,research,plan}=projectInitiative(events)
+  const brief=events.reduce<string|null>((previous,{event})=>event.type==='InitiativeCreated'?event.brief:event.type==='InitiativeBriefSaved'?event.blob:previous,null)
+  return {name,title,repo,created_at,brief,inputs,research,plan}
+}
+async function uncommittedBusiness(wt:WorktreeInfo,ref:InitiativeRef):Promise<boolean> {
+  const committed=await showFile(wt.path,'HEAD',`${ref.relDir}/${INITIATIVE_EVENTS_FILE}`)
+  if(!committed)return true
+  try {
+    const events=committed.split('\n').filter(Boolean).map(line=>JSON.parse(line) as InitiativeEvent)
+    // Git completion receipts and run observations are appended after commits. Their physical
+    // journal/YAML dirtiness is not an uncommitted owner edit; compare business facts instead.
+    return !isDeepStrictEqual(businessState(events),businessState((await readInitiativeStream(ref.dir)).events))
+  }catch{return true}
+}
+
 export async function loadInitiativeView(wt: WorktreeInfo, ref: InitiativeRef): Promise<InitiativeView> {
   const doc = await readInitiative(ref.dir)
   const statuses = await sliceStatuses(wt, doc)
   const review = await readReview(ref.dir)
-  const decisionsText = await readOptional(path.join(ref.dir, DECISIONS_FILE))
+  const decisionsText = renderDecisionLog(review, ref.name)
   const inputs = await Promise.all(doc.inputs.map(async (i) => ({
     ...i,
     present: await stat(path.join(ref.dir, 'inputs', i.file)).then(() => true, () => false),
@@ -132,7 +150,7 @@ export async function loadInitiativeView(wt: WorktreeInfo, ref: InitiativeRef): 
     decisionLog: decisionsText ? parseDecisionLog(decisionsText) : [],
     openDecisions: review.decisions.filter(isActive).length,
     blockingDecisions: review.decisions.filter((d) => d.blocking && isActive(d)).length,
-    uncommitted: await isDirty(wt.path, ref.relDir),
+    uncommitted: await uncommittedBusiness(wt,ref),
   }
 }
 

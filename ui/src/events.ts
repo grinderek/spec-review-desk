@@ -24,12 +24,12 @@ export function useEventStream(topic: string | null, onMessage: (message: Stream
 export function useInvalidation(): void {
   const client = useQueryClient()
   useEventStream('*', (message) => {
-    if (message.topic === 'files' || message.topic === 'change') {
-      for (const key of ['change', 'changes', 'corpus']) void client.invalidateQueries({ queryKey: [key] })
-    }
-    if (message.topic === 'runner') void client.invalidateQueries({ queryKey: ['runner'] })
-    if (message.topic === 'initiative' || message.topic === 'files') {
-      for (const key of ['initiative', 'initiatives', 'changes']) void client.invalidateQueries({ queryKey: [key] })
-    }
+    const keys = message.topic === 'files' ? ['change', 'changes', 'corpus', 'rules', 'initiative', 'initiatives']
+      : message.topic === 'change' ? ['change', 'changes', 'corpus', 'rules']
+      : message.topic === 'initiative' ? ['initiative', 'initiatives', 'changes']
+      : message.topic === 'runner' ? ['runner'] : []
+    const data = message.data as { worktreeId?: string } | null
+    void client.invalidateQueries({ predicate: query => keys.includes(String(query.queryKey[0]))
+      && (!data?.worktreeId || query.queryKey.length === 1 || query.queryKey[1] === data.worktreeId) })
   })
 }

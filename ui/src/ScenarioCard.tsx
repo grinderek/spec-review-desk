@@ -9,6 +9,7 @@ import { type DiffLine, lineDiff } from './diff.ts'
 import { useAction } from './feedback.tsx'
 import { cssId } from './keys.ts'
 import { DiffView, StepLines } from './StepLines.tsx'
+import { ContractDetails, ContractReading } from './ContractReading.tsx'
 
 export function StatusPill({ effective }: { effective: Effective }) {
   const label = effective.status === 'changes_requested' ? 'changes requested' : effective.changedSinceApproval ? 'pending · changed' : effective.status
@@ -69,7 +70,7 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
       <div className="shead">
         <button className="stoggle" aria-expanded={open} onClick={onToggle}>
           <span className="kwt">{s.kind}:</span>
-          <span className="t">{s.title}</span>
+          <span className="t">{s.reading?.title ?? s.title}</span>
         </button>
         {s.decisions.length ? <span className="pill p-dec">{s.decisions.length} decision{s.decisions.length > 1 ? 's' : ''}</span> : null}
         {thread ? <span className="pill p-thread">thread · {thread.status}</span> : null}
@@ -93,7 +94,7 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
               {s.shape.warnings.map((w) => <div key={w}>{w}</div>)}
             </div>
           ) : null}
-          <ShapeLine shape={s.shape} />
+          {s.reading ? <ContractReading reading={s.reading} /> : <ShapeLine shape={s.shape} />}
           {s.decisions.map((d) => (
             <div className="decision" key={d.line}>
               <b>Owner decision {d.date}{d.tag ? ` (${d.tag})` : ''}{d.commit ? ` · ${d.commit}` : ''}</b>
@@ -102,8 +103,8 @@ export function ScenarioCard({ id, scenario: s, run, corpus, thread, open, selec
           ))}
           {s.notes.map((note, i) => <div className="note" key={i}>{note}</div>)}
           <div className="code">
-            {s.tags.includes('desk-dsl') ? <pre data-desk-contract>{s.source}</pre> : <StepLines steps={s.steps} />}
-            {s.examples.map((examples, i) => (
+            {s.reading ? <ContractDetails scenario={s}>{!s.tags.includes('desk-dsl') ? <ShapeLine shape={s.shape} /> : null}</ContractDetails> : <StepLines steps={s.steps} />}
+            {(s.reading?.variants ? [] : s.examples).map((examples, i) => (
               <div key={i}>
                 <div className="step"><span className="kw">Examples:</span><span>{examples.name}</span></div>
                 <table className="dt">

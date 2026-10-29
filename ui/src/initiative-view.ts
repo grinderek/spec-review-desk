@@ -46,12 +46,12 @@ export interface PreviewFields { name: string; repoPath: string; where: 'new' | 
 export function createPreview(f: PreviewFields): string[] {
   if (!f.name) return []
   const first = f.where === 'new'
-    ? `git -C ${f.repoPath} worktree add .codex/worktrees/${f.name} -b plan/${f.name} ${f.base}`
+    ? `create the owned branch plan/${f.name} at ${f.base}; git -C ${f.repoPath} worktree add .codex/worktrees/${f.name} plan/${f.name}`
     : `use the existing worktree ${f.worktreePath ?? '(pick one)'}`
   return [
     first,
-    `write openspec/initiatives/${f.name}/{initiative.yaml,brief.md,inputs/}`,
-    `git commit -m "docs(openspec): ${f.name} — initiative"`,
+    `write desk/initiatives/${f.name}/{initiative.events.jsonl,initiative.yaml,brief.md,inputs/}`,
+    `git commit -m "docs(initiative): ${f.name} - initiative"`,
   ]
 }
 
@@ -65,7 +65,7 @@ export function sliceCard(view: InitiativeView, sliceId: string): SliceCard {
   const status = view.statuses[sliceId] ?? 'planned'
   if (status === 'proposing') {
     // A running author, or one waiting for the owner (final review I2).
-    const run = view.doc.runs.find((r) => r.kind === 'author' && r.slice === sliceId && (r.outcome === 'running' || r.outcome === 'needs_owner'))
+    const run = view.doc.runs.find((r) => r.kind === 'author' && r.slice === sliceId && ['running','queued','needs_owner','uncertain'].includes(r.outcome))
     return { kind: 'proposing', runId: run?.id ?? null, waiting: run?.outcome === 'needs_owner' }
   }
   if (status !== 'planned') return { kind: 'done' }
@@ -81,7 +81,7 @@ export function runTitle(run: Pick<RunRecord, 'kind' | 'slice' | 'topic'>): stri
 
 // Resume is enabled when the run's blocking decisions are recorded or dismissed (spec B §4.4).
 export function canResume(view: Pick<InitiativeView, 'decisions'>, run: RunRecord): boolean {
-  if (run.outcome !== 'needs_owner') return false
+  if (run.outcome !== 'needs_owner' && run.outcome !== 'uncertain') return false
   return view.decisions
     .filter((d) => d.source.kind === 'run' && d.source.run === run.id && d.blocking)
     .every((d) => d.status === 'recorded' || d.status === 'dismissed')

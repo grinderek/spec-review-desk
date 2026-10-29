@@ -1,0 +1,3 @@
+version: 1
+kind: behavior-driven
+title: Обновление устаревшего патча и закрытие обсуждения

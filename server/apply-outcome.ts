@@ -48,6 +48,6 @@ export function outcomeOf(events: readonly CodexEvent[], stopping: boolean): App
 export function logText(events: readonly CodexEvent[]): string {
   const streamed = narration(events)
   const result = lastResult(events)
-  const answer = result ? parseReply(result.structured ?? parseJsonObject(result.text)).reply?.answer : undefined
+  const answer = result ? parseReply(result.structured ?? parseJsonObject(result.text)).reply?.answer ?? result.text : undefined
   return answer ? `${streamed}${streamed ? '\n\n' : ''}${answer}` : streamed
 }

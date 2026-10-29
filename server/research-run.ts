@@ -1,13 +1,18 @@
+import { executeOwnerDecision } from './decision-commands.ts'
 import { mkdir, readdir, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { slugify } from './author-run.ts'
-import { addDecisions, decisionsFromReply, runDecisions } from './decision-model.ts'
+import { decisionsFromReply, runDecisions } from './decision-model.ts'
 import { FETCH_DOMAINS, normalizeDomain } from './egress.ts'
 import { RESEARCH_READING_STOPPED, researchPrompt, researchResumeClosing } from './initiative-prompt.ts'
-import { findRun, type InputEntry, readInitiative, type RunRecord } from './initiative-store.ts'
+import { findRun, type InputEntry, readInitiative, withInitiativeLock, type RunRecord } from './initiative-store.ts'
+import { executeInitiativeCommand } from './initiative-commands.ts'
 import { buildResumePrompt } from './prompt.ts'
-import { readReview, updateReview } from './review-store.ts'
+import { readReview } from './review-store.ts'
 import type { Finisher, InitiativeRunService, RunTarget } from './run-service.ts'
+import { storeInitiativeBlob } from './initiative-events.ts'
+import { readInitiativeStream } from './initiative-events.ts'
+import { raiseRunDecisions } from './initiative-finalization.ts'
 
 // Spec B §4.5: research in two phases — WebSearch only, then (after the owner's fetch-domains
 // decision) WebFetch limited to the approved domains. The result is a draft input.
@@ -50,7 +55,7 @@ export function researchFileName(topic: string, taken: readonly string[]): strin
   return `${base}-${n}.md`
 }
 
-export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
+export const finishResearch: Finisher<'research'> = async (ctx, reply) => withInitiativeLock(ctx.target.ini.dir, async () => {
   if (reply.status === 'failed') return ctx.record('failed', reply.answer)
   const { ini } = ctx.target
   const doc = await readInitiative(ini.dir)
@@ -66,22 +71,23 @@ export const finishResearch: Finisher<'research'> = async (ctx, reply) => {
       // Ruling 2: every requested domain is already approved — continue without asking.
       return ctx.relaunch({ phase: 'read', web_fetch: true, validation_retry: false }, `${ALREADY_ALLOWED} ${researchResumeClosing(doc.research.domains)}`)
     }
-    const [record] = decisionsFromReply([decision], { kind: 'run', run: ctx.run.id, agent: 'research' }, ctx.at)
-    await updateReview(ini.dir, (d) => addDecisions(d, [{ ...record!, requested_domains: requested }]))
+    await raiseRunDecisions(ctx, ini.dir, [decision], requested)
     return ctx.record('needs_owner', reply.answer)
   }
+  if ((await readInitiativeStream(ini.dir)).events.some(({event}) => event.type === 'InitiativeInputAdded' && event.input.source.kind === 'research' && event.input.source.run === ctx.run.id)) return ctx.record('done', reply.answer)
   const inputsDir = path.join(ini.dir, 'inputs')
   await mkdir(inputsDir, { recursive: true })
   const file = researchFileName(ctx.run.topic ?? '', [...doc.inputs.map((i) => i.file), ...(await readdir(inputsDir))])
   const body = reply.document.endsWith('\n') ? reply.document : `${reply.document}\n`
-  await writeFile(path.join(inputsDir, file), body)
   const entry: InputEntry = {
     file,
     bytes: Buffer.byteLength(body),
+    blob: await storeInitiativeBlob(ini.dir, body),
     // Re-review (b): the domains its reading attempts used, also when the owner stopped reading.
     source: { kind: 'research', run: ctx.run.id, domains: findRun(doc, ctx.run.id).read_domains ?? [] },
     added_at: ctx.at,
     draft: true,
   }
-  await ctx.record('done', reply.answer, undefined, (d) => ({ ...d, inputs: [...d.inputs, entry] }))
-}
+  await executeInitiativeCommand(ini.dir, { type: 'add-inputs', inputs: [entry] }, ctx.at)
+  await ctx.record('done', reply.answer)
+})

@@ -1,20 +1,24 @@
-import { readFile } from 'node:fs/promises'
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
-import { type ApplyService, readEvents, resolveRunLog } from '../apply.ts'
-import { logText } from '../apply-outcome.ts'
+import { type ApplyService } from '../apply.ts'
 import { loadChangeView } from '../change-view.ts'
 import { corpusReport } from '../corpus.ts'
 import { HttpError } from '../errors.ts'
-import { readReview } from '../review-store.ts'
 import { assertWritable, resolveChange } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
+import { applyWorkspace } from '../apply-workspace.ts'
 
 const Resume = z.object({ runId: z.string().min(1) })
 
 export function registerApplyRoutes(app: Hono, ctx: AppContext, deps: { apply: ApplyService }): void {
   const base = '/api/changes/:wt/:name'
+
+  app.get(`${base}/apply/workspace`, async (c) => {
+    const { wt } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))
+    const workspace = await applyWorkspace(ctx.config, wt)
+    return c.json({ roots: workspace.roots, checks: workspace.checks })
+  })
 
   app.post(`${base}/apply`, async (c) => {
     const { wt, ref } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))
@@ -48,9 +52,6 @@ export function registerApplyRoutes(app: Hono, ctx: AppContext, deps: { apply: A
 
   app.get(`${base}/runs/:id/log`, async (c) => {
     const { wt, ref } = await resolveChange(ctx, c.req.param('wt'), c.req.param('name'))
-    const run = (await readReview(ref.dir)).apply_runs.find((r) => r.id === c.req.param('id'))
-    if (!run) throw new HttpError(404, 'unknown_run', `No apply run ${c.req.param('id')}`)
-    const events = readEvents(await readFile(resolveRunLog(wt.path, run.log), 'utf8').catch(() => ''))
-    return c.json({ run, text: logText(events) })
+    return c.json(await deps.apply.log(wt, ref, c.req.param('id')))
   })
 }

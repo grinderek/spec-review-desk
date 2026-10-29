@@ -2,9 +2,10 @@ import { timingSafeEqual } from 'node:crypto'
 import type { MiddlewareHandler } from 'hono'
 import { getCookie } from 'hono/cookie'
 
-export const TOKEN_COOKIE = 'sr_token'
+// Cookies are shared across ports on a host. Each Desk instance needs its own name.
+export const tokenCookie = (port: number): string => `sr_token_${port}`
 
-export interface SecurityOptions { token: string; allowedHosts: string[]; allowedOrigins: string[] }
+export interface SecurityOptions { token: string; cookieName: string; allowedHosts: string[]; allowedOrigins: string[] }
 
 export function allowedFor(port: number, devUiOrigin: string): { allowedHosts: string[]; allowedOrigins: string[] } {
   const dev = new URL(devUiOrigin)
@@ -34,7 +35,7 @@ export function security(opts: SecurityOptions): MiddlewareHandler {
       }
     }
     const pathname = new URL(c.req.url).pathname
-    if (pathname.startsWith('/api/') && pathname !== '/api/session' && !tokenMatches(opts.token, getCookie(c, TOKEN_COOKIE))) {
+    if (pathname.startsWith('/api/') && pathname !== '/api/session' && !tokenMatches(opts.token, getCookie(c, opts.cookieName))) {
       return c.json({ error: { code: 'unauthorized', message: 'Open the URL printed in the server console to sign in.' } }, 401)
     }
     await next()

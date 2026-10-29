@@ -1,10 +1,12 @@
 import type { Context, Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
-import { addDecisions, dismissDecision, ownerDecision } from '../decision-model.ts'
+import { ownerDecision } from '../decision-model.ts'
+import { executeOwnerDecision } from '../decision-commands.ts'
+import { withInitiativeLock } from '../initiative-store.ts'
 import { decideInitiativeDecision } from '../initiative-decisions.ts'
 import { OptionSchema } from '../protocol.ts'
-import { nowIso, updateReview } from '../review-store.ts'
+import { nowIso } from '../review-store.ts'
 import type { RunTarget } from '../run-service.ts'
 import { publishInitiativeChanged, resolveInitiativeTarget } from './resolve.ts'
 
@@ -30,7 +32,7 @@ export function registerInitiativeDecisionRoutes(app: Hono, ctx: AppContext): vo
     const t = await target(c)
     const body = NewDecision.parse(await c.req.json())
     const record = ownerDecision({ ...body, scope: { kind: 'change' } }, nowIso())
-    await updateReview(t.ini.dir, (doc) => addDecisions(doc, [record]))
+    await withInitiativeLock(t.ini.dir, () => executeOwnerDecision(t.ini.dir, { type: 'RaiseOwnerDecisions', decisions: [record] }))
     changed(t)
     return c.json({ id: record.id }, 201)
   })
@@ -46,7 +48,7 @@ export function registerInitiativeDecisionRoutes(app: Hono, ctx: AppContext): vo
   app.post(`${base}/:id/dismiss`, async (c) => {
     const t = await target(c)
     const { reason } = Dismiss.parse(await c.req.json())
-    await updateReview(t.ini.dir, (doc) => dismissDecision(doc, c.req.param('id'), reason, nowIso()))
+    await withInitiativeLock(t.ini.dir, () => executeOwnerDecision(t.ini.dir, { type: 'DismissOwnerDecision', id: c.req.param('id'), reason, at: nowIso() }))
     changed(t)
     return c.json({ ok: true })
   })

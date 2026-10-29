@@ -1,6 +1,36 @@
 version: 1
 feature: Implement reviewed changes and expose their verification results
 scenarios:
+  - id: expose-apply-outcome
+    scenario: Сохранять объяснение агента в отчете Apply после завершения
+    cases:
+      - name: реализация завершилась
+        outcome: done
+        answer: The reviewed change is implemented.
+        report: "Reading the change.\n\nThe reviewed change is implemented."
+      - name: реализация не смогла начаться
+        outcome: failed
+        answer: Implementation is blocked because the required repositories are read-only.
+        report: "Reading the change.\n\nImplementation is blocked because the required repositories are read-only."
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalRecorded: {}
+      - ApplyReplyPrepared: { status: $outcome, answer: $answer, deliver: false }
+    when:
+      StartApply: {}
+    then:
+      bind: { run: response.body.run.id }
+      events:
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ExecutionSettled: { outcome: $outcome }
+      response: { status: 202 }
+      reads:
+        - path: $change/runs/$run/log
+          response: { status: 200, body: { run: { outcome: $outcome }, text: $report } }
   - id: require-recorded-approval
     scenario: Require recorded owner approval before implementation starts
     given:
@@ -27,7 +57,12 @@ scenarios:
     when:
       StartApply: {}
     then:
-      events: []
+      events:
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ExecutionSettled: { outcome: done }
       response: { status: 202 }
       reads:
         - path: $initiative
@@ -46,7 +81,13 @@ scenarios:
     when:
       ResumeApply: { run: $applyRun }
     then:
-      events: []
+      events:
+        - DiscussionOwnerReplied: { message: { role: owner } }
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - DiscussionAgentReplied: { message: { role: agent }, status: answered }
+        - ExecutionSettled: { outcome: done }
       response: { status: 202, body: { ok: true } }
       reads:
         - path: $change
@@ -54,15 +95,24 @@ scenarios:
   - id: display-verification-result
     scenario: Show the actual verification result for a reviewed contract
     cases:
-      - { name: passing run, status: passed, totals: { passed: 1, failed: 0, other: 0 } }
-      - { name: failing run, status: failed, totals: { passed: 0, failed: 1, other: 0 } }
+      - { name: passing run, status: passed, outcome: done, totals: { passed: 1, failed: 0, other: 0 } }
+      - { name: failing run, status: failed, outcome: failed, totals: { passed: 0, failed: 1, other: 0 } }
     given:
       - ScenarioDiscovered: {}
       - VerificationPrepared: { status: $status }
     when:
       RunVerification: {}
     then:
-      events: []
+      stream: verification
+      bind: { run: response.body.state.runId, source: response.body.state.sourceHash }
+      events:
+        - VerificationSourceCaptured: { runId: $run }
+        - ExecutionQueued: { request: { id: $run, role: verification } }
+        - ExecutionAttemptRequested: { runId: $run, attempt: { sourceHash: $source } }
+        - ExecutionAttemptObserved: { runId: $run }
+        - ExecutionReceiptAccepted: { runId: $run }
+        - VerificationReportAccepted: { runId: $run, sourceUnchanged: true, report: { totals: $totals } }
+        - ExecutionSettled: { runId: $run, outcome: $outcome }
       response: { status: 202 }
       reads:
         - path: $runner
@@ -72,10 +122,12 @@ scenarios:
               state:
                 execution: local
                 running: false
+                stale: false
+                outcome: $outcome
                 result:
                   totals: $totals
                   scenarios:
-                    'subject.desk.yaml::Subject contract': { status: $status }
+                    'subject.desk.yaml::subject': { status: $status }
   - id: require-current-approval
     scenario: Require renewed approval when a contract changes before implementation
     given:
@@ -100,7 +152,12 @@ scenarios:
     when:
       ReapplyContract: {}
     then:
-      events: []
+      events:
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ExecutionSettled: { outcome: done }
       response: { status: 202 }
       reads:
         - path: $change/corpus

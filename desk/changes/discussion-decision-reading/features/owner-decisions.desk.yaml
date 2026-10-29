@@ -1,0 +1,161 @@
+version: 1
+feature: Owner choices are recorded before their obligations are complete
+scenarios:
+  - id: record-change-choice
+    scenario: Record a whole-change choice in the owner decision log
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { question: Ship behind a flag? }
+    when:
+      DecideOwnerQuestion: { id: $decision, note: 'Yes, behind a flag.' }
+    then:
+      bind: { decisionCommit: response.body.commit }
+      events:
+        - OwnerDecisionChosen: { decisionId: $decision }
+        - GitEffectRequested: { effect: { purpose: { kind: record-decision, ref: $decision } } }
+        - GitEffectCompleted: { commit: $decisionCommit }
+        - OwnerDecisionRecorded: { decisionId: $decision, recorded: { how: decisions_md, commit: $decisionCommit } }
+      response: { status: 200, body: { status: recorded } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              decisions: [{ status: recorded, recorded: { how: decisions_md, commit: $decisionCommit } }]
+              decisionLog: [{ question: Ship behind a flag?, note: 'Yes, behind a flag.' }]
+  - id: choose-scenario-contract
+    scenario: Send a scenario choice to the agent for a resolving patch
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { scope: { kind: scenario, key: $key } }
+      - AgentReplyPrepared: { patch: true, resolves: [$decision] }
+    when:
+      DecideOwnerQuestion: { id: $decision, note: Use the revised response. }
+    then:
+      bind: { decisionThread: response.body.threadId }
+      events:
+        - OwnerDecisionChosen: { decisionId: $decision }
+        - DiscussionOpened: { thread: { id: $decisionThread, anchor: scenario, ref: $key } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $decisionThread, message: { role: agent, resolves: [$decision] }, status: answered }
+        - ExecutionSettled: { outcome: done }
+      response: { status: 200, body: { status: decided, threadId: $decisionThread } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              decisions: [{ status: decided, recorded: null }]
+              review: { threads: [{ id: $decisionThread, messages: [{ role: owner }, { resolves: [$decision], patch: { state: proposed } }] }] }
+  - id: record-scenario-choice
+    scenario: Complete a scenario choice only after committing its resolving patch
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { scope: { kind: scenario, key: $key } }
+      - AgentReplyPrepared: { patch: true, resolves: [$decision] }
+      - ScenarioDecisionChosen: { note: Use the revised response. }
+    when:
+      ApplyReviewPatch: { thread: $thread, summary: Record the choice. }
+    then:
+      bind: { choiceCommit: response.body.commit }
+      events:
+        - GitEffectRequested: { effect: { purpose: { kind: review-patch } } }
+        - PatchApplicationRequested: { threadId: $thread, index: 1 }
+        - GitEffectCompleted: { commit: $choiceCommit }
+        - PatchApplied: { threadId: $thread, index: 1, commit: $choiceCommit }
+        - OwnerDecisionRecorded: { decisionId: $decision, recorded: { how: patch, commit: $choiceCommit } }
+      response: { status: 200 }
+      reads:
+        - path: $change
+          response: { status: 200, body: { decisions: [{ status: recorded, recorded: { how: patch, commit: $choiceCommit } }] } }
+  - id: dismiss-owner-question
+    scenario: Dismiss an owner question with an explicit reason
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: {}
+    when:
+      DismissOwnerQuestion: { id: $decision, reason: Outside this change. }
+    then:
+      events:
+        - OwnerDecisionDismissed: { decisionId: $decision, reason: Outside this change. }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response: { status: 200, body: { decisions: [{ status: dismissed, dismissed: { reason: Outside this change. } }] } }
+  - id: retain-choice-after-commit-failure
+    scenario: Keep the owner choice blocking when its decision commit fails
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { question: Ship behind a flag? }
+      - GitCommitUnavailable: {}
+    when:
+      DecideOwnerQuestion: { id: $decision, note: Use a flag. }
+    then:
+      events:
+        - OwnerDecisionChosen: { decisionId: $decision, choice: { note: Use a flag. } }
+        - GitEffectRequested: { effect: { purpose: { kind: record-decision, ref: $decision } } }
+        - GitEffectPending: {}
+      response: { status: 500, body: { error: { code: git_effect_pending } } }
+      reads:
+        - path: $change
+          response: { status: 200, body: { decisions: [{ status: decided, choice: { note: Use a flag. }, recorded: null }], decisionLog: [] } }
+  - id: retry-decision-recording
+    scenario: Retry the pending decision commit without choosing again
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { question: Ship behind a flag? }
+      - OwnerChoiceRecordingPending: { note: Use a flag. }
+      - GitCommitAvailable: {}
+    when:
+      DecideOwnerQuestion: { id: $decision, note: Use a flag. }
+    then:
+      bind: { retriedCommit: response.body.commit }
+      events:
+        - GitEffectCompleted: { commit: $retriedCommit }
+        - OwnerDecisionRecorded: { decisionId: $decision, recorded: { how: decisions_md, commit: $retriedCommit } }
+      response: { status: 200, body: { status: recorded } }
+      reads:
+        - path: $change
+          response: { status: 200, body: { decisions: [{ status: recorded, choice: { note: Use a flag. } }], decisionLog: [{ note: Use a flag. }] } }
+  - id: recover-recorded-choice
+    scenario: Recover the recorded choice and its readable log from event history
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { question: Ship behind a flag? }
+      - OwnerChoiceRecorded: { note: Use a flag. }
+      - ReviewProjectionUnavailable: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          decisions: [{ status: recorded, recorded: { how: decisions_md, commit: $recordedCommit } }]
+          decisionLog: [{ question: Ship behind a flag?, note: Use a flag. }]
+
+  - id: refuse-patch-for-reattached-choice
+    scenario: Refuse an old correction after its owner choice moves to another scenario
+    given:
+      - ScenarioDiscovered: {}
+      - DecisionRaised: { scope: { kind: scenario, key: $key } }
+      - AgentReplyPrepared: { patch: true, resolves: [$decision] }
+      - ScenarioDecisionChosen: { note: Use the revised response. }
+      - ScenarioDiscovered: { file: features/another.desk.yaml }
+      - OwnerDecisionReattached: { to: $key }
+    when:
+      ApplyReviewPatch: { thread: $thread, summary: Record the original correction. }
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: patch_decision_changed } } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              decisions: [{ status: decided, scope: { kind: scenario, key: $key }, recorded: null }]
+              review: { threads: [{ messages: [{ role: owner }, { patch: { state: proposed, commit: null } }] }] }

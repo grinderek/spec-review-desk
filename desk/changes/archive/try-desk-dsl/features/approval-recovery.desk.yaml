@@ -1,0 +1,76 @@
+version: 1
+feature: Retain owner approval through Git failure and server restart
+scenarios:
+  - id: repeat-completed-approval
+    scenario: Repeating unchanged owner approval returns its existing commit
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalCompleted: {}
+    when:
+      RecordChangeApproval: {}
+    then:
+      events: []
+      response: { status: 200, body: { commit: $approvalCommit } }
+  - id: keep-approval-after-commit-rejection
+    scenario: A rejected approval commit retains the recorded owner intent
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ApprovalCommitRejected: {}
+    when:
+      RecordChangeApproval: {}
+    then:
+      events:
+        - ChangeApprovalRecorded: { commit: $head }
+        - GitEffectRequested: { effect: { purpose: { kind: change-approval } } }
+        - GitEffectFailed: {}
+      response: { status: 409, body: { error: { code: git_effect_failed } } }
+  - id: retry-rejected-approval-commit
+    scenario: Retry a rejected commit without requesting another owner approval
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ApprovalCommitFailed: {}
+    when:
+      RecordChangeApproval: {}
+    then:
+      bind: { approvalCommit: response.body.commit }
+      events:
+        - GitEffectCompleted: { effectId: $approvalEffect, commit: $approvalCommit }
+      response: { status: 200, body: { commit: $approvalCommit } }
+  - id: recover-committed-approval
+    scenario: Recover an approval commit completed before the server stopped
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ApprovalReceiptAwaitingRecovery: {}
+    when:
+      RecoverApproval: {}
+    then:
+      events:
+        - GitEffectCompleted: { effectId: $approvalEffect, commit: $approvalCommit }
+      response: { status: 200 }
+  - id: keep-recovered-approval-once
+    scenario: Repeated approval recovery keeps one commit and one owner approval
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ApprovalRecovered: {}
+    when:
+      RecoverApproval: {}
+    then:
+      events: []
+      response: { status: 200 }
+  - id: require-committed-approval-before-apply
+    scenario: Refuse implementation until the retained owner approval is committed
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ApprovalCommitFailed: {}
+      - ApplyReplyPrepared: {}
+    when:
+      StartApply: {}
+    then:
+      events: []
+      response: { status: 409, body: { error: { code: approval_not_committed } } }

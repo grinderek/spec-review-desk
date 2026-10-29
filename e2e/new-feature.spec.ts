@@ -10,7 +10,7 @@ const BRIEF = [
   'Business health score = the Daily Operating Score spec v1.0 (`scoring_version: daily_operating_score_v1`),',
   'built slice by slice under the behavior-driven method.',
 ].join('\n')
-const FROM_REPO = ['api/features/STEPS.md', 'api/openspec/changes/add-thread-state/proposal.md', 'config.yaml'].join('\n')
+const FROM_REPO = ['api/features/STEPS.md', 'api/desk/changes/add-thread-state/proposal.md', 'config.yaml'].join('\n')
 
 async function openForm(page: Page, name: string): Promise<void> {
   await page.goto('/?t=e2e')
@@ -20,7 +20,10 @@ async function openForm(page: Page, name: string): Promise<void> {
 }
 
 async function createAndRead(page: Page, name: string): Promise<{ brief: string; inputs: { file: string; source: { kind: string; path?: string } }[] }> {
+  const creating = page.waitForResponse(response => response.url().endsWith('/api/initiatives') && response.request().method() === 'POST')
   await page.getByRole('button', { name: 'Create' }).click()
+  const response = await creating
+  expect(response.status(), await response.text()).toBe(201)
   await expect(page.getByRole('heading', { name: new RegExp(name) })).toBeVisible({ timeout: 20_000 })
   const wt = /#\/i\/([^/]+)\//.exec(page.url())![1]
   return (await page.request.get(`/api/initiatives/${wt}/${name}`)).json()
@@ -30,7 +33,7 @@ const expectArrived = (view: Awaited<ReturnType<typeof createAndRead>>) => {
   expect(view.brief).toBe(`${BRIEF}\n`)
   expect(view.inputs.map((i) => [i.file, i.source.kind, i.source.path])).toEqual([
     ['STEPS.md', 'repo', 'api/features/STEPS.md'],
-    ['proposal.md', 'repo', 'api/openspec/changes/add-thread-state/proposal.md'],
+    ['proposal.md', 'repo', 'api/desk/changes/add-thread-state/proposal.md'],
     ['config.yaml', 'repo', 'config.yaml'],
   ])
 }

@@ -1,0 +1,431 @@
+version: 1
+feature: Turn a brief into an approved plan and independently reviewed changes
+scenarios:
+  - id: create-initiative
+    scenario: Create an initiative with the owner's brief
+    given:
+      - ScenarioDiscovered: {}
+    when:
+      OpenInitiative: { name: new-feature, title: New feature, brief: Describe the intended behavior. }
+    then:
+      stream: initiative
+      bind: { initiativeWorktree: response.body.worktreeId }
+      events:
+        - InitiativeCreated: { name: new-feature, title: New feature }
+      response: { status: 201, body: { name: new-feature } }
+      reads:
+        - path: /api/initiatives/$initiativeWorktree/new-feature
+          response: { status: 200, body: { brief: "Describe the intended behavior.\n", doc: { plan: { status: none, slices: [] } } } }
+  - id: revise-brief
+    scenario: Save the revised brief for future agent runs
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+    when:
+      EditBrief: { brief: The revised feature scope. }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: brief }
+        - InitiativeBriefSaved: {}
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "The revised feature scope.\n" } }
+  - id: draft-slice-plan
+    scenario: Keep an agent's slice plan as a draft until owner approval
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlannerReplyPrepared: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+    when:
+      RunPlanner: {}
+    then:
+      stream: initiative
+      events:
+        - InitiativeRunRequested: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionQueued } }
+        - InitiativeRunParametersSelected: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptRequested } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptObserved } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionReceiptAccepted } }
+        - SlicePlanDrafted: {}
+        - InitiativeRunGitRequested: {}
+        - InitiativeRunGitCompleted: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: done } }
+        - InitiativeRunOutcomeRecorded: { outcome: done }
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response:
+            status: 200
+            body: { doc: { plan: { status: draft, slices: [{ id: s1, depends_on: [] }, { id: s2, depends_on: [s1] }] } }, statuses: { s1: planned, s2: planned } }
+  - id: approve-slice-plan
+    scenario: Approve the slice plan before proposing changes
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }] }
+    when:
+      ApprovePlan: {}
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: plan-approval }
+        - SlicePlanApproved: {}
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { plan: { status: approved } }, statuses: { s1: planned } } }
+  - id: block-plan-approval
+    scenario: Resolve blocking owner questions before approving the plan
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }] }
+      - InitiativeDecisionRaised: {}
+    when:
+      ApprovePlan: {}
+    then:
+      stream: initiative
+      events: []
+      response: { status: 409, body: { error: { code: decisions_pending } } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { plan: { status: draft } }, blockingDecisions: 1 } }
+  - id: propose-independent-slice
+    scenario: Propose a ready slice as a change that still needs owner review
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+      - PlanApproved: {}
+      - AuthorOutputPrepared: { change: slice-contract }
+    when:
+      ProposeSlice: { slice: s1, change: slice-contract }
+    then:
+      stream: initiative
+      events:
+        - InitiativeRunRequested: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionQueued } }
+        - InitiativeRunParametersSelected: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptRequested } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptObserved } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionReceiptAccepted } }
+        - InitiativeRunGitRequested: {}
+        - InitiativeRunGitCompleted: {}
+        - SliceChangeAssociated: { slice: s1, change: slice-contract }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: done } }
+        - InitiativeRunOutcomeRecorded: { outcome: done }
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { statuses: { s1: proposed, s2: planned }, blockers: { s2: waiting for s1 } } }
+  - id: respect-slice-dependencies
+    scenario: Refuse a dependent slice while its prerequisite is unfinished
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+      - PlanApproved: {}
+    when:
+      ProposeSlice: { slice: s2, change: dependent-contract }
+    then:
+      stream: initiative
+      events: []
+      response: { status: 409, body: { error: { code: slice_not_ready } } }
+  - id: accept-research-input
+    scenario: Accept a research draft before agents can use it as an input
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchDrafted: { topic: Contract }
+    when:
+      AcceptResearch: { file: research-contract.md }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: research-accept }
+        - ResearchInputAccepted: { file: research-contract.md }
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [{ file: research-contract.md, draft: false, present: true }] } }
+  - id: propose-after-prerequisite-approval
+    scenario: Propose a dependent slice once its prerequisite is owner approved
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }, { title: Delivery, scope: Deliver the engine., depends_on: [1] }] }
+      - PlanApproved: {}
+      - ApprovedSliceProposed: { change: slice-contract }
+      - AuthorOutputPrepared: { change: dependent-contract }
+    when:
+      ProposeSlice: { slice: s2, change: dependent-contract }
+    then:
+      stream: initiative
+      events:
+        - InitiativeRunRequested: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionQueued } }
+        - InitiativeRunParametersSelected: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptRequested } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptObserved } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionReceiptAccepted } }
+        - InitiativeRunGitRequested: {}
+        - InitiativeRunGitCompleted: {}
+        - SliceChangeAssociated: { slice: s2, change: dependent-contract }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: done } }
+        - InitiativeRunOutcomeRecorded: { outcome: done }
+      response: { status: 202 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { statuses: { s1: approved, s2: proposed } } }
+  - id: respect-research-permission
+    scenario: Resume research with the reading permission chosen by the owner
+    cases:
+      - { name: approved reading, choice: allow_all, webFetch: true, domains: [docs.example.com] }
+      - { name: search only, choice: search_only, webFetch: false, domains: [] }
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchWaitingForDomains: {}
+      - ResearchPermissionRecorded: { choice: $choice }
+      - ResearchReplyPrepared: {}
+    when:
+      ResumeResearch: { run: $researchRun }
+    then:
+      stream: initiative
+      events:
+        - InitiativeRunParametersSelected: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptRequested } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptObserved } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionReceiptAccepted } }
+        - InitiativeInputAdded: { input: { draft: true } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: done } }
+        - InitiativeRunOutcomeRecorded: { outcome: done }
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response:
+            status: 200
+            body:
+              doc: { research: { domains: $domains }, runs: [{ outcome: done, web_fetch: $webFetch }] }
+              inputs: [{ draft: true, source: { domains: $domains } }]
+  - id: restore-initiative-business-state
+    scenario: Restore the approved plan and research material from initiative history
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: { brief: Preserve the intended scope. }
+      - ResearchDomainsAllowed: { domains: [docs.example.com] }
+      - PlanDrafted: { slices: [{ title: Engine, scope: Engine behavior., depends_on: [] }] }
+      - PlanApproved: {}
+      - ResearchDrafted: { topic: Contract }
+      - InitiativeProjectionUnavailable: {}
+    when:
+      ObserveInitiative: {}
+    then:
+      stream: initiative
+      events: []
+      response:
+        status: 200
+        body:
+          brief: "Preserve the intended scope.\n"
+          doc: { research: { domains: [docs.example.com] }, plan: { status: approved, slices: [{ id: s1, title: Engine }] }, runs: [{ kind: planner, outcome: done }, { kind: research, outcome: done }] }
+          inputs: [{ file: research-contract.md, draft: true, present: true }]
+  - id: discard-research-draft
+    scenario: Discard research without accepting it as agent input
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchDrafted: { topic: Contract }
+    when:
+      DiscardResearch: { file: research-contract.md }
+    then:
+      stream: initiative
+      events:
+        - ResearchInputDiscarded: { file: research-contract.md }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [] } }
+  - id: research-domain-permission
+    scenario: Record the owner's allowed research domains
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+    when:
+      SetResearchDomains: { domains: [docs.example.com, docs.example.com] }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: domains }
+        - ResearchDomainsSet: { domains: [docs.example.com] }
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200, body: { domains: [docs.example.com] } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { research: { domains: [docs.example.com] } } } }
+  - id: recover-recorded-research-result
+    scenario: Recover completed research from its receipt without running the agent again
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchResultRecorded: {}
+    when:
+      ReconcileInitiativeRuns: {}
+    then:
+      stream: initiative
+      events:
+        - InitiativeInputAdded: { input: { file: research-contract.md, draft: true } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: done } }
+        - InitiativeRunOutcomeRecorded: { outcome: done }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [{ file: research-contract.md, draft: true }], doc: { runs: [{ outcome: done }], executions: [{ attempts: [{}] }] } } }
+  - id: uncertain-research-requires-owner
+    scenario: Keep unconfirmed research uncertain until the owner chooses what to do
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchResultRecorded: {}
+      - InitiativeReceiptUnavailable: {}
+    when:
+      ReconcileInitiativeRuns: {}
+    then:
+      stream: initiative
+      events:
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionUncertain } }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [], doc: { runs: [{ outcome: uncertain }], executions: [{ attempts: [{}] }] } } }
+  - id: owner-resumes-uncertain-research
+    scenario: Start another research attempt only after the owner explicitly resumes
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchOutcomeUnknown: {}
+      - ResearchReplyPrepared: {}
+    when:
+      ResumeResearch: { run: $researchRun }
+    then:
+      stream: initiative
+      events:
+        - InitiativeRunParametersSelected: {}
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptRequested, attempt: { cause: owner-resume } } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionAttemptObserved } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionReceiptAccepted } }
+        - InitiativeInputAdded: { input: { draft: true } }
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: done } }
+        - InitiativeRunOutcomeRecorded: { outcome: done }
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { runs: [{ outcome: done }], executions: [{ attempts: [{}, {}] }] } } }
+  - id: owner-abandons-uncertain-research
+    scenario: Stop unconfirmed research after proving its execution is inactive
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - ResearchOutcomeUnknown: {}
+    when:
+      StopResearch: { run: $researchRun }
+    then:
+      stream: initiative
+      events:
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionStopRequested } }
+        - InitiativeRunAbandoned: {}
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [], doc: { runs: [{ outcome: stopped }], executions: [{ outcome: stopped, attempts: [{}] }] } } }
+  - id: preserve-owner-plan-after-restart
+    scenario: Preserve owner plan edits when recovering an older planner result
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - PlannerResultRecorded: {}
+      - OwnerPlanRevised: {}
+    when:
+      ReconcileInitiativeRuns: {}
+    then:
+      stream: initiative
+      events:
+        - InitiativeExecutionRecorded: { execution: { type: ExecutionSettled, outcome: needs_owner } }
+        - InitiativeRunOutcomeRecorded: { outcome: needs_owner }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { doc: { plan: { slices: [{ title: Owner plan }] }, runs: [{ outcome: needs_owner }] } } }
+  - id: pending-owner-brief-commit
+    scenario: Keep a failed brief commit pending for the owner
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - GitCommitUnavailable: {}
+    when:
+      EditBrief: { brief: Saved intent needs a confirmed commit. }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: brief }
+        - InitiativeBriefSaved: {}
+        - InitiativeOwnerGitObserved: { status: pending }
+      response: { status: 409, body: { error: { code: initiative_git_pending } } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "Saved intent needs a confirmed commit.\n", doc: { git_effects: [{ operation: brief, status: pending }] } } }
+  - id: retry-owner-brief-commit
+    scenario: Finish the saved brief commit when Git becomes available
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - InitiativeBriefCommitPending: {}
+      - GitCommitAvailable: {}
+    when:
+      RetryInitiativeCommit: { effect: $initiativeEffect }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "Pending owner brief.\n", doc: { git_effects: [{ status: completed }] } } }
+  - id: recover-owner-brief-commit
+    scenario: Recognize an already committed brief after a restart
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+      - InitiativeBriefCommitUnacknowledged: {}
+    when:
+      ReconcileInitiativeRuns: {}
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 200 }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { brief: "Committed owner brief.\n", doc: { git_effects: [{ status: completed }] } } }
+  - id: upload-initiative-input
+    scenario: Commit owner inputs with their original contents
+    given:
+      - ScenarioDiscovered: {}
+      - InitiativeOpened: {}
+    when:
+      UploadInitiativeInputs: { files: [{ name: notes.md, text: Owner supplied context. }] }
+    then:
+      stream: initiative
+      events:
+        - InitiativeOwnerGitRequested: { operation: inputs }
+        - InitiativeInputAdded: { input: { file: notes.md, draft: false } }
+        - InitiativeOwnerGitCompleted: {}
+      response: { status: 201, body: { files: [notes.md] } }
+      reads:
+        - path: $initiative
+          response: { status: 200, body: { inputs: [{ file: notes.md, draft: false, present: true }] } }

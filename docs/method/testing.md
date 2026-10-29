@@ -8,13 +8,13 @@ smoke scripts or adapters on your own initiative.
 The previous 488 checks in 58 files remain deleted. Vitest, its configuration, isolated temporary
 root, coverage support and dependencies remain available for future owner-requested tests.
 The suite is currently empty; Vitest succeeds with `passWithNoTests`, without claiming test coverage.
-The existing product corpus remains 37 contracts / 50 executions; no extra cases were added to
-compensate for the deletion.
+Product contracts cover owner-visible rules. New contracts describe product behavior, rather than
+reconstructing the deleted technical suite. The runner reports current contract and execution counts.
 
 ## Verification
 
 - `npm test` runs product contracts and any owner-requested Vitest tests.
-- `npm run test:technical` runs Vitest; `test:legacy` is its compatibility alias.
+- `npm run test:technical` runs Vitest.
 - `npm run coverage` collects coverage for owner-requested tests; the empty suite has no coverage.
 - `npm run test:self` verifies matching proposed and implemented contracts, then executes the corpus
   through Desk's own authenticated local runner and checks every result row.
@@ -38,6 +38,15 @@ The removed suite separately checked malformed input, compatibility, concurrency
 Git rollback, process recovery and helper/UI details. Those cases no longer have dedicated automated
 coverage. The remaining product and browser flows do not claim equivalent coverage.
 
-Approval events remain replayable. Other domains retain their YAML storage. Contract event assertions
-refer to the approval journal; other state is observed through public views. All verification runs
-use disposable fixture repositories and never forge owner approvals in the real repository.
+Approvals, discussions, owner decisions, patch lifecycle and decision/patch Git receipts replay from
+review history. Initiative metadata, brief/input content, plans and permissions replay from its
+journal and immutable blobs. Reviewer/Apply executions replay from review history, sandboxed
+initiative runs from initiative history, and verification attempts/reports from their worktree
+verification journal. Contracts select review, initiative or verification history explicitly and
+compare the complete event delta; public GETs observe other views. Product fixtures use disposable
+repositories. Self-review executes the actual repository's corpus through its local runner and
+records verification evidence, without writing owner approvals. Worktree-journal contracts also
+cover initiative creation. Replay rebuilds projections without starting external work; recovery
+observes typed receipts and verified process/container identities. An uncertain outcome requires
+explicit owner action and inactivity proof before a fresh attempt. Unsupported history fails
+explicitly instead of importing snapshots.

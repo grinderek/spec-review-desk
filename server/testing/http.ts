@@ -4,6 +4,7 @@ import type { AppContext } from '../app.ts'
 import type { Config } from '../config.ts'
 import { Registry } from '../discovery.ts'
 import { EventBus } from '../events.ts'
+import { tokenCookie } from '../security.ts'
 
 export const TEST_TOKEN = 'test-token'
 export const TEST_PORT = 4600
@@ -27,7 +28,6 @@ export function testConfig(repoPath: string, overrides: Partial<Config> = {}): C
       timeoutMs: 20_000,
       dockerBin: 'docker',
     },
-    openspecBin: 'openspec',
     initiativeBase: 'main',
     ...overrides,
   }
@@ -41,7 +41,7 @@ export async function call(app: Hono, method: string, url: string, body?: unknow
   const headers: Record<string, string> = {
     host: `127.0.0.1:${TEST_PORT}`,
     origin: `http://127.0.0.1:${TEST_PORT}`,
-    cookie: `sr_token=${TEST_TOKEN}`,
+    cookie: `${tokenCookie(TEST_PORT)}=${TEST_TOKEN}`,
   }
   if (body !== undefined) headers['content-type'] = 'application/json'
   const res = await app.request(`http://127.0.0.1:${TEST_PORT}${url}`, {
@@ -56,7 +56,7 @@ export async function call(app: Hono, method: string, url: string, body?: unknow
 export async function callForm(app: Hono, url: string, form: FormData): Promise<{ status: number; json: any }> {
   const res = await app.request(`http://127.0.0.1:${TEST_PORT}${url}`, {
     method: 'POST',
-    headers: { host: `127.0.0.1:${TEST_PORT}`, origin: `http://127.0.0.1:${TEST_PORT}`, cookie: `sr_token=${TEST_TOKEN}` },
+    headers: { host: `127.0.0.1:${TEST_PORT}`, origin: `http://127.0.0.1:${TEST_PORT}`, cookie: `${tokenCookie(TEST_PORT)}=${TEST_TOKEN}` },
     body: form,
   })
   const text = await res.text()

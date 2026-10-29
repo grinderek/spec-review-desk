@@ -1,11 +1,18 @@
+import { archiveChangeDir, changeDir, CHANGE_FILE, ChangePackageError, loadChangePackage, parseNativeContract } from './change-package.ts'
+import { renderChangeDocumentation, renderContractDocumentation } from './contract-docs.ts'
+import { renderDecisionContext } from './decisions-md.ts'
+import { readReview } from './review-store.ts'
+import { emptyCatalog, parseCatalog } from './catalog.ts'
 import { chmod, copyFile, lstat, mkdir, readdir, readFile, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { stringify } from 'yaml'
 import type { InitiativeDoc, RunKind } from './initiative-store.ts'
 import type { SliceStatus } from './slice-plan.ts'
+import { readImplementation, implementationUrl } from './existing-process.ts'
+import { worktreeId } from './discovery.ts'
 
-// Spec B §5.1: the room is the only thing an agent sees — copied (never linked) per run.
+// Spec B §5.1: the room is the only thing an agent sees - copied (never linked) per run.
 export interface RoomInput {
   worktree: string
   initiativeDir: string
@@ -15,9 +22,9 @@ export interface RoomInput {
   target?: { sliceId: string; notes: string; change: string }
 }
 
-const SLICE_FILES = ['proposal.md', 'decisions.md']
-const SLICE_DIRS = ['specs', 'features']
-// The Desk's own method — Gherkin + event sourcing + full-stack checks — goes into every planner
+const SLICE_FILES = [CHANGE_FILE,'proposal.md']
+const SLICE_DIRS = ['features']
+// The Desk's own method - Gherkin + event sourcing + full-stack checks - goes into every planner
 // and author room next to the repository's rules, so the agents write to the same shape the Desk
 // checks (vet-output.ts, shape.ts).
 export const METHOD_DOC = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'docs', 'method', 'bdd-event-sourcing.md')
@@ -90,20 +97,39 @@ export async function assembleRoom(room: string, input: RoomInput): Promise<stri
     if ((await kind(file)) === 'file') add(file, `initiative/inputs/${entry.file}`)
   }
   const texts: [string, string][] = []
+  if (input.doc.existingProcess && input.kind !== 'research') {
+    const snapshot = await readImplementation(ini, input.doc)
+    const sources = snapshot.sources.map((source, index) => ({ ...source, files: source.files.map(file => {
+      const location = `implementation/${index}/${file.path}`
+      texts.push([location, file.content])
+      return { path: file.path, location, hash: file.hash, lines: file.lines, url: implementationUrl(worktreeId(input.worktree), input.doc.name, source.repo, file.path) }
+    }) }))
+    texts.push(['implementation/index.json', JSON.stringify({ version: 1, process: input.doc.existingProcess, sources }, null, 2)])
+  }
   if (input.kind !== 'research') {
-    if ((await kind(path.join(ini, 'decisions.md'))) === 'file') add(path.join(ini, 'decisions.md'), 'initiative/decisions.md')
+    texts.push(['initiative/decisions.md',renderDecisionContext(await readReview(ini),input.doc.name)])
+    const catalogSource=(await kind(path.join(input.worktree,'features/STEPS.md')))==='file'?await readFile(path.join(input.worktree,'features/STEPS.md'),'utf8'):null
+    const approvedCatalog=catalogSource?parseCatalog(catalogSource):emptyCatalog()
     texts.push(['initiative/plan.yaml', planYaml(input)])
     for (const change of earlierChanges(input)) {
-      const dir = path.join(input.worktree, 'openspec', 'changes', change)
+      const active=changeDir(input.worktree,change)
+      const dir=(await kind(active))==='dir'?active:archiveChangeDir(input.worktree,change)
+      const parsed=await loadChangePackage(dir,{approvedCatalog})
+      if(!parsed.valid)throw new ChangePackageError(parsed.problems)
+      texts.push([`slices/${change}/contracts.md`,renderChangeDocumentation(parsed)])
+      texts.push([`slices/${change}/decisions.md`,renderDecisionContext(await readReview(dir),change)])
       for (const f of SLICE_FILES) if ((await kind(path.join(dir, f))) === 'file') add(path.join(dir, f), `slices/${change}/${f}`)
       for (const d of SLICE_DIRS) {
-        for (const rel of await walk(path.join(dir, d), () => true)) add(path.join(dir, d, rel), `slices/${change}/${d}/${rel}`)
+        for (const rel of await walk(path.join(dir,d),rel=>rel.endsWith('.feature')||rel.endsWith('.desk.yaml')||rel==='NEW_STEPS.md')) add(path.join(dir, d, rel), `slices/${change}/${d}/${rel}`)
       }
     }
     const features = path.join(input.worktree, 'features')
     for (const rel of await walk(features, (r) => r.endsWith('.feature') || r.endsWith('.desk.yaml') || r === 'STEPS.md')) add(path.join(features, rel), `corpus/features/${rel}`)
-    const specs = path.join(input.worktree, 'openspec', 'specs')
-    for (const rel of await walk(specs, () => true)) add(path.join(specs, rel), `corpus/specs/${rel}`)
+    const corpusFiles=[]
+    for(const rel of await walk(features,relative=>relative.endsWith('.feature')||relative.endsWith('.desk.yaml'))) {
+      corpusFiles.push(parseNativeContract(await readFile(path.join(features,rel),'utf8'),`features/${rel}`))
+    }
+    texts.push(['corpus/contracts.md',renderContractDocumentation(corpusFiles)])
     if ((await kind(METHOD_DOC)) === 'file') add(METHOD_DOC, 'method/bdd-event-sourcing.md')
     // Prefer Codex project instructions; retain the old files as migration inputs.
     const agents = path.join(input.worktree, 'AGENTS.md')
@@ -115,8 +141,7 @@ export async function assembleRoom(room: string, input: RoomInput): Promise<stri
     const codexTesting = path.join(input.worktree, '.agents', 'rules', 'testing.md')
     const testing = (await kind(codexTesting)) === 'file' ? codexTesting : path.join(input.worktree, '.claude', 'rules', 'testing.md')
     if ((await kind(testing)) === 'file') add(testing, 'method/testing.md')
-    const schema = path.join(input.worktree, 'openspec', 'schemas', 'behavior-driven')
-    for (const rel of await walk(schema, () => true)) add(path.join(schema, rel), `method/schema/${rel}`)
+
   }
   async function roomDir(dir: string): Promise<void> {
     const root = path.resolve(room)

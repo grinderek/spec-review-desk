@@ -1,15 +1,19 @@
+import { executeDiscussionCommand } from '../discussion-commands.ts'
 import type { Hono } from 'hono'
 import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { findPhrase, findScenario, loadChangeView } from '../change-view.ts'
-import { recordResolved } from '../decision-model.ts'
 import type { ChangeRef, WorktreeInfo } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
-import { commitFiles, resetStaged } from '../git.ts'
-import { applyPatch, commitMessage, revertPatch } from '../patch.ts'
+import { executeGitEffect, withGitEffectLock } from '../git-effect.ts'
+import { assertQuestionAvailable, withExecutionLock } from '../review-execution.ts'
+import { assertWorktreeAdmission } from '../execution-admission.ts'
+import { executePatchCommand, patchAt } from '../patch-commands.ts'
+import { preparePatchApplication } from '../patch-application.ts'
+import { commitMessage } from '../patch.ts'
 import { ownerMessage, type QuestionService, vetPatch } from '../questions.ts'
 import {
-  addThread, appendMessage, newId, readReview, REVIEW_FILE, type ReviewDoc, setThreadStatus, type Thread, updatePatch, updateReview,
+  newId, readReview, recordReviewEvents, REVIEW_FILE, REVIEW_EVENTS_FILE, type ReviewDoc, type Thread, withReviewLock,
 } from '../review-store.ts'
 import { assertWritable, relDirOf, resolveChange } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
@@ -17,7 +21,7 @@ import { sseFromBus } from './sse.ts'
 export interface ThreadDeps {
   questions: QuestionService
   applyActive: (worktreePath: string) => boolean
-  resumeApply: ((wt: WorktreeInfo, ref: ChangeRef, threadId: string) => Promise<void>) | null
+  resumeApply: ((wt: WorktreeInfo, ref: ChangeRef, threadId: string, text?: string) => Promise<void>) | null
 }
 
 const NewThread = z.object({ anchor: z.enum(['scenario', 'phrase', 'change']), ref: z.string(), text: z.string().trim().min(1) })
@@ -46,7 +50,10 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     if (body.anchor === 'scenario' && !findScenario(view, body.ref)) throw new HttpError(404, 'unknown_scenario', `No scenario ${body.ref}`)
     if (body.anchor === 'phrase' && !findPhrase(view, body.ref)) throw new HttpError(404, 'unknown_phrase', `No phrase ${body.ref}`)
     const id = newId('t')
-    await updateReview(ref.dir, (doc) => addThread(doc, { id, anchor: body.anchor, ref: body.ref, status: 'open', messages: [ownerMessage(body.text)] }))
+    await withExecutionLock(wt, ref, async () => {
+      await assertQuestionAvailable(wt, ref)
+      await executeDiscussionCommand(ref.dir, { type: 'OpenDiscussion', thread: { id, anchor: body.anchor, ref: body.ref, status: 'open', messages: [ownerMessage(body.text)] } })
+    })
     void deps.questions.ask(wt, ref, id)
     changed(wt, ref)
     return c.json({ id }, 201)
@@ -57,11 +64,14 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const id = c.req.param('id')
     const { text } = Reply.parse(await c.req.json())
     const thread = threadOf(await readReview(ref.dir), id)
-    await updateReview(ref.dir, (doc) => setThreadStatus(appendMessage(doc, id, ownerMessage(text)), id, 'open'))
     if (thread.anchor === 'apply') {
       if (!deps.resumeApply) throw new HttpError(503, 'apply_unavailable', 'Apply is not available')
-      void deps.resumeApply(wt, ref, id)
+      await deps.resumeApply(wt, ref, id, text)
     } else {
+      await withExecutionLock(wt, ref, async () => {
+        await assertQuestionAvailable(wt, ref)
+        await executeDiscussionCommand(ref.dir, { type: 'ReplyToDiscussion', threadId: id, message: ownerMessage(text) })
+      })
       void deps.questions.ask(wt, ref, id)
     }
     changed(wt, ref)
@@ -72,7 +82,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
     const id = c.req.param('id')
     threadOf(await readReview(ref.dir), id)
-    await updateReview(ref.dir, (doc) => setThreadStatus(doc, id, 'resolved'))
+    await executeDiscussionCommand(ref.dir, { type: 'ResolveDiscussion', threadId: id })
     changed(wt, ref)
     return c.json({ ok: true })
   })
@@ -81,9 +91,7 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
     const id = c.req.param('id')
     const index = Number(c.req.param('msg'))
-    const message = threadOf(await readReview(ref.dir), id).messages[index]
-    if (!message?.patch) throw new HttpError(404, 'unknown_patch', `Message ${index} has no patch`)
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'rejected' }))
+    await executePatchCommand(ref.dir, { type: 'RejectPatch', threadId: id, index })
     changed(wt, ref)
     return c.json({ ok: true })
   })
@@ -96,9 +104,36 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     if (!patch) throw new HttpError(404, 'unknown_patch', `Message ${index} has no patch`)
     if (patch.state !== 'stale') throw new HttpError(409, 'patch_not_stale', 'Only a stale patch can be re-checked')
     const vetted = await vetPatch(wt.path, relDirOf(wt, ref), patch.diff)
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: vetted.state, error: vetted.error, files: vetted.files }))
+    await executePatchCommand(ref.dir, { type: 'RecheckPatch', threadId: id, index, state: vetted.state === 'proposed' ? 'proposed' : 'stale', error: vetted.error, files: vetted.files })
     changed(wt, ref)
     return c.json({ state: vetted.state, error: vetted.error })
+  })
+
+  app.post(`${base}/:id/patches/:msg/refresh`, async (c) => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    const id = c.req.param('id')
+    const index = Number(c.req.param('msg'))
+    await withExecutionLock(wt, ref, async () => {
+      await assertQuestionAvailable(wt, ref)
+      const doc = await readReview(ref.dir)
+      const thread = threadOf(doc, id)
+      if (thread.anchor === 'apply') throw new HttpError(409, 'patch_refresh_unavailable', 'Apply discussions use the recorded Apply workflow')
+      const patch = patchAt(doc, id, index)
+      if (patch.state !== 'stale' || patch.effect_id) throw new HttpError(409, 'patch_not_stale', 'Only an unrequested stale patch can be refreshed')
+      if (doc.executions.some(run => run.request.role === 'reviewer' && run.request.threadId === id && ['queued', 'running'].includes(run.outcome))) return
+      const text = [
+        `Обнови устаревший патч из сообщения №${index + 1} этого обсуждения по текущему содержимому файлов.`,
+        'Сохрани смысл первоначальной просьбы владельца и все последующие согласованные изменения. Прочитай текущие версии затронутых файлов.',
+        'Если файл уже существует, измени его вместо повторного создания. Если исправление уже внесено, объясни это и не предлагай повторный патч.',
+        'Верни новый проверяемый diff. Не применяй его, не делай коммит и не меняй историю согласования.',
+        `Причина устаревания: ${patch.error ?? 'Патч не применяется к текущим файлам.'}`,
+        '', 'Исходный патч:', '```diff', patch.diff.trimEnd(), '```',
+      ].join('\n')
+      await executeDiscussionCommand(ref.dir, { type: 'ReplyToDiscussion', threadId: id, message: ownerMessage(text) })
+    })
+    void deps.questions.ask(wt, ref, id)
+    changed(wt, ref)
+    return c.json({ ok: true }, 202)
   })
 
   app.post(`${base}/:id/patches/:msg/apply`, async (c) => {
@@ -106,38 +141,50 @@ export function registerThreadRoutes(app: Hono, ctx: AppContext, deps: ThreadDep
     const id = c.req.param('id')
     const index = Number(c.req.param('msg'))
     const { summary } = ApplyBody.parse(await c.req.json())
-    if (deps.applyActive(wt.path)) throw new HttpError(409, 'apply_running', 'An Apply run is active in this worktree — wait for it to finish.')
-    const message = threadOf(await readReview(ref.dir), id).messages[index]
-    const patch = message?.patch
-    if (!message || !patch || patch.state !== 'proposed') throw new HttpError(409, 'patch_not_proposed', 'Only a proposed patch can be applied')
-    const relDir = relDirOf(wt, ref)
-    const vetted = await vetPatch(wt.path, relDir, patch.diff)
-    if (vetted.state !== 'proposed') {
-      await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'stale', error: vetted.error }))
-      changed(wt, ref)
-      throw new HttpError(409, 'patch_stale', vetted.error ?? 'The patch no longer applies')
-    }
-    await applyPatch(wt.path, patch.diff)
-    await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'applied', files: vetted.files }))
-    const staged = [...vetted.files, `${relDir}/${REVIEW_FILE}`]
-    let sha: string
-    try {
-      sha = await commitFiles(wt.path, staged, commitMessage(ref.name, summary, ctx.config.commitTrailer))
-    } catch (error) {
-      try {
-        await resetStaged(wt.path, staged)
-        await revertPatch(wt.path, patch.diff)
-        await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'proposed' }))
-      } catch (revertError) {
-        await updateReview(ref.dir, (doc) => updatePatch(doc, id, index, { state: 'stale', error: (revertError as Error).message }))
+    if (deps.applyActive(wt.path)) throw new HttpError(409, 'apply_running', 'An Apply run is active in this worktree - wait for it to finish.')
+    const receipt = await withGitEffectLock(wt.path, () => withReviewLock(ref.dir, async () => {
+      const doc = await readReview(ref.dir)
+      const patch = patchAt(doc, id, index)
+      let plan = patch.effect_id ? doc.git_effects.find(effect => effect.plan.effectId === patch.effect_id)?.plan : undefined
+      await assertWorktreeAdmission(wt.path, { operation: 'git', effectId: plan?.effectId })
+      if (patch.effect_id && !plan) throw new HttpError(409, 'patch_effect_missing', 'The recorded patch application has no Git effect')
+      if (!plan) {
+        if (patch.state !== 'proposed') throw new HttpError(409, 'patch_not_proposed', 'Only a proposed patch can be applied')
+        const vetted = await vetPatch(wt.path, relDirOf(wt, ref), patch.diff)
+        if (vetted.state !== 'proposed') {
+          await executePatchCommand(ref.dir, { type: 'RecheckPatch', threadId: id, index, state: 'stale', error: vetted.error, files: vetted.files })
+          changed(wt, ref)
+          throw new HttpError(409, 'patch_stale', vetted.error ?? 'The patch no longer applies')
+        }
+        const rel = relDirOf(wt, ref)
+        plan = await preparePatchApplication(wt.path, vetted, `${id}:${index}`, commitMessage(ref.name, summary, ctx.config.commitTrailer), [`${rel}/${REVIEW_FILE}`, `${rel}/${REVIEW_EVENTS_FILE}`])
+        await executePatchCommand(ref.dir, { type: 'RequestPatchApplication', threadId: id, index, effect: plan })
       }
-      throw error
-    }
-    // Spec §6: the decisions this patch resolves become recorded only once its commit exists.
-    await updateReview(ref.dir, (doc) => recordResolved(updatePatch(doc, id, index, { commit: sha }), message.resolves ?? [], sha))
+      // A retry may follow projection loss. Rebuild only the derived file before Git stages it.
+      await recordReviewEvents(ref.dir, async () => ({ events: [] }), 'patch-command')
+      const result = await executeGitEffect(wt.path, plan, { resumePending: true })
+      await executePatchCommand(ref.dir, { type: 'RecordPatchApplicationReceipt', threadId: id, index, receipt: result })
+      return result
+    }))
     changed(wt, ref)
-    return c.json({ commit: sha })
+    if (receipt.status !== 'completed') throw new HttpError(409, `patch_application_${receipt.status}`, receipt.reason)
+    return c.json({ commit: receipt.commit })
   })
 
   app.get(`${base}/:id/events`, (c) => sseFromBus(c, ctx.bus, `thread:${c.req.param('id')}`))
+  app.post('/api/changes/:wt/:name/executions/:run/resume', async c => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    await deps.questions.resume(wt, ref, c.req.param('run'))
+    return c.json({ ok: true }, 202)
+  })
+  app.post('/api/changes/:wt/:name/executions/:run/stop', async c => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    await deps.questions.stop(wt, ref, c.req.param('run'))
+    return c.json({ ok: true }, 202)
+  })
+  app.post('/api/changes/:wt/:name/executions/recover', async c => {
+    const { wt, ref } = await target(c.req.param('wt'), c.req.param('name'))
+    await deps.questions.recover(wt, ref)
+    return c.json({ ok: true })
+  })
 }

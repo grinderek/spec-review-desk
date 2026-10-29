@@ -5,6 +5,7 @@ import { useAction } from './feedback.tsx'
 import type { TabProps } from './InitiativeScreen.tsx'
 import { addEdit, editsChanged, moveEdit, removeEdit, sliceCard, toEdits, toggleDependency } from './initiative-view.ts'
 import { RunStream } from './RunStream.tsx'
+import { Markdown } from './Markdown.tsx'
 
 // Spec B §4.2–§4.4, §8: plan, edit and approve the slices, then propose them one by one.
 function SliceEditor({ edits, setEdits, locked, fixedOrder }: {
@@ -49,7 +50,7 @@ function SliceEditor({ edits, setEdits, locked, fixedOrder }: {
   )
 }
 
-function ProposeForm({ id, sliceId, disabled }: { id: TabProps['id']; sliceId: string; disabled: boolean }) {
+function ProposeForm({ id, sliceId, disabled, existing = false }: { id: TabProps['id']; sliceId: string; disabled: boolean; existing?: boolean }) {
   const act = useAction()
   const [notes, setNotes] = useState('')
   const [change, setChange] = useState('')
@@ -57,7 +58,7 @@ function ProposeForm({ id, sliceId, disabled }: { id: TabProps['id']; sliceId: s
     <form className="panelform" onSubmit={(e) => { e.preventDefault(); void act(() => api.proposeSlice(id, sliceId, { notes, ...(change.trim() ? { change: change.trim() } : {}) }), `Proposing ${sliceId}…`) }}>
       <textarea aria-label={`Notes for ${sliceId}`} placeholder="Notes for the author (optional)" value={notes} onChange={(e) => setNotes(e.target.value)} />
       <input aria-label={`Change name for ${sliceId}`} placeholder="change name (default: add-<initiative>-<slice title>)" value={change} onChange={(e) => setChange(e.target.value)} />
-      <div className="row"><button type="submit" className="btn pri" disabled={disabled}>Propose {sliceId}</button></div>
+      <div className="row"><button type="submit" className="btn pri" disabled={disabled}>{existing ? 'Подготовить правила' : `Propose ${sliceId}`}</button></div>
     </form>
   )
 }
@@ -80,7 +81,7 @@ function ApprovedPlan({ id, view, sandbox }: TabProps) {
             </div>
             <div className="scope">{s.scope}</div>
             {s.depends_on.length ? <div className="hash">depends on {s.depends_on.join(', ')}</div> : null}
-            {card.kind === 'ready' ? <ProposeForm id={id} sliceId={s.id} disabled={!ready} /> : null}
+            {card.kind === 'ready' ? <ProposeForm id={id} sliceId={s.id} disabled={!ready} existing={!!view.doc.existingProcess} /> : null}
             {card.kind === 'waiting' ? <div className="hash">{card.text}</div> : null}
             {card.kind === 'proposing' && card.runId ? (
               <>
@@ -100,13 +101,14 @@ function ApprovedPlan({ id, view, sandbox }: TabProps) {
 export function PlanTab({ id, view, sandbox }: TabProps) {
   const act = useAction()
   const plan = view.doc.plan
+  const existing = !!view.doc.existingProcess
   const [edits, setEdits] = useState<SliceEdit[] | null>(null)
   // A planner start assembles its room before it answers: never a second click meanwhile.
   const [starting, setStarting] = useState(false)
   const current = edits ?? toEdits(plan)
   const dirty = edits !== null && editsChanged(plan, edits)
   const ready = sandbox?.ready ?? false
-  const planner = view.doc.runs.find((r) => r.kind === 'planner' && r.outcome === 'running')
+  const planner = view.doc.runs.find((r) => r.kind === 'planner' && ['running', 'queued'].includes(r.outcome))
   const save = () => act(async () => { await api.savePlan(id, current); setEdits(null) }, 'Plan saved (not committed)')
   const replan = () => {
     if (dirty && !window.confirm('Re-plan replaces the draft; your unsaved edits are lost. Continue?')) return
@@ -117,7 +119,7 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
   if (planner) {
     return (
       <>
-        <p>The planner is proposing slices…</p>
+        <p>{existing ? 'ИИ исследует исходники и предлагает границы правил...' : 'The planner is proposing slices…'}</p>
         <RunStream runId={planner.id} />
         <div className="row"><button className="btn bad" onClick={() => void act(() => api.stopRun(id, planner.id), 'Stopping…')}>Stop</button></div>
       </>
@@ -126,7 +128,7 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
   if (plan.status === 'none' && edits === null) {
     return (
       <div className="toolbar">
-        <button className="btn pri" disabled={!ready || starting} onClick={replan}>{starting ? 'Starting the planner…' : 'Plan slices'}</button>
+        <button className="btn pri" disabled={!ready || starting} onClick={replan}>{starting ? 'Запускаем ИИ...' : existing ? 'Исследовать код' : 'Plan slices'}</button>
         <button className="btn" onClick={() => setEdits([])}>Write the plan by hand</button>
       </div>
     )
@@ -145,6 +147,7 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
   const approved = plan.status === 'approved'
   return (
     <>
+      {existing && view.doc.runs.findLast(r => r.kind === 'planner' && r.outcome === 'done')?.notes ? <section className="process-findings"><h2>Результат исследования</h2><Markdown text={view.doc.runs.findLast(r => r.kind === 'planner' && r.outcome === 'done')!.notes!} /></section> : null}
       <div className="toolbar">
         <span>{approved ? 'Editing the approved plan: add slices at the end, edit or remove planned ones.' : 'Draft plan'}</span>
         <button className="btn" disabled={!dirty} onClick={() => void save()}>{approved ? 'Save plan' : 'Save draft'}</button>
@@ -152,7 +155,7 @@ export function PlanTab({ id, view, sandbox }: TabProps) {
         {approved ? null : <button className="btn" disabled={!ready || starting} onClick={replan}>Re-plan</button>}
         {approved ? null : (
           <button className="btn pri" disabled={dirty || view.blockingDecisions > 0 || current.length === 0} onClick={() => void act(() => api.approvePlan(id), 'Slice plan approved')}>
-            {view.blockingDecisions ? `Approve plan (${view.blockingDecisions} blocking decision${view.blockingDecisions > 1 ? 's' : ''})` : 'Approve plan'}
+            {existing ? 'Согласовать границы правил' : view.blockingDecisions ? `Approve plan (${view.blockingDecisions} blocking decision${view.blockingDecisions > 1 ? 's' : ''})` : 'Approve plan'}
           </button>
         )}
       </div>

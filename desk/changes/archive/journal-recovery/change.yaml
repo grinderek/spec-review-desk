@@ -1,0 +1,4 @@
+version: 1
+kind: behavior-driven
+title: Recover owner review from authoritative journal
+created: 2026-10-19

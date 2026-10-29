@@ -1,6 +1,61 @@
 version: 1
 feature: Discuss contracts and record the agreed correction
 scenarios:
+  - id: resolve-only-selected-discussion
+    scenario: Resolve only the selected discussion and keep other discussions open
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { text: Explain this scenario., answer: The scenario is explained. }
+      - ReviewThreadOpened: { id: t_other, anchor: change, ref: '', status: open }
+    when:
+      ResolveDiscussion: { thread: $thread }
+    then:
+      events:
+        - DiscussionResolved: { threadId: $thread }
+      response: { status: 200, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - { id: $thread, status: resolved }
+                  - { id: t_other, status: open }
+  - id: refresh-stale-patch
+    scenario: Request a new patch against current files without applying it
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - DiscussionAnswered: { patch: stale }
+      - AgentReplyPrepared: { answer: The updated correction preserves the current files., patch: true }
+    when:
+      RefreshReviewPatch: { thread: $thread, index: 1 }
+    then:
+      events:
+        - DiscussionOwnerReplied: { threadId: $thread, message: { role: owner } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, patch: { state: proposed, commit: null } }, status: answered }
+        - ExecutionSettled: { outcome: done }
+      response: { status: 202, body: { ok: true } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              features: [{ scenarios: [{ effective: { status: pending, changedSinceApproval: true } }] }]
+              review:
+                threads:
+                  - id: $thread
+                    status: answered
+                    messages:
+                      - { role: owner }
+                      - { role: agent, patch: { state: stale, commit: null } }
+                      - { role: owner }
+                      - { role: agent, text: The updated correction preserves the current files., patch: { state: proposed, commit: null } }
   - id: resolve-discussion
     scenario: Resolve a discussion after the agent answers
     given:
@@ -9,7 +64,8 @@ scenarios:
     when:
       ResolveDiscussion: { thread: $thread }
     then:
-      events: []
+      events:
+        - DiscussionResolved: { threadId: $thread }
       response: { status: 200, body: { ok: true } }
       reads:
         - path: $change
@@ -30,7 +86,11 @@ scenarios:
       ApplyReviewPatch: { thread: $thread, summary: Correct the response. }
     then:
       bind: { correction: response.body.commit }
-      events: []
+      events:
+        - GitEffectRequested: { effect: { purpose: { kind: review-patch } } }
+        - PatchApplicationRequested: { threadId: $thread, index: 1 }
+        - GitEffectCompleted: { commit: $correction }
+        - PatchApplied: { threadId: $thread, index: 1, commit: $correction }
       response: { status: 200, body: { commit: $correction } }
       reads:
         - path: $change
@@ -48,7 +108,14 @@ scenarios:
     when:
       ReplyToDiscussion: { thread: $thread, text: What does the revision mean? }
     then:
-      events: []
+      events:
+        - DiscussionOwnerReplied: { threadId: $thread, message: { role: owner, text: What does the revision mean? } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: The revised response expresses acceptance. }, status: answered }
+        - ExecutionSettled: { outcome: done }
       response: { status: 202, body: { ok: true } }
       reads:
         - path: $change
@@ -64,3 +131,82 @@ scenarios:
                       - { role: agent, text: The response confirms success. }
                       - { role: owner, text: What does the revision mean? }
                       - { role: agent, text: The revised response expresses acceptance. }
+
+  - id: open-discussion
+    scenario: Open a discussion and retain the verified agent answer
+    given:
+      - ScenarioDiscovered: {}
+      - AgentReplyPrepared: { answer: The response confirms success. }
+    when:
+      OpenDiscussion: { anchor: scenario, ref: $key, text: Explain the contract. }
+    then:
+      bind: { thread: response.body.id }
+      events:
+        - DiscussionOpened: { thread: { id: $thread, anchor: scenario, ref: $key, status: open, messages: [{ role: owner, text: Explain the contract. }] } }
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: The response confirms success. }, status: answered }
+        - ExecutionSettled: { outcome: done }
+      response: { status: 201 }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - id: $thread
+                    status: answered
+                    messages: [{ role: owner, text: Explain the contract. }, { role: agent, text: The response confirms success. }]
+  - id: recover-closed-discussion
+    scenario: Restore a closed discussion from its event history
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { text: Explain the contract., answer: The response confirms success. }
+      - DiscussionClosed: {}
+      - ReviewProjectionUnavailable: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          review:
+            threads:
+              - id: $thread
+                anchor: scenario
+                ref: $key
+                status: resolved
+                messages: [{ role: owner, text: Explain the contract. }, { role: agent, text: The response confirms success. }]
+      reads:
+        - path: $change
+          response: { status: 200, body: { review: { threads: [{ id: $thread, status: resolved }] } } }
+
+  - id: retain-unconfirmed-patch
+    scenario: Keep a patch unconfirmed when its Git commit fails
+    given:
+      - ScenarioDiscovered: {}
+      - DiscussionAnswered: { patch: true }
+      - GitCommitUnavailable: {}
+    when:
+      ApplyReviewPatch: { thread: $thread, summary: Correct the response. }
+    then:
+      events:
+        - GitEffectRequested: { effect: { purpose: { kind: review-patch } } }
+        - PatchApplicationRequested: { threadId: $thread, index: 1 }
+        - GitEffectPending: {}
+        - PatchApplicationPending: { threadId: $thread, index: 1 }
+      response: { status: 409, body: { error: { code: patch_application_pending } } }
+      reads:
+        - path: $change
+          response:
+            status: 200
+            body:
+              review:
+                threads:
+                  - messages: [{ role: owner }, { patch: { state: applying, commit: null } }]
+              readiness: { ready: false }

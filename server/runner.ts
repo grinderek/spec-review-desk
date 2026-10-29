@@ -1,14 +1,16 @@
-import { mkdir, readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
 import { watch } from 'chokidar'
 import type { RunnerProfile } from './config.ts'
 import type { EventBus } from './events.ts'
+import type { ExecutionRun } from './execution-model.ts'
 import { ensureExcluded, run, type RunOptions, type RunResult } from './git.ts'
-import { type CorpusRun, parseRunMessages } from './run-messages.ts'
+import { HttpError } from './errors.ts'
+import type { CorpusRun } from './run-messages.ts'
+import { VerificationExecution } from './verification-execution.ts'
+import { readVerificationStream, updateVerification } from './verification-events.ts'
+import { captureVerificationSource } from './verification-source.ts'
 
-export const RESULT_FILE = '.spec-review/last-run.ndjson'
 export type Exec = (cmd: string, args: readonly string[], opts: RunOptions) => Promise<RunResult>
-
 export interface RunnerState {
   profile: string
   execution?: 'compose' | 'local'
@@ -19,168 +21,130 @@ export interface RunnerState {
   lastRunAt: string | null
   result: CorpusRun | null
   error: string | null
+  runId: string | null
+  outcome: ExecutionRun['outcome'] | null
+  sourceHash: string | null
+  stale: boolean
 }
-
 export interface RunnerDeps {
   profiles: readonly RunnerProfile[]
   bus: EventBus
   exec?: Exec
   debounceMs?: number
   runTimeoutMs?: number
-  now?: () => Date
 }
-
 const IGNORED = ['.spec-review', 'tmp', 'log', 'node_modules', '.git']
-
-// Path segments are checked RELATIVE to the worktree, never on the full absolute path: a
-// worktree that itself lives under, say, /tmp/sr-hub-xyz/api (as every temp-repo test does, and
-// as a real deployment might under a "tmp" staging area) would otherwise have every file within
-// it ignored, because the ancestor path already contains a "tmp" segment.
 export function isIgnoredWatchPath(worktreePath: string, file: string): boolean {
   const rel = path.relative(worktreePath, file)
-  return rel.endsWith('.tmp') || rel.split(path.sep).some((part) => IGNORED.includes(part))
+  return rel.endsWith('.tmp') || rel.split(path.sep).some(part => IGNORED.includes(part))
 }
 
 export class RunnerService {
   #states = new Map<string, RunnerState>()
-  #runs = new Map<string, Promise<void>>()
   #timers = new Map<string, NodeJS.Timeout>()
-
+  #refreshes = new Map<string, Promise<void>>()
+  readonly #execution: VerificationExecution
   constructor(private readonly deps: RunnerDeps) {
-    for (const p of deps.profiles) {
-      this.#states.set(p.worktreePath, { profile: p.name, execution: p.execution ?? 'compose', worktreePath: p.worktreePath, up: null, running: false, queued: false, lastRunAt: null, result: null, error: null })
-    }
+    this.#execution = new VerificationExecution({ timeoutMs: deps.runTimeoutMs, changed: cwd => {
+      void this.refresh(cwd).catch(error => this.#set(cwd, { error: error instanceof Error ? error.message : String(error) }))
+    } })
+    for (const p of deps.profiles) this.#states.set(p.worktreePath, {
+      profile: p.name, execution: p.execution ?? 'compose', worktreePath: p.worktreePath,
+      up: null, running: false, queued: false, lastRunAt: null, result: null, error: null,
+      runId: null, outcome: null, sourceHash: null, stale: false,
+    })
   }
+  profileFor(cwd: string): RunnerProfile | undefined { return this.deps.profiles.find(p => p.worktreePath === cwd) }
+  state(cwd: string): RunnerState | null { return this.#states.get(cwd) ?? null }
+  async idle(cwd: string): Promise<void> { await this.#execution.idle(cwd); await this.refresh(cwd) }
 
-  profileFor(worktreePath: string): RunnerProfile | undefined {
-    return this.deps.profiles.find((p) => p.worktreePath === worktreePath)
+  async refreshUp(cwd: string): Promise<boolean> {
+    const p = this.#require(cwd)
+    if (p.execution === 'local') { this.#set(cwd, { up: true }); return true }
+    const result = await this.#exec('docker', this.#compose(p, ['ps', '--status', 'running', '-q', p.compose!.service]), { cwd, allowFailure: true, timeoutMs: 30_000 })
+    const up = result.code === 0 && result.stdout.trim() !== ''
+    this.#set(cwd, { up }); return up
   }
-
-  state(worktreePath: string): RunnerState | null {
-    return this.#states.get(worktreePath) ?? null
+  async start(cwd: string): Promise<void> {
+    const p = this.#require(cwd)
+    if (p.execution !== 'local') await this.#exec('docker', this.#compose(p, ['up', '-d', p.compose!.service]), { cwd, timeoutMs: 600_000 })
+    await this.refreshUp(cwd)
   }
-
-  idle(worktreePath: string): Promise<void> {
-    return this.#runs.get(worktreePath) ?? Promise.resolve()
+  async loadLast(cwd: string): Promise<void> {
+    await updateVerification(cwd, () => ({ events: [], value: undefined }))
+    await this.#execution.recover(cwd)
+    await this.refresh(cwd)
   }
-
-  async refreshUp(worktreePath: string): Promise<boolean> {
-    const p = this.#require(worktreePath)
-    if (p.execution === 'local') { this.#set(worktreePath, { up: true }); return true }
-    const r = await this.#exec('docker', this.#compose(p, ['ps', '--status', 'running', '-q', p.compose!.service]), { cwd: worktreePath, allowFailure: true, timeoutMs: 30_000 })
-    const up = r.code === 0 && r.stdout.trim() !== ''
-    this.#set(worktreePath, { up })
-    return up
+  async runNow(cwd: string, explicit = true): Promise<void> {
+    const profile = this.#require(cwd)
+    if (!(await this.refreshUp(cwd))) throw new HttpError(409, 'runner_off', 'Start the verification container first')
+    await ensureExcluded(cwd)
+    await this.#execution.request(profile, explicit)
+    await this.refresh(cwd)
   }
+  async stop(cwd: string): Promise<void> { this.#require(cwd); await this.#execution.stop(cwd); await this.refresh(cwd) }
 
-  async start(worktreePath: string): Promise<void> {
-    const p = this.#require(worktreePath)
-    if (p.execution === 'local') { await this.refreshUp(worktreePath); return }
-    await this.#exec('docker', this.#compose(p, ['up', '-d', p.compose!.service]), { cwd: worktreePath, timeoutMs: 600_000 })
-    await this.refreshUp(worktreePath)
-  }
-
-  async loadLast(worktreePath: string): Promise<void> {
-    try {
-      const result = parseRunMessages(await readFile(path.join(worktreePath, RESULT_FILE), 'utf8'))
-      this.#set(worktreePath, { result, lastRunAt: result.finishedAt })
-    } catch {
-      // no previous run
-    }
-  }
-
-  runNow(worktreePath: string): Promise<void> {
-    this.#require(worktreePath)
-    const current = this.#runs.get(worktreePath)
-    if (current) {
-      this.#set(worktreePath, { queued: true })
-      return current
-    }
-    const loop = (async () => {
-      this.#set(worktreePath, { running: true })
-      try {
-        do {
-          this.#set(worktreePath, { queued: false })
-          await this.#once(worktreePath)
-        } while (this.state(worktreePath)?.queued)
-      } finally {
-        this.#runs.delete(worktreePath)
-        this.#set(worktreePath, { running: false })
+  // Public observations replay the journal and compare input versions; they never dispatch work
+  // or accept receipts. Startup reconciliation is a separate, explicit service operation.
+  refresh(cwd: string): Promise<void> {
+    const previous = this.#refreshes.get(cwd) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(async () => {
+      const stream = await readVerificationStream(cwd)
+      const latest = stream.projection.runs.at(-1)
+      if (!latest) return
+      const attempt = latest.attempts.at(-1), accepted = attempt ? stream.projection.reports[attempt.id] : undefined
+      let stale = accepted ? !accepted.sourceUnchanged : false
+      let sourceError: string | null = null
+      if (accepted) {
+        try { stale ||= (await captureVerificationSource(cwd, this.profileFor(cwd)?.sources ?? stream.projection.sources[latest.request.id]?.components)).hash !== attempt!.sourceHash }
+        catch (error) { stale = true; sourceError = error instanceof Error ? error.message : String(error) }
       }
-    })()
-    this.#runs.set(worktreePath, loop)
-    return loop
-  }
-
-  schedule(worktreePath: string): void {
-    const existing = this.#timers.get(worktreePath)
-    if (existing) clearTimeout(existing)
-    this.#timers.set(
-      worktreePath,
-      setTimeout(() => {
-        this.#timers.delete(worktreePath)
-        void this.runNow(worktreePath).catch((error: unknown) => console.error(error))
-      }, this.deps.debounceMs ?? 2000),
-    )
-  }
-
-  watch(): () => Promise<void> {
-    const watchers = this.deps.profiles.map((p) => {
-      const watcher = watch(p.watch.map((dir) => path.join(p.worktreePath, dir)), {
-        ignoreInitial: true,
-        ignored: (file: string) => isIgnoredWatchPath(p.worktreePath, file),
+      const rejection = attempt ? stream.projection.rejections[attempt.id] : undefined
+      this.#set(cwd, {
+        runId: latest.request.id, outcome: latest.outcome, sourceHash: attempt?.sourceHash ?? null, stale,
+        running: latest.outcome === 'running', queued: latest.outcome === 'queued' || Boolean(stream.projection.rerun),
+        lastRunAt: latest.endedAt, result: accepted?.report ?? null,
+        error: stream.projection.rerun?.reason ?? Object.values(stream.projection.cleanups).find(intent => intent.status === 'blocked')?.reason ?? latest.reason ?? rejection ?? accepted?.commandError ?? sourceError ?? (stale ? 'Sources changed since this verification run' : null),
       })
-      watcher.on('all', () => this.schedule(p.worktreePath))
-      return watcher
+    }).finally(() => { if (this.#refreshes.get(cwd) === next) this.#refreshes.delete(cwd) })
+    this.#refreshes.set(cwd, next); return next
+  }
+  schedule(cwd: string): void {
+    const previous = this.#timers.get(cwd)
+    if (previous) clearTimeout(previous)
+    if (this.state(cwd)?.result) this.#set(cwd, { stale: true })
+    this.#timers.set(cwd, setTimeout(() => {
+      this.#timers.delete(cwd)
+      void this.runNow(cwd, false).catch(error => this.#set(cwd, { error: error instanceof Error ? error.message : String(error) }))
+    }, this.deps.debounceMs ?? 2000))
+  }
+  watch(): () => Promise<void> {
+    const watchers = this.deps.profiles.map(profile => {
+      const watcher = watch([...profile.watch.map(dir => path.join(profile.worktreePath, dir)), ...(profile.sources ?? []).map(source => source.path)], {
+        ignoreInitial: true, ignored: (file: string) => isIgnoredWatchPath(profile.worktreePath, file),
+      })
+      watcher.on('all', () => this.schedule(profile.worktreePath)); return watcher
     })
     return async () => {
       for (const timer of this.#timers.values()) clearTimeout(timer)
-      await Promise.all(watchers.map((w) => w.close()))
+      await Promise.all(watchers.map(watcher => watcher.close()))
     }
   }
-
-  async #once(worktreePath: string): Promise<void> {
-    const p = this.#require(worktreePath)
-    if (!(await this.refreshUp(worktreePath))) {
-      this.#set(worktreePath, { error: 'runner off — start the container first' })
-      return
-    }
-    await ensureExcluded(worktreePath).catch(() => undefined)
-    await mkdir(path.join(worktreePath, '.spec-review'), { recursive: true })
-    await rm(path.join(worktreePath, RESULT_FILE), { force: true })
-    const r = await this.#exec(p.execution === 'local' ? p.command[0]! : 'docker', p.execution === 'local' ? p.command.slice(1) : this.#compose(p, ['exec', '-T', p.compose!.service, ...p.command]), {
-      cwd: worktreePath,
-      allowFailure: true,
-      timeoutMs: this.deps.runTimeoutMs ?? 900_000,
-    })
-    try {
-      const result = parseRunMessages(await readFile(path.join(worktreePath, RESULT_FILE), 'utf8'))
-      this.#set(worktreePath, { result, error: null, lastRunAt: (this.deps.now ?? (() => new Date()))().toISOString() })
-    } catch {
-      const tail = (r.stderr || r.stdout).trim().split('\n').slice(-5).join('\n')
-      this.#set(worktreePath, { error: `corpus runner produced no result (exit ${r.code ?? 'none'}): ${tail}` })
-    }
+  #exec(cmd: string, args: readonly string[], opts: RunOptions): Promise<RunResult> { return (this.deps.exec ?? run)(cmd, args, opts) }
+  #compose(profile: RunnerProfile, args: string[]): string[] {
+    if (!profile.compose) throw new Error('Compose settings are missing')
+    return ['compose', '-p', profile.compose.project, ...profile.compose.files.flatMap(file => ['-f', file]), ...args]
   }
-
-  #exec(cmd: string, args: readonly string[], opts: RunOptions): Promise<RunResult> {
-    return (this.deps.exec ?? run)(cmd, args, opts)
+  #set(cwd: string, change: Partial<RunnerState>): void {
+    const state = this.#states.get(cwd)
+    if (!state) return
+    const next = { ...state, ...change }
+    if (JSON.stringify(next) === JSON.stringify(state)) return
+    this.#states.set(cwd, next); this.deps.bus.publish('runner', { worktreePath: cwd })
   }
-
-  #compose(p: RunnerProfile, args: string[]): string[] {
-    if (!p.compose) throw new Error('compose settings are missing')
-    return ['compose', '-p', p.compose.project, ...p.compose.files.flatMap((f) => ['-f', f]), ...args]
-  }
-
-  #set(worktreePath: string, change: Partial<RunnerState>): void {
-    const current = this.#states.get(worktreePath)
-    if (!current) return
-    this.#states.set(worktreePath, { ...current, ...change })
-    this.deps.bus.publish('runner', { worktreePath })
-  }
-
-  #require(worktreePath: string): RunnerProfile {
-    const profile = this.profileFor(worktreePath)
-    if (!profile) throw new Error(`No runner profile for ${worktreePath}`)
+  #require(cwd: string): RunnerProfile {
+    const profile = this.profileFor(cwd)
+    if (!profile) throw new Error(`No runner profile for ${cwd}`)
     return profile
   }
 }

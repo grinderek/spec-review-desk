@@ -15,11 +15,12 @@ const tool = (name, description, inputSchema) => ({ name, description, inputSche
 
 export function toolDefinitions(config) {
   return [
-    tool('read_file', 'Read a UTF-8 file, PDF text or image inside the permitted root.', schema({ path: string }, ['path'])),
+    tool('read_file', 'Read a UTF-8 file, PDF text or image inside a permitted component. Absolute paths are supported.', schema({ path: string }, ['path'])),
     tool('list_files', 'List files inside the permitted root, recursively. Secrets and internal directories are excluded.', schema({ path: string }, [])),
     tool('search_text', 'Find literal text inside readable UTF-8 files.', schema({ query: string, path: string }, ['query'])),
     ...(config.writeRoot ? [tool('write_file', 'Write a UTF-8 file inside the writable root only.', schema({ path: string, content: string }, ['path', 'content']))] : []),
-    ...(config.commands?.length ? [tool('run_command', 'Run an allowed command as an argv array, without a shell, in the workspace.', schema({ argv: { type: 'array', items: string, minItems: 1 } }, ['argv']))] : []),
+    ...(config.commands?.length ? [tool('run_command', 'Run an allowed argv command, without a shell. Select a configured component by repository name; defaults to the change repository.', schema({ argv: { type: 'array', items: string, minItems: 1 }, repository: string }, ['argv']))] : []),
+    ...(config.checks?.length ? [tool('run_check', 'Run an exact configured verification or environment command by name. Returns its exit status and output.', schema({ name: { type: 'string', enum: config.checks.map(c => c.name) } }, ['name']))] : []),
     ...(config.search ? [tool('search_web', 'Search the web. Returns search result titles, URLs and snippets; never opens result pages.', schema({ query: string }, ['query']))] : []),
     ...(config.readDomains?.length ? [tool('read_web_page', 'Read an HTTPS page on an owner-approved domain. Every redirect is checked.', schema({ url: string }, ['url']))] : []),
   ]
@@ -28,18 +29,21 @@ export function toolDefinitions(config) {
 export function createTools(config) {
   const root = path.resolve(config.root)
   const writeRoot = config.writeRoot ? path.resolve(config.writeRoot) : null
-  const roots = [root, ...(writeRoot && writeRoot !== root ? [writeRoot] : [])]
+  const workspaces = config.workspaceRoots ?? []
+  const roots = [...new Set([root, ...(writeRoot ? [writeRoot] : []), ...workspaces.map(w => path.resolve(w.path))])]
+  const writable = writeRoot ? [...new Set([writeRoot, ...workspaces.map(w => path.resolve(w.path))])] : []
   async function resolveFile(raw = '.', writing = false) {
     const file = path.resolve(writing ? writeRoot ?? root : root, raw)
-    const base = (writing ? [writeRoot].filter(Boolean) : roots).find((r) => within(r, file))
+    const base = (writing ? writable : roots).filter(r => within(r, file)).sort((a, b) => b.length - a.length)[0]
     if (!base || path.relative(base, file).split(path.sep).some((part) => EXCLUDED.has(part) || /^\.env(?:\.|$)/.test(part))) throw new Error('Path is outside the permitted files')
+    if (writing && /(?:^|[/\\])(?:review\.yaml|review\.events\.jsonl|decisions\.md|initiative\.yaml|initiative\.events\.jsonl)$/.test(path.relative(base, file))) throw new Error('Desk owns this journal or projection; use its public commands')
     // Validate every existing ancestor, including a symlink in a yet-to-be-created write path.
     let ancestor = file
     for (;;) {
       try {
         const actual = await realpath(ancestor)
         const actualBase = await realpath(base)
-        if (!within(actualBase, actual)) throw new Error('Symlink escapes the permitted root')
+        if (!within(actualBase, actual) || path.relative(actualBase, actual).split(path.sep).some(part => EXCLUDED.has(part) || /^\.env(?:\.|$)/.test(part))) throw new Error('Symlink escapes the permitted files')
         break
       } catch (error) {
         if (error.code !== 'ENOENT' || ancestor === base) throw error
@@ -107,9 +111,19 @@ export function createTools(config) {
       })
       const denied = (config.deniedCommands ?? []).some((prefix) => prefix.split(/\s+/).every((part, i) => argv[i] === part))
       if (!permitted || denied || argv.some((s) => /^(?:--(?:git-dir|work-tree|exec-path|output|config-env)|-C|-c)(?:=|$)/.test(s))) throw new Error('Command is outside the allowlist')
+      const workspace = args.repository === undefined ? null : workspaces.find(w => w.name === args.repository)
+      if (args.repository !== undefined && !workspace) throw new Error('Unknown repository name')
+      const cwd = workspace?.path ?? root
+      if (argv[0] === 'git' && workspace?.git === false) throw new Error('This component is a directory, not a Git checkout')
+      if (argv[0] === 'git' && (argv.includes('--amend') || argv.includes('--no-index') || argv[1] === 'add' && argv.slice(2).some(arg => ['-A', '--all', '.', ':/'].includes(arg)))) throw new Error('Use explicit implementation paths and preserve Git history')
       // No shell expansion, aliases, hooks or inherited API credentials in child commands.
       const safe = argv[0] === 'git' ? ['git', '-c', 'core.hooksPath=/dev/null', '-c', 'core.fsmonitor=false', ...argv.slice(1)] : argv
-      return text(await command(safe, root, true))
+      return text(await command(safe, cwd, true))
+    }
+    if (name === 'run_check') {
+      const check = config.checks.find(c => c.name === args.name)
+      if (!check || !roots.includes(path.resolve(check.cwd))) throw new Error('Unknown verification command or component')
+      return text(await command(check.argv, check.cwd, true, check.timeoutMs))
     }
     if (name === 'search_web') {
       if (typeof args.query !== 'string' || !args.query.trim() || args.query.length > 1000) throw new Error('Invalid search query')
@@ -147,13 +161,18 @@ async function responseText(response) {
   return Buffer.concat(chunks).toString('utf8')
 }
 async function fetchText(url) { return responseText(await fetch(url, { redirect: 'error', signal: AbortSignal.timeout(30000) })) }
-function command(argv, cwd, cleanEnv) {
+function command(argv, cwd, cleanEnv, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
-    const env = cleanEnv ? { PATH: process.env.PATH, LANG: process.env.LANG ?? 'C.UTF-8' } : process.env
-    const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    // Preserve the outer execution as ancestry, without pretending this child command
+    // is a managed verification attempt (which requires its own complete manifest).
+    const ancestors = [...new Set([...(JSON.parse(process.env.DESK_EXECUTION_ANCESTORS || '[]')), ...(process.env.DESK_ATTEMPT_ID ? [process.env.DESK_ATTEMPT_ID] : [])])]
+    const env = cleanEnv ? { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG ?? 'C.UTF-8',
+      DESK_EXECUTION_ANCESTORS: JSON.stringify(ancestors) } : process.env
+    const child = spawn(argv[0], argv.slice(1), { cwd, env, stdio: ['ignore', 'pipe', 'pipe'], detached: true })
     let output = ''; let exceeded = false
-    const timer = setTimeout(() => { child.kill('SIGKILL'); exceeded = true }, 120000)
-    const collect = (chunk) => { output += chunk.toString(); if (output.length > MAX_FILE) { exceeded = true; child.kill('SIGKILL') } }
+    const stop = () => { try { process.kill(-child.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error } }
+    const timer = setTimeout(() => { stop(); exceeded = true }, Math.min(timeoutMs, 3_600_000))
+    const collect = (chunk) => { output += chunk.toString(); if (output.length > MAX_FILE) { exceeded = true; stop() } }
     child.stdout.on('data', collect); child.stderr.on('data', collect)
     child.on('error', (error) => { clearTimeout(timer); reject(error) })
     child.on('close', (code) => { clearTimeout(timer); if (exceeded) reject(new Error('Command exceeded limits')); else resolve(`exit ${code}\n${output}`) })

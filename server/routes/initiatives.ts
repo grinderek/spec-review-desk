@@ -4,12 +4,15 @@ import { z } from 'zod'
 import type { AppContext } from '../app.ts'
 import { resumeAuthor, startAuthor } from '../author-run.ts'
 import { pendingBlocking } from '../decision-model.ts'
-import { listWorktrees } from '../discovery.ts'
+import { discover, listWorktrees, worktreeId } from '../discovery.ts'
 import { HttpError } from '../errors.ts'
 import { briefFits, MAX_BRIEF_CHARS, saveBrief } from '../initiative-brief.ts'
-import { commitPaths, initiativeCommitMessage } from '../initiative-git.ts'
-import { type CreateInput, createInitiative } from '../initiative-create.ts'
-import { findRun, INITIATIVE_FILE, readInitiative, updateInitiative } from '../initiative-store.ts'
+import { initiativeCommitMessage } from '../initiative-git.ts'
+import { type CreateInput, createInitiative, executeInitiativeCreation, recoverInitiativeCreations } from '../initiative-create.ts'
+import { readWorktreeStream } from '../worktree-events.ts'
+import { findRun, readInitiative, withInitiativeLock } from '../initiative-store.ts'
+import { executeInitiativeCommand } from '../initiative-commands.ts'
+import { executeInitiativeOwnerOperation, initiativeOwnerGitInput, ownerRequestHash, reconcileInitiativeOwnerEffects, retryInitiativeOwnerEffect } from '../initiative-owner-effects.ts'
 import { listInitiatives, loadInitiativeView, sliceStatuses, summarizeInitiative } from '../initiatives.ts'
 import { acceptDraft, discardDraft, type IncomingFile, MAX_TOTAL_INPUT_BYTES, readInput, readRepoFile, setDomains, uploadInputs } from '../inputs.ts'
 import { startPlanner } from '../planner-run.ts'
@@ -17,9 +20,10 @@ import { resumeResearch, startResearch } from '../research-run.ts'
 import { nowIso, readReview } from '../review-store.ts'
 import type { InitiativeRunService, RunTarget } from '../run-service.ts'
 import type { Sandbox } from '../sandbox.ts'
-import { approvePlan, editPlan } from '../slice-plan.ts'
 import { publishInitiativeChanged, resolveInitiativeTarget } from './resolve.ts'
 import { sseFromBus } from './sse.ts'
+import { captureImplementation, implementationUrl, readImplementation, sourceHtml } from '../existing-process.ts'
+import { ExistingProcessSchema } from '../initiative-model.ts'
 
 export interface InitiativeRouteDeps { runs: InitiativeRunService; sandbox: Sandbox }
 
@@ -38,6 +42,7 @@ const FromRepo = z.object({ from: z.string().min(1) })
 const briefField = z.string().refine(briefFits, { message: `at most ${MAX_BRIEF_CHARS} characters` })
 const Brief = z.object({ brief: briefField })
 const CreateFields = z.object({
+  requestId: z.uuid().optional(),
   name: z.string().trim(),
   repo: z.string().min(1),
   where: z.enum(['new', 'existing']),
@@ -101,16 +106,74 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
       if (typeof v !== 'string') throw new HttpError(422, 'invalid_body', 'fromRepo: one repo path per line, as text')
       return v.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
     })
+    const product = text(form, 'processProduct')
+    const existingProcess = product ? ExistingProcessSchema.parse({ product, process: text(form, 'processName'), boundary: text(form, 'processBoundary'), snapshot: 'implementation-snapshot.json' }) : undefined
+    const files = await uploads(form)
+    if (existingProcess) {
+      if (files.length || fromRepo.length) throw new HttpError(422, 'invalid_process_input', 'Описание процесса использует снимок выбранных репозиториев.')
+      const selected = all(form, 'processRepos').map(value => z.string().parse(value))
+      files.push(await captureImplementation(ctx.config, product!, fields.repo, selected))
+    }
     const created = await createInitiative(ctx.config, ctx.registry, {
-      name: fields.name, repo: fields.repo, where, title: fields.title, brief: fields.brief, files: await uploads(form), fromRepo,
+      name: fields.name, repo: fields.repo, where, title: fields.title, brief: fields.brief, files, fromRepo, requestId: fields.requestId, existingProcess,
     }, nowIso())
     ctx.bus.publish('initiative', created)
     return c.json(created, 201)
   })
 
+  app.get('/api/initiative-creations/:repo', async c => {
+    const repo = ctx.config.repos.find(repo => repo.name === c.req.param('repo'))
+    if (!repo) throw new HttpError(404, 'unknown_repo', 'No configured repository')
+    const { creations } = await readWorktreeStream(repo.path)
+    return c.json({ creations: creations.map(state => ({ id: state.request.id, name: state.request.name, status: state.status,
+      reason: state.reason, commit: state.commit, worktreeId: worktreeId(state.request.targetPath) })) })
+  })
+  app.post('/api/initiative-creations/:repo/recover', async c => {
+    await recoverInitiativeCreations(ctx.config, c.req.param('repo'))
+    await discover(ctx.config.repos, ctx.registry)
+    return c.json({ ok: true })
+  })
+  app.post('/api/initiative-creations/:repo/:id/retry', async c => {
+    const result = await executeInitiativeCreation(ctx.config, c.req.param('repo'), z.uuid().parse(c.req.param('id')))
+    await discover(ctx.config.repos, ctx.registry)
+    ctx.bus.publish('initiative', result)
+    return c.json(result)
+  })
+
   app.get(base, async (c) => {
     const t = await target(c)
     return c.json(await loadInitiativeView(t.wt, t.ini))
+  })
+
+  app.get(`${base}/implementation`, async c => {
+    const t = await target(c), snapshot = await readImplementation(t.ini.dir, await readInitiative(t.ini.dir))
+    return c.json({ product: snapshot.product, sources: snapshot.sources.map(source => ({ ...source,
+      files: source.files.map(({ content, ...file }) => ({ ...file, url: implementationUrl(t.wt.id, t.ini.name, source.repo, file.path) })),
+    })) })
+  })
+  app.get(`${base}/implementation/source`, async c => {
+    const t = await target(c), snapshot = await readImplementation(t.ini.dir, await readInitiative(t.ini.dir))
+    const source = snapshot.sources.find(s => s.repo === c.req.query('repo'))
+    const file = source?.files.find(f => f.path === c.req.query('file'))
+    if (!source || !file) throw new HttpError(404, 'unknown_process_source', 'Файл не входит в снимок этого процесса.')
+    const line = z.coerce.number().int().positive().max(file.lines).parse(c.req.query('line') ?? 1)
+    c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'self'")
+    c.header('Cache-Control', 'private, no-store')
+    return c.html(sourceHtml(source, file, line))
+  })
+
+  app.post(`${base}/runs/reconcile`, async (c) => {
+    const t=await target(c)
+    await reconcileInitiativeOwnerEffects(t)
+    await deps.runs.reconcile(t)
+    return c.json({ ok: true })
+  })
+
+  app.post(`${base}/effects/:effect/retry`,async c=>{
+    const t=await target(c)
+    const result=await retryInitiativeOwnerEffect(t,z.uuid().parse(c.req.param('effect')))
+    changed(t)
+    return c.json(result)
   })
 
   // Desk fixes item 2: the owner edits the brief after creation; the edit is committed.
@@ -177,26 +240,21 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
   app.put(`${base}/plan`, async (c) => {
     const t = await target(c)
     const { slices } = PlanEdit.parse(await c.req.json())
-    const statuses = await sliceStatuses(t.wt, await readInitiative(t.ini.dir))
-    const doc = await updateInitiative(t.ini.dir, (d) => ({ ...d, plan: editPlan(d.plan, slices, statuses) }))
+    const doc = await withInitiativeLock(t.ini.dir, async () => {
+      const statuses = await sliceStatuses(t.wt, await readInitiative(t.ini.dir))
+      return executeInitiativeCommand(t.ini.dir, { type: 'edit-plan', slices, statuses }, nowIso())
+    })
     changed(t)
     return c.json({ plan: doc.plan })
   })
 
   app.post(`${base}/plan/approve`, async (c) => {
     const t = await target(c)
-    const pending = pendingBlocking((await readReview(t.ini.dir)).decisions).length
-    if (pending) throw new HttpError(409, 'decisions_pending', `${pending} blocking decision(s) of the initiative are open`)
-    const doc = await updateInitiative(t.ini.dir, (d) => {
-      // A planner run in flight could still overwrite the plan it is about to approve (it
-      // replaces plan.slices wholesale when it finishes) — refuse until it settles.
-      if (d.runs.some((r) => r.kind === 'planner' && r.outcome === 'running')) {
-        throw new HttpError(409, 'planner_running', 'The planner is running; wait for it to finish before approving the plan')
-      }
-      return { ...d, plan: approvePlan(d.plan, nowIso()) }
-    })
-    const commit = await commitPaths(t.wt.path, [`${t.ini.relDir}/${INITIATIVE_FILE}`],
-      initiativeCommitMessage(`${t.ini.name} — slice plan approved (${doc.plan.slices.length} slices)`, trailer))
+    const {commit}=await executeInitiativeOwnerOperation(t,{operation:'plan-approval',requestHash:ownerRequestHash({approve:true}),prepare:async()=>{
+      const pending=pendingBlocking((await readReview(t.ini.dir)).decisions).length
+      return {command:{type:'approve-plan',pending},result:{},git:async next=>initiativeOwnerGitInput(t,next,'plan-approval',
+        initiativeCommitMessage(`${t.ini.name} - slice plan approved (${next.plan.slices.length} slices)`,trailer))}
+    }})
     changed(t)
     return c.json({ commit })
   })
@@ -216,7 +274,7 @@ export function registerInitiativeRoutes(app: Hono, ctx: AppContext, deps: Initi
     const run = findRun(await readInitiative(t.ini.dir), c.req.param('run'))
     if (run.kind === 'author') await resumeAuthor(deps.runs, t, run.id)
     else if (run.kind === 'research') await resumeResearch(deps.runs, t, run.id)
-    else throw new HttpError(409, 'run_not_waiting', 'A planner run never waits for the owner — run the planner again')
+    else await deps.runs.resumeRun(t, run.id, {}, () => 'Re-plan the initiative from the current brief, inputs and owner decisions.')
     return c.json({ ok: true }, 202)
   })
 

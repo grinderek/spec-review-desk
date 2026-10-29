@@ -1,0 +1,60 @@
+version: 1
+feature: Scenario approval follows the reviewed contract
+scenarios:
+  - id: approve-current-contract
+    scenario: Approve the current scenario contract
+    given:
+      - ScenarioDiscovered: {}
+    when:
+      ApproveScenario: { key: $key }
+    then:
+      events:
+        - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      response: { status: 200, body: { ok: true } }
+
+  - id: revoke-approval
+    scenario: Revoke a scenario approval
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+    when:
+      RevokeScenarioApproval: { key: $key }
+    then:
+      events:
+        - ScenarioReviewRemoved: { key: $key }
+      response: { status: 200, body: { ok: true } }
+
+  - id: changed-contract
+    scenario: Require approval after the contract changes
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+      - ScenarioRevised: { status: 201 }
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          features:
+            - scenarios:
+                - effective: { status: pending, changedSinceApproval: true, approvedCommit: $head }
+          readiness: { ready: false }
+
+  - id: formatting-preserves-approval
+    scenario: Preserve approval after YAML formatting changes
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+      - ScenarioReformatted: {}
+    when:
+      ReadChange: {}
+    then:
+      events: []
+      response:
+        status: 200
+        body:
+          features:
+            - scenarios:
+                - effective: { status: approved, changedSinceApproval: false, approvedCommit: $head }

@@ -1,0 +1,22 @@
+# Tasks
+
+- [x] Journal run lifecycle and derive all run state from history.
+- [x] Versioned input manifests, immutable rooms and safe receipt artifacts.
+- [x] Retained attempt-specific Docker identity and inactivity checks.
+- [x] Recovery, explicit stop/resume and idempotent domain finalization.
+- [x] Planner/author Git intents, receipts and explicit effect retry.
+- [x] Worktree admission for initiative start, dispatch, resume and finalization.
+- [x] Owner contracts for recovery, uncertainty, resume, stop and preserved plan edits.
+- [x] Targeted initiative corpus: 19 executions passed; compiler passed.
+- [x] Manual hook failure/restart: no automatic Git/Codex repeat; explicit resume completes once.
+- [x] Replace direct brief/input/research acceptance/domain/plan approval commits with durable owner Git intents and receipts.
+- [x] Deterministic initial initiative stream API for the separate creation coordinator.
+- [ ] Complete creation coordination and its combined owner checks (creation coordinator slice).
+- [x] Combined final npm test: 88/88 executions, typecheck, self-review (73 contracts, 88 executions, 72 matching review contracts), full browser suite: 13/13.
+- [x] Active author stop: terminal transport receipt can settle stopped after full inactivity proof even without a business artifact.
+- [x] Detached followers and error handlers use independent lock context; test fixtures wait for actual fake start and stop owned workers before deleting artifacts.
+- [x] Fatal UTF-8, bounded file capture and encoded artifact fallback preserve a safe typed receipt.
+- [x] Retained attempt cleanup and compound agent/browser/proxy inactivity proof.
+- [x] Owner contracts cover pending commit, retry, restart reconciliation and uploaded input contents.
+- [x] Manual 20 MiB input, exactly-once upload retry, pending approval admission and artifact/container checks passed.
+- [ ] Combined final checks for owner effects and creation continuation.

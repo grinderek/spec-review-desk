@@ -29,9 +29,6 @@ function mapDecision(doc: ReviewDoc, id: string, fn: (d: DecisionRecord) => Deci
   return { ...doc, decisions: doc.decisions.map((d) => (d.id === id ? fn(d) : d)) }
 }
 
-export const addDecisions = (doc: ReviewDoc, records: readonly DecisionRecord[]): ReviewDoc =>
-  records.length ? { ...doc, decisions: [...doc.decisions, ...records] } : doc
-
 export function decisionsFromReply(
   items: readonly ReplyDecision[],
   source: DecisionSource,
@@ -88,16 +85,6 @@ export function decideDecision(doc: ReviewDoc, id: string, choice: DecisionChoic
   })
 }
 
-export function recordDecision(doc: ReviewDoc, id: string, recorded: NonNullable<DecisionRecord['recorded']>): ReviewDoc {
-  return mapDecision(doc, id, (d): DecisionRecord => {
-    if (d.status !== 'decided') throw new HttpError(409, 'decision_not_decided', `Decision ${id} is ${d.status}, not decided`)
-    return { ...d, status: 'recorded', recorded: { ...recorded } }
-  })
-}
-
-export const setRecordedCommit = (doc: ReviewDoc, id: string, commit: string): ReviewDoc =>
-  mapDecision(doc, id, (d): DecisionRecord => (d.recorded ? { ...d, recorded: { ...d.recorded, commit } } : d))
-
 export function dismissDecision(doc: ReviewDoc, id: string, reason: string, at: string): ReviewDoc {
   return mapDecision(doc, id, (d): DecisionRecord => {
     if (!isActive(d)) throw new HttpError(409, 'decision_closed', `Decision ${id} is already ${d.status}`)
@@ -113,24 +100,14 @@ export function reattachDecision(doc: ReviewDoc, id: string, to: string): Review
   })
 }
 
-// A committed patch records the decided, scenario-scoped decisions its reply resolves (spec §6).
-export function recordResolved(doc: ReviewDoc, ids: readonly string[], commit: string): ReviewDoc {
-  const wanted = new Set(ids)
-  return {
-    ...doc,
-    decisions: doc.decisions.map((d): DecisionRecord =>
-      wanted.has(d.id) && d.status === 'decided' && d.scope.kind === 'scenario' ? { ...d, status: 'recorded', recorded: { how: 'patch', commit } } : d),
-  }
-}
-
 export const runDecisions = (doc: ReviewDoc, runId: string): DecisionRecord[] =>
   doc.decisions.filter((d) => (d.source.kind === 'apply' || d.source.kind === 'run') && d.source.run === runId)
 
 export function ownerDecisionText(d: DecisionRecord, today: string): string {
   const option = d.options.find((o) => o.id === d.choice?.option)
   return [
-    `Owner decided ${d.id} ("${d.question}"): ${option ? option.label : '(no option — see the note)'}.`,
-    `Note: ${d.choice?.note || '—'}`,
+    `Owner decided ${d.id} ("${d.question}"): ${option ? option.label : '(no option - see the note)'}.`,
+    `Note: ${d.choice?.note || '-'}`,
     `Produce the patch: "# Owner decision ${today}: …" above the scenario plus the scenario/spec.md change.`,
     `List "${d.id}" in resolves.`,
   ].join('\n')

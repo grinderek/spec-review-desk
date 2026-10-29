@@ -14,12 +14,20 @@ scenarios:
             key: $key
             hash: $hash
             commit: null
+        - DiscussionOpened:
             thread:
               id: $thread
               anchor: scenario
               ref: $key
               status: open
               messages: [{ role: owner, text: The expected response looks wrong. }]
+        - ExecutionQueued: {}
+        - ExecutionAttemptRequested: {}
+        - ExecutionAttemptObserved: {}
+        - ExecutionReceiptAccepted: {}
+        - ReviewAgentSessionSet: {}
+        - DiscussionAgentReplied: { threadId: $thread, message: { role: agent, text: Noted. }, status: answered }
+        - ExecutionSettled: { outcome: done }
       response: { status: 200, body: { threadId: $thread } }
       reads:
         - path: $change
@@ -87,12 +95,15 @@ scenarios:
     given:
       - ScenarioDiscovered: {}
       - ScenarioApproved: { key: $key, hash: $hash, commit: $head, at: $at }
+      - PhraseProposed: {}
     when:
       RecordChangeApproval: {}
     then:
       bind: { newCommit: response.body.commit }
       events:
         - ChangeApprovalRecorded: { commit: $head }
+        - GitEffectRequested: { effect: { purpose: { kind: change-approval } } }
+        - GitEffectCompleted: { commit: $newCommit }
       response: { status: 200, body: { commit: $newCommit } }
       reads:
         - path: $change

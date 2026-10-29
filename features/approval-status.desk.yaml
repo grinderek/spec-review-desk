@@ -1,0 +1,38 @@
+version: 1
+feature: Согласованные изменения отделены от очереди согласования
+scenarios:
+  - id: completed-approval
+    scenario: Пакет считается согласованным после подтвержденного коммита одобрения
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalCompleted: {}
+    when:
+      ReadChangeSummary: {}
+    then:
+      events: []
+      response: { status: 200, body: { repos: [{ worktrees: [{ changes: [{ reviewStatus: approved }] }] }] } }
+
+  - id: approval-required
+    scenario: Одобрение карточек еще не завершает согласование всего пакета
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+    when:
+      ReadChangeSummary: {}
+    then:
+      events: []
+      response: { status: 200, body: { repos: [{ worktrees: [{ changes: [{ reviewStatus: pending }] }] }] } }
+
+  - id: revised-package
+    scenario: Изменение согласованного правила возвращает пакет на согласование
+    given:
+      - ScenarioDiscovered: {}
+      - ScenarioApproved: { key: $key, hash: $hash, commit: $head }
+      - ChangeApprovalCompleted: {}
+      - ScenarioRevised: { status: 201 }
+    when:
+      ReadChangeSummary: {}
+    then:
+      events: []
+      response: { status: 200, body: { repos: [{ worktrees: [{ changes: [{ reviewStatus: pending }] }] }] } }

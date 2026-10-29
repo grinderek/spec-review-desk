@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { appendFile, mkdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
+import { executionEnvironment } from './execution-receipts.ts'
 
 export class CommandError extends Error {
   constructor(readonly command: string, readonly code: number | null, readonly stderr: string) {
@@ -9,12 +10,12 @@ export class CommandError extends Error {
 }
 
 export interface RunResult { stdout: string; stderr: string; code: number | null }
-export interface RunOptions { cwd: string; input?: string; timeoutMs?: number; allowFailure?: boolean }
+export interface RunOptions { cwd: string; input?: string; timeoutMs?: number; allowFailure?: boolean; environment?: NodeJS.ProcessEnv }
 
 export function run(cmd: string, args: readonly string[], opts: RunOptions): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const label = `${cmd} ${args.join(' ')}`
-    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'] })
+    const child = spawn(cmd, args, { cwd: opts.cwd, stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, ...opts.environment } })
     let stdout = ''
     let stderr = ''
     const timer = opts.timeoutMs ? setTimeout(() => child.kill('SIGKILL'), opts.timeoutMs) : null
@@ -36,6 +37,12 @@ export function run(cmd: string, args: readonly string[], opts: RunOptions): Pro
 
 export async function git(cwd: string, args: readonly string[], input?: string): Promise<string> {
   return (await run('git', args, { cwd, input })).stdout
+}
+
+// Mutating Git and its hooks inherit a durable effect/creation marker. Recovery can prove
+// their liveness even if Desk exits and the runtime cache no longer exists.
+export async function markedGit(cwd: string, args: readonly string[], marker: string, input?: string): Promise<string> {
+  return (await run('git', args, { cwd, input, environment: executionEnvironment(marker) })).stdout
 }
 
 export async function headSha(cwd: string): Promise<string> {

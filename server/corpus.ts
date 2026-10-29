@@ -1,10 +1,9 @@
 import { readdir, readFile } from 'node:fs/promises'
 import path from 'node:path'
-import { deskFeature } from './desk-dsl.ts'
+import { ChangePackageError, parseNativeContract } from './change-package.ts'
 import type { ChangeView } from './change-view.ts'
 import type { WorktreeInfo } from './discovery.ts'
-import { FeatureParseError, type FeatureView, parseFeature, type StepView, unclassified } from './gherkin.ts'
-import { corpusKey } from './run-messages.ts'
+import { FeatureParseError, type FeatureView, type StepView } from './gherkin.ts'
 
 export type CorpusState = 'same' | 'differs' | 'not_in_corpus'
 export interface CorpusReport { states: Record<string, CorpusState>; drift: string[]; errors: { file: string; message: string }[] }
@@ -25,9 +24,9 @@ export async function loadCorpus(worktreePath: string): Promise<{ features: Feat
     const file = `features/${rel.split(path.sep).join('/')}`
     try {
       const source = await readFile(path.join(worktreePath, file), 'utf8')
-      features.push(file.endsWith('.desk.yaml') ? deskFeature(source, file) : parseFeature(source, file, unclassified))
+      features.push(parseNativeContract(source, file).feature)
     } catch (error) {
-      if (!(error instanceof FeatureParseError)) throw error
+      if (!(error instanceof FeatureParseError) && !(error instanceof ChangePackageError)) throw error
       errors.push({ file, message: error.message })
     }
   }
@@ -38,7 +37,7 @@ function canonical(features: readonly FeatureView[]): Map<string, string> {
   return new Map(
     features.flatMap((f) =>
       f.scenarios.map((s) => [
-        corpusKey(f.file, s.title),
+        s.key,
         s.tags.includes('desk-dsl') ? s.hash : JSON.stringify({ background: f.background.map(canonStep), steps: s.steps.map(canonStep), examples: s.examples }),
       ]),
     ),
@@ -51,7 +50,7 @@ export function compareToCorpus(change: readonly FeatureView[], corpus: readonly
   for (const f of change) {
     const ours = canonical([f])
     for (const s of f.scenarios) {
-      const key = corpusKey(f.file, s.title)
+      const key = s.key
       const other = theirs.get(key)
       states[s.key] = other === undefined ? 'not_in_corpus' : other === ours.get(key) ? 'same' : 'differs'
     }
